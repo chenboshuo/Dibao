@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/db" },
+    { "path": "packages/ranking" },
+    { "path": "packages/rss" },
+    { "path": "apps/server" },
+    { "path": "apps/web" }
+  ]
+}
+

@@ -35,11 +35,16 @@ MVP 工程目标：
 移动端：PWA first, Capacitor later
 ```
 
-建议包管理和仓库结构：
+包管理和仓库结构：
 
 ```text
-pnpm workspace
+npm workspaces
 ```
+
+说明：
+
+- MVP 使用 npm workspaces 起步，减少全局工具依赖。
+- 后续如确有需要，可再迁移到 pnpm。
 
 ## 仓库结构建议
 
@@ -862,10 +867,10 @@ DIBAO_LOG_LEVEL=info
 
 - 确认 PRD。
 - 确认工程蓝图。
-- 初始化 pnpm workspace。
+- 初始化 npm workspaces。
 - 初始化 Fastify server。
 - 初始化 React / Vite app。
-- 配置 lint、format、test。
+- 配置 typecheck、test、build。
 
 ### M1 数据库与基础服务
 

@@ -1,0 +1,126 @@
+:root {
+  --color-canvas: #f7f4ed;
+  --color-surface: #fffefa;
+  --color-surface-subtle: #f1eee6;
+  --color-surface-raised: #fffefa;
+  --color-ink: #202421;
+  --color-ink-soft: #3d423d;
+  --color-muted: #6d716b;
+  --color-faint: #9b9d96;
+  --color-inverse: #fffefa;
+  --color-line: #d8d6ca;
+  --color-line-strong: #b9b6a9;
+  --color-line-subtle: #e9e5da;
+  --color-accent: #315f72;
+  --color-accent-hover: #264f60;
+  --color-accent-soft: #dce8ec;
+  --color-positive: #4f6f52;
+  --color-positive-soft: #dfe8dc;
+  --color-warning: #a66a2c;
+  --color-warning-soft: #f2e2cb;
+  --color-danger: #a64235;
+  --color-danger-soft: #edd8d4;
+  --color-focus: #315f72;
+  --color-selection: #dce8ec;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+    "Noto Sans JP", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
+  --font-reader-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans SC", "Noto Sans JP", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --font-reader-serif: "Noto Serif SC", "Noto Serif JP", "Songti SC",
+    "STSong", "Iowan Old Style", "Times New Roman", serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 28px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --radius-none: 0;
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+
+  --border-thin: 1px;
+  --border-default: 1px solid var(--color-line);
+  --border-subtle: 1px solid var(--color-line-subtle);
+  --border-strong: 1px solid var(--color-line-strong);
+
+  --shadow-none: none;
+  --shadow-popover: 0 8px 24px rgb(32 36 33 / 0.12);
+  --shadow-sheet: 0 -8px 24px rgb(32 36 33 / 0.14);
+
+  --layout-sidebar-width: 176px;
+  --layout-topbar-height: 48px;
+  --layout-bottom-nav-height: 56px;
+  --layout-content-max: 1120px;
+  --layout-list-max: 760px;
+  --layout-settings-max: 840px;
+
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --focus-ring: 0 0 0 2px var(--color-focus);
+  --focus-ring-offset: 2px;
+  --target-min: 36px;
+  --target-min-mobile: 44px;
+
+  --button-height-sm: 28px;
+  --button-height-md: 36px;
+  --button-height-lg: 44px;
+  --button-padding-x-sm: 8px;
+  --button-padding-x-md: 12px;
+  --button-padding-x-lg: 16px;
+  --button-radius: var(--radius-sm);
+
+  --input-height-md: 36px;
+  --input-padding-x: 10px;
+  --input-radius: var(--radius-sm);
+  --input-border: var(--border-default);
+  --input-background: var(--color-surface);
+
+  --article-item-padding-y: 14px;
+  --article-item-padding-x: 0;
+  --article-item-title-size: 16px;
+  --article-item-summary-size: 14px;
+  --article-item-meta-size: 13px;
+  --article-item-gap: 6px;
+
+  --popover-width: 280px;
+  --popover-padding: 12px;
+  --popover-radius: var(--radius-lg);
+  --popover-shadow: var(--shadow-popover);
+  --popover-background: var(--color-surface-raised);
+
+  --sheet-radius: var(--radius-lg);
+  --sheet-padding: 16px;
+  --sheet-shadow: var(--shadow-sheet);
+  --sheet-background: var(--color-surface-raised);
+}
+

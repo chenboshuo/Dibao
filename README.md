@@ -15,3 +15,14 @@
 - [Design Tokens](./docs/design-tokens.md)
 - [Profile Algorithm v0 参数表](./docs/profile-algorithm-v0.md)
 - [sqlite-vec Node.js 集成验证](./docs/spikes/sqlite-vec-node.md)
+
+## 开发脚本
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run dev:server
+npm run dev:web
+```

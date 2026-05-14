@@ -1,0 +1,13 @@
+:root {
+  --reader-font-family: var(--font-reader-sans);
+  --reader-font-size: 18px;
+  --reader-line-height: 1.75;
+  --reader-paragraph-gap: 1.1em;
+  --reader-width: 720px;
+  --reader-title-size: 28px;
+  --reader-title-line-height: 1.28;
+  --reader-meta-size: 13px;
+  --reader-background: var(--color-canvas);
+  --reader-foreground: var(--color-ink);
+}
+
