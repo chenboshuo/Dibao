@@ -409,7 +409,7 @@ MVP 可以认为完成，当以下场景全部通过：
 
 MVP 开发前后续还需要继续细化：
 
-- 视觉设计规范
+- 视觉与交互设计规范 v0：见 [visual-interaction-spec-v0.md](./visual-interaction-spec-v0.md)
 - Docker 部署文档
 - OPML 兼容性测试用例
 - RSS 抓取 fixture

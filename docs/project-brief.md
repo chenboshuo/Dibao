@@ -14,6 +14,7 @@
 - [API Contract](./api-contract.md)
 - [低保真页面线框](./wireframes.md)
 - [Design Tokens](./design-tokens.md)
+- [视觉与交互设计规范 v0](./visual-interaction-spec-v0.md)
 - [Profile Algorithm v0 参数表](./profile-algorithm-v0.md)
 - [sqlite-vec Node.js 集成验证](./spikes/sqlite-vec-node.md)
 
