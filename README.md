@@ -12,3 +12,5 @@
 - [数据库 Schema](./docs/database-schema.md)
 - [API Contract](./docs/api-contract.md)
 - [低保真页面线框](./docs/wireframes.md)
+- [Design Tokens](./docs/design-tokens.md)
+- [Profile Algorithm v0 参数表](./docs/profile-algorithm-v0.md)

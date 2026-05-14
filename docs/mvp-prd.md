@@ -410,7 +410,6 @@ MVP 可以认为完成，当以下场景全部通过：
 MVP 开发前后续还需要继续细化：
 
 - 视觉设计规范
-- Profile Algorithm v0 参数表
 - Docker 部署文档
 - OPML 兼容性测试用例
 - RSS 抓取 fixture

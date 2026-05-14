@@ -985,7 +985,5 @@ DIBAO_LOG_LEVEL=info
 ## 开发前仍需细化
 
 - 数据库 migration 具体 SQL。
-- 设计 tokens 初稿。
-- Profile Algorithm v0 参数默认值。
 - Docker 构建策略。
 - sqlite-vec Node.js 集成验证。
