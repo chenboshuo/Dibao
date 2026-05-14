@@ -1,21 +1,403 @@
-import Fastify from "fastify";
-import { dibaoVersion } from "@dibao/shared";
+import { mkdirSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
+import Fastify, { type FastifyReply } from "fastify";
+import {
+  getSqliteVecVersion,
+  openDatabase,
+  SqliteArticleRepository,
+  SqliteFeedRepository,
+  type ArticleDetailRow,
+  type ArticleListInput,
+  type ArticleListItemRow,
+  type ArticleListView,
+  type ArticleReadStatus,
+  type DibaoDatabase,
+  type FeedListInput,
+  type FeedRow
+} from "@dibao/db";
+import { dibaoVersion, type ApiError } from "@dibao/shared";
 
-export function buildServer() {
+type HealthStatus = "ok" | "error";
+
+type HealthResponse = {
+  ok: boolean;
+  database: HealthStatus;
+  fts: HealthStatus;
+  vectorStore: HealthStatus;
+  version: string;
+};
+
+type FeedQuery = {
+  folderId?: string;
+  enabled?: string;
+};
+
+type ArticleQuery = {
+  view?: string;
+  feedId?: string;
+  folderId?: string;
+  status?: string;
+  limit?: string;
+  cursor?: string;
+};
+
+type ArticleParams = {
+  id: string;
+};
+
+type CursorPayload = {
+  offset: number;
+};
+
+type BuildServerOptions = {
+  db?: DibaoDatabase;
+  databasePath?: string;
+  migrate?: boolean;
+  closeDatabaseOnClose?: boolean;
+  logger?: boolean;
+};
+
+export function buildServer(options: BuildServerOptions = {}) {
+  const db = options.db ?? openConfiguredDatabase(options);
+  const closeDatabaseOnClose = options.closeDatabaseOnClose ?? !options.db;
+  const feeds = new SqliteFeedRepository(db);
+  const articles = new SqliteArticleRepository(db);
+
   const app = Fastify({
-    logger: true
+    logger: options.logger ?? true
   });
 
-  app.get("/api/system/health", async () => ({
-    data: {
-      ok: true,
-      database: "not_configured",
-      fts: "not_configured",
-      vectorStore: "not_configured",
-      version: dibaoVersion
+  app.setErrorHandler((error, request, reply) => {
+    request.log.error(error);
+    return sendApiError(reply, 500, "INTERNAL_ERROR", "Internal server error");
+  });
+
+  if (closeDatabaseOnClose) {
+    app.addHook("onClose", async () => {
+      db.close();
+    });
+  }
+
+  app.get("/api/system/health", async (_request, reply) => {
+    const data = getHealth(db);
+    const statusCode = data.ok ? 200 : 503;
+    return reply.status(statusCode).send({ data });
+  });
+
+  app.get<{ Querystring: FeedQuery }>("/api/feeds", async (request, reply) => {
+    const enabled = parseBooleanParam(request.query.enabled);
+    if (enabled === null) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", "enabled must be true or false");
     }
-  }));
+
+    const input: FeedListInput = {};
+    if (request.query.folderId !== undefined) {
+      input.folderId = request.query.folderId;
+    }
+    if (enabled !== undefined) {
+      input.enabled = enabled;
+    }
+
+    return {
+      data: feeds.list(input).map(mapFeed)
+    };
+  });
+
+  app.get<{ Querystring: ArticleQuery }>("/api/articles", async (request, reply) => {
+    const parsed = parseArticleQuery(request.query);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    const result = articles.list(parsed.input);
+
+    return {
+      data: result.items.map(mapArticleListItem),
+      page: {
+        nextCursor: encodeCursor(result.nextOffset)
+      }
+    };
+  });
+
+  app.get<{ Params: ArticleParams }>("/api/articles/:id", async (request, reply) => {
+    const article = articles.findDetailById(request.params.id);
+
+    if (!article) {
+      return sendApiError(reply, 404, "NOT_FOUND", "Article not found");
+    }
+
+    return {
+      data: mapArticleDetail(article)
+    };
+  });
 
   return app;
 }
 
+function openConfiguredDatabase(options: BuildServerOptions): DibaoDatabase {
+  const databasePath = resolveDatabasePath(options.databasePath);
+  ensureDatabaseDirectory(databasePath);
+
+  return openDatabase(databasePath, {
+    migrate: options.migrate ?? true
+  });
+}
+
+function resolveDatabasePath(databasePath: string | undefined): string {
+  const requested =
+    databasePath ??
+    process.env.DIBAO_DATABASE_PATH ??
+    process.env.DIBAO_DB_PATH ??
+    ".dibao/dibao.sqlite";
+
+  if (requested === ":memory:") {
+    return requested;
+  }
+
+  return isAbsolute(requested) ? requested : resolve(process.cwd(), requested);
+}
+
+function ensureDatabaseDirectory(databasePath: string): void {
+  if (databasePath === ":memory:") {
+    return;
+  }
+
+  mkdirSync(dirname(databasePath), { recursive: true });
+}
+
+function getHealth(db: DibaoDatabase): HealthResponse {
+  const database = checkHealth(() => {
+    db.prepare("select 1 as ok").get();
+  });
+  const fts = checkHealth(() => {
+    db.prepare("select count(*) as count from article_fts").get();
+  });
+  const vectorStore = checkHealth(() => {
+    getSqliteVecVersion(db);
+  });
+
+  return {
+    ok: database === "ok" && fts === "ok" && vectorStore === "ok",
+    database,
+    fts,
+    vectorStore,
+    version: dibaoVersion
+  };
+}
+
+function checkHealth(fn: () => void): HealthStatus {
+  try {
+    fn();
+    return "ok";
+  } catch {
+    return "error";
+  }
+}
+
+function parseArticleQuery(query: ArticleQuery):
+  | { ok: true; input: ArticleListInput }
+  | { ok: false; message: string; details?: unknown } {
+  const view = parseArticleView(query.view);
+  if (view === null) {
+    return {
+      ok: false,
+      message: "view must be recommended, latest, favorites, or read_later"
+    };
+  }
+
+  const status = parseArticleStatus(query.status);
+  if (status === null) {
+    return {
+      ok: false,
+      message: "status must be unread, read, or all"
+    };
+  }
+
+  const limit = parseLimit(query.limit);
+  if (limit === null) {
+    return {
+      ok: false,
+      message: "limit must be a positive integer"
+    };
+  }
+
+  const offset = decodeCursor(query.cursor);
+  if (offset === null) {
+    return {
+      ok: false,
+      message: "cursor is invalid"
+    };
+  }
+
+  const input: ArticleListInput = {
+    view: view ?? "latest",
+    limit,
+    offset
+  };
+
+  if (query.feedId !== undefined) {
+    input.feedId = query.feedId;
+  }
+  if (query.folderId !== undefined) {
+    input.folderId = query.folderId;
+  }
+  if (status !== undefined) {
+    input.status = status;
+  }
+
+  return { ok: true, input };
+}
+
+function parseArticleView(value: string | undefined): ArticleListView | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (
+    value === "recommended" ||
+    value === "latest" ||
+    value === "favorites" ||
+    value === "read_later"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function parseArticleStatus(value: string | undefined): ArticleReadStatus | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === "unread" || value === "read" || value === "all") {
+    return value;
+  }
+
+  return null;
+}
+
+function parseBooleanParam(value: string | undefined): boolean | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return null;
+}
+
+function parseLimit(value: string | undefined): number | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return null;
+  }
+
+  return Math.min(parsed, 100);
+}
+
+function encodeCursor(offset: number | null): string | null {
+  if (offset === null) {
+    return null;
+  }
+
+  return Buffer.from(JSON.stringify({ offset } satisfies CursorPayload)).toString("base64url");
+}
+
+function decodeCursor(cursor: string | undefined): number | undefined | null {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<
+      CursorPayload
+    >;
+
+    const offset = payload.offset;
+    if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
+      return null;
+    }
+
+    return offset;
+  } catch {
+    return null;
+  }
+}
+
+function mapFeed(feed: FeedRow) {
+  return {
+    ...feed,
+    lastFetchedAt: timestampToIso(feed.lastFetchedAt),
+    lastSuccessAt: timestampToIso(feed.lastSuccessAt),
+    createdAt: timestampToIsoValue(feed.createdAt),
+    updatedAt: timestampToIsoValue(feed.updatedAt)
+  };
+}
+
+function mapArticleListItem(article: ArticleListItemRow) {
+  return {
+    id: article.id,
+    feedId: article.feedId,
+    feedTitle: article.feedTitle,
+    title: article.title,
+    url: article.url,
+    author: article.author,
+    summary: article.summary,
+    publishedAt: timestampToIso(article.publishedAt),
+    discoveredAt: timestampToIsoValue(article.discoveredAt),
+    state: article.state,
+    ...(article.rank
+      ? {
+          rank: {
+            score: article.rank.score,
+            calculatedAt: timestampToIsoValue(article.rank.calculatedAt)
+          }
+        }
+      : {})
+  };
+}
+
+function mapArticleDetail(article: ArticleDetailRow) {
+  return {
+    ...mapArticleListItem(article),
+    contentHtml: article.contentHtml,
+    contentText: article.contentText,
+    extractionStatus: article.extractionStatus,
+    extractionError: article.extractionError
+  };
+}
+
+function timestampToIso(value: number | null): string | null {
+  return value === null ? null : timestampToIsoValue(value);
+}
+
+function timestampToIsoValue(value: number): string {
+  return new Date(value).toISOString();
+}
+
+function sendApiError(
+  reply: FastifyReply,
+  statusCode: number,
+  code: string,
+  message: string,
+  details?: unknown
+) {
+  const error: ApiError["error"] = { code, message };
+
+  if (details !== undefined) {
+    error.details = details;
+  }
+
+  return reply.status(statusCode).send({ error });
+}

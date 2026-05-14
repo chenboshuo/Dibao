@@ -1,4 +1,4 @@
-import type { DibaoDatabase, FeedRow, UpsertFeedInput } from "../types.js";
+import type { DibaoDatabase, FeedListInput, FeedRow, UpsertFeedInput } from "../types.js";
 
 type FeedDbRow = {
   id: string;
@@ -19,6 +19,7 @@ type FeedDbRow = {
 export interface FeedRepository {
   findById(id: string): FeedRow | null;
   findByFeedUrl(feedUrl: string): FeedRow | null;
+  list(input?: FeedListInput): FeedRow[];
   listActive(): FeedRow[];
   upsert(input: UpsertFeedInput): FeedRow;
 }
@@ -38,18 +39,39 @@ export class SqliteFeedRepository implements FeedRepository {
     return row ? mapFeed(row) : null;
   }
 
-  listActive(): FeedRow[] {
+  list(input: FeedListInput = {}): FeedRow[] {
+    const conditions = ["deleted_at is null"];
+    const params: unknown[] = [];
+
+    if (input.folderId !== undefined) {
+      if (input.folderId === null) {
+        conditions.push("folder_id is null");
+      } else {
+        conditions.push("folder_id = ?");
+        params.push(input.folderId);
+      }
+    }
+
+    if (input.enabled !== undefined) {
+      conditions.push("enabled = ?");
+      params.push(input.enabled ? 1 : 0);
+    }
+
     return (
       this.db
         .prepare(
           `
             ${baseFeedSelect()}
-            where enabled = 1 and deleted_at is null
-            order by title collate nocase
+            where ${conditions.join(" and ")}
+            order by title collate nocase, id
           `
         )
-        .all() as FeedDbRow[]
+        .all(...params) as FeedDbRow[]
     ).map(mapFeed);
+  }
+
+  listActive(): FeedRow[] {
+    return this.list({ enabled: true });
   }
 
   upsert(input: UpsertFeedInput): FeedRow {

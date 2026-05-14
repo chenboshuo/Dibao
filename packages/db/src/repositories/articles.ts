@@ -1,10 +1,16 @@
 import { SqliteArticleFtsIndex } from "../fts/article-fts.js";
 import type {
+  ArticleDetailRow,
+  ArticleListInput,
+  ArticleListItemRow,
+  ArticleListResult,
   ArticleRow,
   DibaoDatabase,
   UpsertArticleContentInput,
   UpsertArticleInput
 } from "../types.js";
+
+const BASE_RANK_CONTEXT = "base";
 
 type ArticleDbRow = {
   id: string;
@@ -25,8 +31,29 @@ type ArticleDbRow = {
   deletedAt: number | null;
 };
 
+type ArticleReadDbRow = ArticleDbRow & {
+  feedTitle: string;
+  read: 0 | 1;
+  favorited: 0 | 1;
+  readLater: 0 | 1;
+  hidden: 0 | 1;
+  notInterested: 0 | 1;
+  readingProgress: number;
+  rankScore: number | null;
+  rankCalculatedAt: number | null;
+};
+
+type ArticleDetailDbRow = ArticleReadDbRow & {
+  contentHtml: string | null;
+  contentText: string | null;
+  extractionStatus: ArticleDetailRow["extractionStatus"];
+  extractionError: string | null;
+};
+
 export interface ArticleRepository {
   findById(id: string): ArticleRow | null;
+  findDetailById(id: string): ArticleDetailRow | null;
+  list(input?: ArticleListInput): ArticleListResult;
   upsert(input: UpsertArticleInput): ArticleRow;
   upsertContent(input: UpsertArticleContentInput): void;
 }
@@ -48,6 +75,77 @@ export class SqliteArticleRepository implements ArticleRepository {
       )
       .get(id) as ArticleDbRow | undefined;
     return row ? mapArticle(row) : null;
+  }
+
+  findDetailById(id: string): ArticleDetailRow | null {
+    const row = this.db
+      .prepare(
+        `
+          ${baseArticleReadSelect()},
+          ac.content_html as contentHtml,
+          ac.content_text as contentText,
+          coalesce(ac.extraction_status, 'pending') as extractionStatus,
+          ac.extraction_error as extractionError
+          ${baseArticleReadFrom()}
+          left join article_contents ac on ac.article_id = a.id
+          where a.id = ?
+            and a.deleted_at is null
+            and a.status != 'deleted'
+        `
+      )
+      .get(BASE_RANK_CONTEXT, id) as ArticleDetailDbRow | undefined;
+
+    return row ? mapArticleDetail(row) : null;
+  }
+
+  list(input: ArticleListInput = {}): ArticleListResult {
+    const limit = normalizeLimit(input.limit);
+    const offset = normalizeOffset(input.offset);
+    const conditions = ["a.deleted_at is null", "a.status != 'deleted'"];
+    const params: unknown[] = [BASE_RANK_CONTEXT];
+
+    if (input.feedId) {
+      conditions.push("a.feed_id = ?");
+      params.push(input.feedId);
+    }
+
+    if (input.folderId) {
+      conditions.push("f.folder_id = ?");
+      params.push(input.folderId);
+    }
+
+    if (input.status === "read") {
+      conditions.push("s.read_at is not null");
+    } else if (input.status === "unread") {
+      conditions.push("s.read_at is null");
+    }
+
+    if (input.view === "favorites") {
+      conditions.push("s.favorited_at is not null");
+    } else if (input.view === "read_later") {
+      conditions.push("s.read_later_at is not null");
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          ${baseArticleReadSelect()}
+          ${baseArticleReadFrom()}
+          where ${conditions.join(" and ")}
+          ${orderByForView(input.view)}
+          limit ?
+          offset ?
+        `
+      )
+      .all(...params, limit + 1, offset) as ArticleReadDbRow[];
+
+    const hasMore = rows.length > limit;
+    const items = (hasMore ? rows.slice(0, limit) : rows).map(mapArticleListItem);
+
+    return {
+      items,
+      nextOffset: hasMore ? offset + limit : null
+    };
   }
 
   upsert(input: UpsertArticleInput): ArticleRow {
@@ -209,6 +307,139 @@ function baseArticleSelect(): string {
   `;
 }
 
+function baseArticleReadSelect(): string {
+  return `
+    select
+      a.id,
+      a.feed_id as feedId,
+      a.guid,
+      a.url,
+      a.canonical_url as canonicalUrl,
+      a.title,
+      a.author,
+      a.summary,
+      a.published_at as publishedAt,
+      a.discovered_at as discoveredAt,
+      a.content_hash as contentHash,
+      a.dedupe_key as dedupeKey,
+      a.status,
+      a.created_at as createdAt,
+      a.updated_at as updatedAt,
+      a.deleted_at as deletedAt,
+      f.title as feedTitle,
+      case when s.read_at is not null then 1 else 0 end as read,
+      case when s.favorited_at is not null then 1 else 0 end as favorited,
+      case when s.read_later_at is not null then 1 else 0 end as readLater,
+      case when s.hidden_at is not null then 1 else 0 end as hidden,
+      case when s.not_interested_at is not null then 1 else 0 end as notInterested,
+      coalesce(s.reading_progress, 0) as readingProgress,
+      rs.score as rankScore,
+      rs.calculated_at as rankCalculatedAt
+  `;
+}
+
+function baseArticleReadFrom(): string {
+  return `
+    from articles a
+    join feeds f on f.id = a.feed_id and f.deleted_at is null
+    left join article_states s on s.article_id = a.id
+    left join article_rank_scores rs
+      on rs.article_id = a.id
+      and rs.rank_context = ?
+  `;
+}
+
+function orderByForView(view: ArticleListInput["view"]): string {
+  if (view === "recommended") {
+    return `
+      order by
+        case when rs.score is null then 1 else 0 end,
+        rs.score desc,
+        coalesce(a.published_at, a.discovered_at) desc,
+        a.id desc
+    `;
+  }
+
+  if (view === "favorites") {
+    return `
+      order by
+        s.favorited_at desc,
+        coalesce(a.published_at, a.discovered_at) desc,
+        a.id desc
+    `;
+  }
+
+  if (view === "read_later") {
+    return `
+      order by
+        s.read_later_at desc,
+        coalesce(a.published_at, a.discovered_at) desc,
+        a.id desc
+    `;
+  }
+
+  return `
+    order by
+      coalesce(a.published_at, a.discovered_at) desc,
+      a.id desc
+  `;
+}
+
 function mapArticle(row: ArticleDbRow): ArticleRow {
   return row;
+}
+
+function mapArticleListItem(row: ArticleReadDbRow): ArticleListItemRow {
+  return {
+    id: row.id,
+    feedId: row.feedId,
+    feedTitle: row.feedTitle,
+    title: row.title,
+    url: row.url,
+    author: row.author,
+    summary: row.summary,
+    publishedAt: row.publishedAt,
+    discoveredAt: row.discoveredAt,
+    state: {
+      read: row.read === 1,
+      favorited: row.favorited === 1,
+      readLater: row.readLater === 1,
+      hidden: row.hidden === 1,
+      notInterested: row.notInterested === 1,
+      readingProgress: row.readingProgress
+    },
+    rank:
+      row.rankScore === null || row.rankCalculatedAt === null
+        ? null
+        : {
+            score: row.rankScore,
+            calculatedAt: row.rankCalculatedAt
+          }
+  };
+}
+
+function mapArticleDetail(row: ArticleDetailDbRow): ArticleDetailRow {
+  return {
+    ...mapArticleListItem(row),
+    contentHtml: row.contentHtml,
+    contentText: row.contentText,
+    extractionStatus: row.extractionStatus,
+    extractionError: row.extractionError
+  };
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return 50;
+  }
+
+  return Math.min(Math.max(Math.trunc(limit), 1), 100);
+}
+
+function normalizeOffset(offset: number | undefined): number {
+  if (offset === undefined || !Number.isFinite(offset)) {
+    return 0;
+  }
+
+  return Math.max(Math.trunc(offset), 0);
 }

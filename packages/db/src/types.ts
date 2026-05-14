@@ -32,6 +32,11 @@ export type FeedRow = {
   updatedAt: number;
 };
 
+export type FeedListInput = {
+  folderId?: string | null;
+  enabled?: boolean;
+};
+
 export type UpsertFeedInput = {
   id: string;
   folderId?: string | null;
@@ -61,6 +66,59 @@ export type ArticleRow = {
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
+};
+
+export type ArticleListView = "recommended" | "latest" | "favorites" | "read_later";
+
+export type ArticleReadStatus = "unread" | "read" | "all";
+
+export type ArticleListInput = {
+  view?: ArticleListView;
+  feedId?: string;
+  folderId?: string;
+  status?: ArticleReadStatus;
+  limit?: number;
+  offset?: number;
+};
+
+export type ArticleStateSnapshot = {
+  read: boolean;
+  favorited: boolean;
+  readLater: boolean;
+  hidden: boolean;
+  notInterested: boolean;
+  readingProgress: number;
+};
+
+export type ArticleRankSnapshot = {
+  score: number;
+  calculatedAt: number;
+};
+
+export type ArticleListItemRow = {
+  id: string;
+  feedId: string;
+  feedTitle: string;
+  title: string;
+  url: string;
+  author: string | null;
+  summary: string | null;
+  publishedAt: number | null;
+  discoveredAt: number;
+  state: ArticleStateSnapshot;
+  rank: ArticleRankSnapshot | null;
+};
+
+export type ArticleDetailRow = ArticleListItemRow & {
+  contentHtml: string | null;
+  contentText: string | null;
+  extractionStatus: "pending" | "feed_only" | "success" | "failed" | "skipped";
+  extractionError: string | null;
+};
+
+export type ArticleListResult = {
+  items: ArticleListItemRow[];
+  nextOffset: number | null;
 };
 
 export type UpsertArticleInput = {
