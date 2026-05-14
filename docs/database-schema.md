@@ -4,7 +4,13 @@
 
 本文定义邸报 MVP 的 SQLite 数据库结构、索引、生命周期规则、FTS5 与 sqlite-vec 集成方式。
 
-它是开发前的 schema 合约，不是最终 migration SQL。实现时可以根据具体库和 sqlite-vec 版本调整语法，但不得改变这里定义的数据边界和所有权原则。
+它是 schema 合约。当前初始 migration SQL 已落地在：
+
+```text
+packages/db/migrations/001_initial_schema.sql
+```
+
+实现时可以根据具体库和 sqlite-vec 版本调整语法，但不得改变这里定义的数据边界和所有权原则。
 
 ## 总体原则
 
@@ -575,6 +581,21 @@ embedding float[dimension]
 - 所有 sqlite-vec SQL 只能出现在 `SqliteVecVectorStore` adapter 中。
 - 插入策略为：先插入向量，让 sqlite-vec 自动生成 rowid，再将 rowid 写入 `article_vector_rows`。
 
+当前实现：
+
+```text
+packages/db/src/vector/sqlite-vec-vector-store.ts
+```
+
+已覆盖：
+
+- 按 `embedding_indexes` 创建 `vec0` 表。
+- 写入 `article_embeddings.vector_blob` 权威数据。
+- 写入 `article_vector_rows` 映射。
+- 相似文章 KNN 查询。
+- 删除单篇文章向量。
+- 从 `article_embeddings` 重建 vec0 索引。
+
 ## 用户画像
 
 ### interest_clusters
@@ -809,20 +830,33 @@ idx_jobs_created_at(created_at)
 
 若 rowid 映射丢失，系统可以重新分配 rowid 并重建 `article_vector_rows`。
 
-## 最小 migration 顺序
+## Migration 实现
 
-建议 MVP migration 顺序：
+MVP 当前以一个初始 migration 建立完整 v0 schema：
 
 ```text
-001_core_settings_auth
-002_feeds_articles
-003_behavior_states
-004_search_fts
-005_embedding_providers
-006_vector_indexes
-007_profile_clusters
-008_ranking_scores
-009_jobs
+packages/db/migrations/001_initial_schema.sql
+```
+
+迁移执行器位于：
+
+```text
+packages/db/src/migration-runner.ts
+```
+
+执行器负责：
+
+- 创建和维护 `schema_migrations`。
+- 记录 migration `version`、`name`、`applied_at` 和 SHA-256 checksum。
+- 重复启动时跳过已应用 migration。
+- 已应用 migration 内容或名称变化时拒绝继续执行。
+
+后续 schema 变更继续追加：
+
+```text
+002_*
+003_*
+...
 ```
 
 ## Schema 验收标准

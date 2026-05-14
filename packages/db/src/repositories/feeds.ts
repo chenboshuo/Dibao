@@ -1,0 +1,134 @@
+import type { DibaoDatabase, FeedRow, UpsertFeedInput } from "../types.js";
+
+type FeedDbRow = {
+  id: string;
+  folderId: string | null;
+  title: string;
+  siteUrl: string | null;
+  feedUrl: string;
+  description: string | null;
+  enabled: 0 | 1;
+  sourceWeight: number;
+  lastFetchedAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export interface FeedRepository {
+  findById(id: string): FeedRow | null;
+  findByFeedUrl(feedUrl: string): FeedRow | null;
+  listActive(): FeedRow[];
+  upsert(input: UpsertFeedInput): FeedRow;
+}
+
+export class SqliteFeedRepository implements FeedRepository {
+  constructor(private readonly db: DibaoDatabase) {}
+
+  findById(id: string): FeedRow | null {
+    const row = this.selectBase().get(id) as FeedDbRow | undefined;
+    return row ? mapFeed(row) : null;
+  }
+
+  findByFeedUrl(feedUrl: string): FeedRow | null {
+    const row = this.db
+      .prepare(`${baseFeedSelect()} where feed_url = ? and deleted_at is null`)
+      .get(feedUrl) as FeedDbRow | undefined;
+    return row ? mapFeed(row) : null;
+  }
+
+  listActive(): FeedRow[] {
+    return (
+      this.db
+        .prepare(
+          `
+            ${baseFeedSelect()}
+            where enabled = 1 and deleted_at is null
+            order by title collate nocase
+          `
+        )
+        .all() as FeedDbRow[]
+    ).map(mapFeed);
+  }
+
+  upsert(input: UpsertFeedInput): FeedRow {
+    const now = input.now ?? Date.now();
+    this.db
+      .prepare(
+        `
+          insert into feeds (
+            id,
+            folder_id,
+            title,
+            site_url,
+            feed_url,
+            description,
+            enabled,
+            source_weight,
+            created_at,
+            updated_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(feed_url) do update set
+            folder_id = excluded.folder_id,
+            title = excluded.title,
+            site_url = excluded.site_url,
+            description = excluded.description,
+            enabled = excluded.enabled,
+            source_weight = excluded.source_weight,
+            updated_at = excluded.updated_at,
+            deleted_at = null
+        `
+      )
+      .run(
+        input.id,
+        input.folderId ?? null,
+        input.title,
+        input.siteUrl ?? null,
+        input.feedUrl,
+        input.description ?? null,
+        input.enabled === false ? 0 : 1,
+        input.sourceWeight ?? 0,
+        now,
+        now
+      );
+
+    const row = this.findByFeedUrl(input.feedUrl);
+    if (!row) {
+      throw new Error(`Failed to upsert feed: ${input.feedUrl}`);
+    }
+    return row;
+  }
+
+  private selectBase() {
+    return this.db.prepare(`${baseFeedSelect()} where id = ? and deleted_at is null`);
+  }
+}
+
+function baseFeedSelect(): string {
+  return `
+    select
+      id,
+      folder_id as folderId,
+      title,
+      site_url as siteUrl,
+      feed_url as feedUrl,
+      description,
+      enabled,
+      source_weight as sourceWeight,
+      last_fetched_at as lastFetchedAt,
+      last_success_at as lastSuccessAt,
+      last_error as lastError,
+      created_at as createdAt,
+      updated_at as updatedAt
+    from feeds
+  `;
+}
+
+function mapFeed(row: FeedDbRow): FeedRow {
+  return {
+    ...row,
+    enabled: row.enabled === 1
+  };
+}

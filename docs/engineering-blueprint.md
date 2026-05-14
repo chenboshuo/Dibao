@@ -134,6 +134,28 @@ flowchart TD
 - 初始化 sqlite-vec。
 - 提供 repository 层。
 
+当前实现入口：
+
+```text
+packages/db/src/index.ts
+```
+
+已实现：
+
+- `openDatabase()`：打开 `better-sqlite3` 连接、加载 `sqlite-vec`、设置 WAL / foreign_keys / busy_timeout。
+- `runMigrations()`：执行 `packages/db/migrations/001_initial_schema.sql` 并记录 checksum。
+- `SqliteArticleFtsIndex`：隔离 FTS5 写入、删除和查询。
+- `SqliteVecVectorStore`：隔离 sqlite-vec `vec0` SQL，确保 `article_embeddings.vector_blob` 是权威数据。
+- 基础 repository 骨架：settings、feeds、articles、embedding providers / indexes。
+
+当前测试覆盖：
+
+```text
+packages/db/src/index.test.ts
+```
+
+覆盖 migration 幂等性、checksum 校验、FTS5 搜索、sqlite-vec KNN 查询和从 BLOB 重建 vec0 索引。
+
 ### RSS Ingestion Module
 
 职责：

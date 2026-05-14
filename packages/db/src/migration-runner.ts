@@ -1,0 +1,96 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import type { AppliedMigration, DibaoDatabase, Migration } from "./types.js";
+
+const initialSchemaPath = fileURLToPath(
+  new URL("../migrations/001_initial_schema.sql", import.meta.url)
+);
+
+export function loadDefaultMigrations(): Migration[] {
+  return [
+    {
+      version: "001",
+      name: "initial_schema",
+      sql: readFileSync(initialSchemaPath, "utf8")
+    }
+  ];
+}
+
+export function runMigrations(
+  db: DibaoDatabase,
+  migrations: readonly Migration[] = loadDefaultMigrations(),
+  now: () => number = Date.now
+): AppliedMigration[] {
+  ensureMigrationTable(db);
+
+  const applied = getAppliedMigrations(db);
+  const appliedByVersion = new Map(applied.map((migration) => [migration.version, migration]));
+  const appliedNow: AppliedMigration[] = [];
+
+  for (const migration of migrations) {
+    const checksum = migration.checksum ?? checksumSql(migration.sql);
+    const existing = appliedByVersion.get(migration.version);
+
+    if (existing) {
+      if (existing.checksum !== checksum || existing.name !== migration.name) {
+        throw new Error(
+          `Migration ${migration.version} has changed since it was applied`
+        );
+      }
+      continue;
+    }
+
+    db.transaction(() => {
+      db.exec(migration.sql);
+      db.prepare(
+        `
+          insert into schema_migrations (version, name, applied_at, checksum)
+          values (?, ?, ?, ?)
+        `
+      ).run(migration.version, migration.name, now(), checksum);
+    })();
+
+    appliedNow.push({
+      version: migration.version,
+      name: migration.name,
+      appliedAt: now(),
+      checksum
+    });
+  }
+
+  return appliedNow;
+}
+
+export function getAppliedMigrations(db: DibaoDatabase): AppliedMigration[] {
+  ensureMigrationTable(db);
+
+  return db
+    .prepare(
+      `
+        select
+          version,
+          name,
+          applied_at as appliedAt,
+          checksum
+        from schema_migrations
+        order by version
+      `
+    )
+    .all() as AppliedMigration[];
+}
+
+export function checksumSql(sql: string): string {
+  return createHash("sha256").update(sql).digest("hex");
+}
+
+function ensureMigrationTable(db: DibaoDatabase): void {
+  db.exec(`
+    create table if not exists schema_migrations (
+      version text primary key,
+      name text not null,
+      applied_at integer not null,
+      checksum text
+    )
+  `);
+}
