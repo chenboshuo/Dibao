@@ -9,6 +9,7 @@ import {
   SqliteArticleActionRepository,
   SqliteArticleRepository,
   SqliteAuthCredentialRepository,
+  SqliteEmbeddingRepository,
   SqliteFeedFolderRepository,
   SqliteFeedRepository,
   SqliteJobRepository,
@@ -39,6 +40,15 @@ import {
 import { AuthService, AuthServiceError } from "./auth-service.js";
 import { ArticleRetentionService } from "./article-retention-service.js";
 import {
+  EmbeddingJobService,
+  EMBEDDING_GENERATE_JOB_TYPE
+} from "./embedding-job-service.js";
+import {
+  EmbeddingProviderService,
+  EmbeddingProviderServiceError
+} from "./embedding-provider-service.js";
+import { OpenAiCompatibleEmbeddingAdapter } from "./embedding/openai-compatible-adapter.js";
+import {
   FeedManagementService,
   FeedManagementServiceError
 } from "./feed-management-service.js";
@@ -62,6 +72,10 @@ import {
   RetentionCleanupScheduler
 } from "./retention-cleanup-job-service.js";
 import { SettingsService, SettingsServiceError } from "./settings-service.js";
+import {
+  VectorIndexRebuildJobService,
+  VECTOR_INDEX_REBUILD_JOB_TYPE
+} from "./vector-index-rebuild-job-service.js";
 
 type HealthStatus = "ok" | "error";
 
@@ -122,6 +136,14 @@ type ArticleActionBody = {
   metadata?: unknown;
 };
 
+type EmbeddingProviderParams = {
+  id: string;
+};
+
+type EmbeddingIndexParams = {
+  id: string;
+};
+
 type CursorPayload = {
   offset: number;
 };
@@ -141,6 +163,7 @@ type BuildServerOptions = {
   retentionCleanupIntervalMs?: number;
   jobRunnerIntervalMs?: number;
   jobRetryDelayMs?: number;
+  embeddingFetcher?: typeof fetch;
 };
 
 export function buildServer(options: BuildServerOptions = {}) {
@@ -153,9 +176,34 @@ export function buildServer(options: BuildServerOptions = {}) {
   const feeds = new SqliteFeedRepository(db);
   const jobs = new SqliteJobRepository(db);
   const articles = new SqliteArticleRepository(db);
+  const embeddings = new SqliteEmbeddingRepository(db);
   const articleActions = new SqliteArticleActionRepository(db);
   const rankings = new SqliteRankingRepository(db);
   const vectorStore = new SqliteVecVectorStore(db);
+  const embeddingAdapter = new OpenAiCompatibleEmbeddingAdapter({
+    fetcher: options.embeddingFetcher
+  });
+  const embeddingProviderService = new EmbeddingProviderService({
+    embeddings,
+    vectorStore,
+    adapter: embeddingAdapter,
+    now: options.now
+  });
+  const embeddingJobService = new EmbeddingJobService({
+    articles,
+    embeddings,
+    jobs,
+    providerService: embeddingProviderService,
+    adapter: embeddingAdapter,
+    vectorStore,
+    now: options.now
+  });
+  const vectorIndexRebuildJobService = new VectorIndexRebuildJobService({
+    embeddings,
+    jobs,
+    vectorStore,
+    now: options.now
+  });
   const rankingService = new BaselineRankingService({
     rankings,
     now: options.now
@@ -169,7 +217,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     now: options.now
   });
   const feedRefreshCoordinator = new FeedRefreshCoordinator({
-    refreshService: feedRefreshService
+    refreshService: feedRefreshService,
+    afterRefresh: (result) => {
+      enqueueEmbeddingArticles(result.articleIds);
+    }
   });
   const feedRefreshJobService = new FeedRefreshJobService({
     feeds,
@@ -227,7 +278,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     jobs,
     handlers: {
       feed_refresh: (job) => feedRefreshJobService.handleFeedRefreshJob(job),
-      retention_cleanup: (job) => retentionCleanupJobService.handleRetentionCleanupJob(job)
+      retention_cleanup: (job) => retentionCleanupJobService.handleRetentionCleanupJob(job),
+      [EMBEDDING_GENERATE_JOB_TYPE]: (job) =>
+        embeddingJobService.handleEmbeddingGenerateJob(job),
+      [VECTOR_INDEX_REBUILD_JOB_TYPE]: (job) =>
+        vectorIndexRebuildJobService.handleVectorIndexRebuildJob(job)
     },
     now: options.now,
     pollIntervalMs: options.jobRunnerIntervalMs,
@@ -246,6 +301,34 @@ export function buildServer(options: BuildServerOptions = {}) {
     intervalMs: options.retentionCleanupIntervalMs ?? DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
     onError: (error) => app.log.error(error)
   });
+
+  function drainBackgroundJobs(): void {
+    if (backgroundJobs) {
+      void jobRunner.drainDue().catch((error) => app.log.error(error));
+    }
+  }
+
+  function enqueueEmbeddingArticles(articleIds: string[]): void {
+    try {
+      const queued = embeddingJobService.enqueueArticlesForActiveIndex(articleIds);
+      if (queued.length > 0) {
+        drainBackgroundJobs();
+      }
+    } catch (error) {
+      app.log.error(error);
+    }
+  }
+
+  function enqueueEmbeddingBackfill(): void {
+    try {
+      const queued = embeddingJobService.enqueueBackfillForActiveIndex();
+      if (queued.length > 0) {
+        drainBackgroundJobs();
+      }
+    } catch (error) {
+      app.log.error(error);
+    }
+  }
 
   app.addContentTypeParser(
     /^multipart\/form-data(?:;.*)?$/i,
@@ -364,7 +447,11 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.get("/api/setup/status", async () => ({
-    data: getSetupStatus(credentials.hasCredential(), feeds.list().length > 0)
+    data: getSetupStatus(
+      credentials.hasCredential(),
+      feeds.list().length > 0,
+      embeddingProviderService.hasActiveProviderAndIndex()
+    )
   }));
 
   app.get("/api/settings", async () => ({
@@ -380,6 +467,91 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendSettingsError(reply, error);
     }
   });
+
+  app.get("/api/embedding/providers", async () => ({
+    data: embeddingProviderService.listProviders()
+  }));
+
+  app.post<{ Body: unknown }>("/api/embedding/providers", async (request, reply) => {
+    try {
+      const provider = embeddingProviderService.createProvider(request.body);
+      if (provider.enabled) {
+        enqueueEmbeddingBackfill();
+      }
+      return {
+        data: {
+          id: provider.id
+        }
+      };
+    } catch (error) {
+      return sendEmbeddingProviderError(reply, error);
+    }
+  });
+
+  app.patch<{ Params: EmbeddingProviderParams; Body: unknown }>(
+    "/api/embedding/providers/:id",
+    async (request, reply) => {
+      try {
+        const provider = embeddingProviderService.updateProvider(request.params.id, request.body);
+        if (provider.enabled) {
+          enqueueEmbeddingBackfill();
+        }
+        return {
+          data: provider
+        };
+      } catch (error) {
+        return sendEmbeddingProviderError(reply, error);
+      }
+    }
+  );
+
+  app.delete<{ Params: EmbeddingProviderParams }>(
+    "/api/embedding/providers/:id",
+    async (request, reply) => {
+      try {
+        return {
+          data: embeddingProviderService.deleteProvider(request.params.id)
+        };
+      } catch (error) {
+        return sendEmbeddingProviderError(reply, error);
+      }
+    }
+  );
+
+  app.post<{ Params: EmbeddingProviderParams }>(
+    "/api/embedding/providers/:id/test",
+    async (request, reply) => {
+      try {
+        return {
+          data: await embeddingProviderService.testProvider(request.params.id)
+        };
+      } catch (error) {
+        return sendEmbeddingProviderError(reply, error);
+      }
+    }
+  );
+
+  app.get("/api/embedding/indexes", async () => ({
+    data: embeddingProviderService.listIndexes()
+  }));
+
+  app.post<{ Params: EmbeddingIndexParams }>(
+    "/api/embedding/indexes/:id/rebuild",
+    async (request, reply) => {
+      try {
+        embeddingProviderService.rebuildIndex(request.params.id);
+        const job = vectorIndexRebuildJobService.enqueueRebuildIndex(request.params.id);
+        drainBackgroundJobs();
+        return {
+          data: {
+            jobId: job.id
+          }
+        };
+      } catch (error) {
+        return sendEmbeddingProviderError(reply, error);
+      }
+    }
+  );
 
   app.get("/api/system/health", async (_request, reply) => {
     const data = getHealth(db);
@@ -452,6 +624,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     try {
       feedManagementService.validateFolderReference(parsed.input.folderId);
       const result = await feedRefreshService.addFeed(parsed.input);
+      enqueueEmbeddingArticles(result.articleIds);
 
       return {
         data: {
@@ -490,7 +663,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.post("/api/feeds/refresh", async () => {
     const jobs = feedRefreshJobService.enqueueAllEnabledFeeds();
     if (backgroundJobs) {
-      void jobRunner.drainDue().catch((error) => app.log.error(error));
+      drainBackgroundJobs();
     }
 
     return {
@@ -503,6 +676,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.post<{ Params: FeedParams }>("/api/feeds/:id/refresh", async (request, reply) => {
     try {
       const result = await feedRefreshCoordinator.refreshFeed(request.params.id);
+      drainBackgroundJobs();
 
       return {
         data: {
@@ -706,11 +880,15 @@ function checkHealth(fn: () => void): HealthStatus {
   }
 }
 
-function getSetupStatus(setupCompleted: boolean, hasFeeds: boolean): SetupStatusResponse {
+function getSetupStatus(
+  setupCompleted: boolean,
+  hasFeeds: boolean,
+  hasEmbeddingProvider: boolean
+): SetupStatusResponse {
   return {
     setupCompleted,
     hasFeeds,
-    hasEmbeddingProvider: false,
+    hasEmbeddingProvider,
     firstRefreshStatus: "idle"
   };
 }
@@ -1193,6 +1371,14 @@ function sendOpmlServiceError(reply: FastifyReply, error: unknown) {
 
 function sendSettingsError(reply: FastifyReply, error: unknown) {
   if (error instanceof SettingsServiceError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendEmbeddingProviderError(reply: FastifyReply, error: unknown) {
+  if (error instanceof EmbeddingProviderServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 

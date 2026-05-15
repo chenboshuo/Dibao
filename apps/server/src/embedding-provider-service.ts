@@ -1,0 +1,531 @@
+import { randomBytes } from "node:crypto";
+import type {
+  EmbeddingIndexListRow,
+  EmbeddingIndexRow,
+  EmbeddingProviderRow,
+  EmbeddingRepository,
+  VectorStore
+} from "@dibao/db";
+import { EmbeddingProviderError, type EmbeddingProviderAdapter } from "./embedding/types.js";
+
+export type EmbeddingProviderResponse = {
+  id: string;
+  type: EmbeddingProviderRow["type"];
+  name: string;
+  baseUrl: string | null;
+  model: string;
+  dimension: number;
+  enabled: boolean;
+  qualityTier: EmbeddingProviderRow["qualityTier"];
+  hasApiKey: boolean;
+  lastTestStatus: EmbeddingProviderRow["lastTestStatus"];
+  lastTestError: string | null;
+  lastTestAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EmbeddingIndexResponse = {
+  id: string;
+  providerId: string;
+  model: string;
+  dimension: number;
+  distanceMetric: EmbeddingIndexRow["distanceMetric"];
+  status: EmbeddingIndexRow["status"];
+  embeddingCount: number;
+  pendingJobs: number;
+  failedJobs: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type TestEmbeddingProviderResponse = {
+  status: "success";
+  dimension: number;
+  latencyMs: number;
+};
+
+export class EmbeddingProviderServiceError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly code: string,
+    message: string,
+    readonly details?: unknown
+  ) {
+    super(message);
+    this.name = "EmbeddingProviderServiceError";
+  }
+}
+
+export type EmbeddingProviderServiceOptions = {
+  embeddings: EmbeddingRepository;
+  vectorStore: Pick<VectorStore, "ensureIndex">;
+  adapter: EmbeddingProviderAdapter;
+  now?: () => number;
+};
+
+export class EmbeddingProviderService {
+  private readonly now: () => number;
+
+  constructor(private readonly options: EmbeddingProviderServiceOptions) {
+    this.now = options.now ?? Date.now;
+  }
+
+  hasActiveProviderAndIndex(): boolean {
+    return this.options.embeddings.findActiveProviderWithIndex() !== null;
+  }
+
+  listProviders(): EmbeddingProviderResponse[] {
+    return this.options.embeddings.listProviders().map(mapProvider);
+  }
+
+  listIndexes(): EmbeddingIndexResponse[] {
+    return this.options.embeddings.listIndexes().map(mapIndex);
+  }
+
+  createProvider(body: unknown): EmbeddingProviderResponse {
+    const input = parseCreateProviderBody(body);
+    const now = this.now();
+    const providerId = randomId("provider");
+
+    validateEnabledProviderType(input.type, input.enabled);
+    this.options.embeddings.upsertProvider({
+      id: providerId,
+      type: input.type,
+      name: input.name,
+      baseUrl: input.baseUrl,
+      model: input.model,
+      dimension: input.dimension,
+      apiKeyEncrypted: input.apiKey !== undefined ? encodeApiKey(input.apiKey) : null,
+      enabled: input.enabled,
+      qualityTier: input.qualityTier,
+      now
+    });
+
+    if (input.enabled) {
+      this.ensureActiveIndex(providerId, input.model, input.dimension, now);
+    }
+
+    return mapProvider(this.mustFindProvider(providerId));
+  }
+
+  updateProvider(id: string, body: unknown): EmbeddingProviderResponse {
+    const existing = this.options.embeddings.findProviderById(id);
+    if (!existing) {
+      throw notFound("Embedding provider not found");
+    }
+
+    const input = parseUpdateProviderBody(body);
+    const nextType = input.type ?? existing.type;
+    const nextEnabled = input.enabled ?? existing.enabled;
+    const nextModel = input.model ?? existing.model;
+    const nextDimension = input.dimension ?? existing.dimension;
+    const now = this.now();
+
+    validateEnabledProviderType(nextType, nextEnabled);
+
+    const updated = this.options.embeddings.updateProvider({
+      id,
+      ...(input.type !== undefined ? { type: input.type } : {}),
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.dimension !== undefined ? { dimension: input.dimension } : {}),
+      ...(input.apiKey !== undefined ? { apiKeyEncrypted: encodeApiKey(input.apiKey) } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.qualityTier !== undefined ? { qualityTier: input.qualityTier } : {}),
+      now
+    });
+
+    if (!updated) {
+      throw notFound("Embedding provider not found");
+    }
+
+    if (nextEnabled) {
+      this.ensureActiveIndex(id, nextModel, nextDimension, now);
+    }
+
+    return mapProvider(this.mustFindProvider(id));
+  }
+
+  deleteProvider(id: string): { ok: true } {
+    const existing = this.options.embeddings.findProviderById(id);
+    if (!existing) {
+      throw notFound("Embedding provider not found");
+    }
+
+    if (this.options.embeddings.providerHasIndexes(id)) {
+      throw new EmbeddingProviderServiceError(
+        409,
+        "CONFLICT",
+        "Embedding provider has indexes; disable it instead"
+      );
+    }
+
+    this.options.embeddings.deleteProvider(id);
+    return { ok: true };
+  }
+
+  async testProvider(id: string): Promise<TestEmbeddingProviderResponse> {
+    const provider = this.options.embeddings.findProviderById(id);
+    if (!provider) {
+      throw notFound("Embedding provider not found");
+    }
+
+    validateEnabledProviderType(provider.type, true);
+
+    try {
+      const result = await this.options.adapter.test(configForProvider(provider));
+      this.options.embeddings.recordProviderTestResult({
+        id,
+        status: "success",
+        testedAt: this.now()
+      });
+      return {
+        status: "success",
+        dimension: result.dimension,
+        latencyMs: result.latencyMs
+      };
+    } catch (error) {
+      const message = providerErrorMessage(error);
+      this.options.embeddings.recordProviderTestResult({
+        id,
+        status: "failed",
+        error: message,
+        testedAt: this.now()
+      });
+      throw providerError(error, message);
+    }
+  }
+
+  ensureActiveIndex(providerId: string, model: string, dimension: number, now = this.now()) {
+    const existing = this.options.embeddings.findActiveIndexForProvider(providerId);
+    if (existing && existing.model === model && existing.dimension === dimension) {
+      this.options.vectorStore.ensureIndex(existing.id);
+      return existing;
+    }
+
+    const index = this.options.embeddings.createIndex({
+      id: randomId("index"),
+      providerId,
+      model,
+      dimension,
+      status: "active",
+      now
+    });
+    this.options.embeddings.retireActiveIndexesForProvider(providerId, index.id, now);
+    this.options.vectorStore.ensureIndex(index.id);
+    return index;
+  }
+
+  rebuildIndex(id: string): { jobPayload: { embeddingIndexId: string } } {
+    const index = this.options.embeddings.findIndexById(id);
+    if (!index) {
+      throw notFound("Embedding index not found");
+    }
+
+    return {
+      jobPayload: {
+        embeddingIndexId: id
+      }
+    };
+  }
+
+  activeProviderConfig() {
+    const active = this.options.embeddings.findActiveProviderWithIndex();
+    if (!active || active.provider.type !== "openai_compatible") {
+      return null;
+    }
+
+    return {
+      provider: configForProvider(active.provider),
+      index: active.index
+    };
+  }
+
+  private mustFindProvider(id: string): EmbeddingProviderRow {
+    const provider = this.options.embeddings.findProviderById(id);
+    if (!provider) {
+      throw new Error(`Failed to load embedding provider: ${id}`);
+    }
+    return provider;
+  }
+}
+
+type CreateProviderInput = {
+  type: EmbeddingProviderRow["type"];
+  name: string;
+  baseUrl: string | null;
+  model: string;
+  dimension: number;
+  apiKey?: string;
+  enabled: boolean;
+  qualityTier: EmbeddingProviderRow["qualityTier"];
+};
+
+type UpdateProviderInput = Partial<CreateProviderInput>;
+
+function parseCreateProviderBody(body: unknown): CreateProviderInput {
+  const input = readObject(body);
+  rejectUnknownKeys(input, [
+    "type",
+    "name",
+    "baseUrl",
+    "model",
+    "dimension",
+    "apiKey",
+    "enabled",
+    "qualityTier"
+  ]);
+
+  const type = parseProviderType(input.type);
+  const baseUrl = parseBaseUrl(input.baseUrl, type);
+
+  return {
+    type,
+    name: parseNonEmptyString(input.name, "name"),
+    baseUrl,
+    model: parseNonEmptyString(input.model, "model"),
+    dimension: parseDimension(input.dimension),
+    ...(input.apiKey !== undefined ? { apiKey: parseApiKey(input.apiKey) } : {}),
+    enabled: input.enabled === undefined ? false : parseBoolean(input.enabled, "enabled"),
+    qualityTier:
+      input.qualityTier === undefined ? "basic" : parseQualityTier(input.qualityTier)
+  };
+}
+
+function parseUpdateProviderBody(body: unknown): UpdateProviderInput {
+  const input = readObject(body);
+  rejectUnknownKeys(input, [
+    "type",
+    "name",
+    "baseUrl",
+    "model",
+    "dimension",
+    "apiKey",
+    "enabled",
+    "qualityTier"
+  ]);
+
+  return {
+    ...(input.type !== undefined ? { type: parseProviderType(input.type) } : {}),
+    ...(input.name !== undefined ? { name: parseNonEmptyString(input.name, "name") } : {}),
+    ...(input.baseUrl !== undefined
+      ? { baseUrl: parseBaseUrl(input.baseUrl, parseProviderType(input.type ?? "openai_compatible")) }
+      : {}),
+    ...(input.model !== undefined ? { model: parseNonEmptyString(input.model, "model") } : {}),
+    ...(input.dimension !== undefined ? { dimension: parseDimension(input.dimension) } : {}),
+    ...(input.apiKey !== undefined ? { apiKey: parseApiKey(input.apiKey) } : {}),
+    ...(input.enabled !== undefined ? { enabled: parseBoolean(input.enabled, "enabled") } : {}),
+    ...(input.qualityTier !== undefined
+      ? { qualityTier: parseQualityTier(input.qualityTier) }
+      : {})
+  };
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw validationError("request body must be an object");
+  }
+  return value as Record<string, unknown>;
+}
+
+function rejectUnknownKeys(input: Record<string, unknown>, allowedKeys: readonly string[]): void {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(input)) {
+    if (!allowed.has(key)) {
+      throw validationError(`${key} is not a writable provider field`, { field: key });
+    }
+  }
+}
+
+function parseProviderType(value: unknown): EmbeddingProviderRow["type"] {
+  if (
+    value === "openai_compatible" ||
+    value === "ollama" ||
+    value === "custom_http" ||
+    value === "embedded_local"
+  ) {
+    return value;
+  }
+
+  throw validationError(
+    "type must be openai_compatible, ollama, custom_http, or embedded_local",
+    { field: "type" }
+  );
+}
+
+function validateEnabledProviderType(type: EmbeddingProviderRow["type"], enabled: boolean): void {
+  if (enabled && type !== "openai_compatible") {
+    throw validationError("Only openai_compatible providers can be enabled in this version", {
+      field: "type"
+    });
+  }
+}
+
+function parseBaseUrl(value: unknown, type: EmbeddingProviderRow["type"]): string | null {
+  if (type !== "openai_compatible") {
+    return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  }
+
+  if (typeof value !== "string" || value.trim() === "") {
+    throw validationError("baseUrl is required", { field: "baseUrl" });
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw validationError("baseUrl must be a valid URL", { field: "baseUrl" });
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw validationError("baseUrl must use http or https", { field: "baseUrl" });
+  }
+
+  if (url.pathname.replace(/\/+$/u, "").endsWith("/embeddings")) {
+    throw validationError("baseUrl must not include /embeddings; use the API root such as /v1", {
+      field: "baseUrl"
+    });
+  }
+
+  url.pathname = url.pathname.replace(/\/+$/u, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/u, "");
+}
+
+function parseNonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw validationError(`${field} is required`, { field });
+  }
+  return value.trim();
+}
+
+function parseApiKey(value: unknown): string {
+  if (typeof value !== "string") {
+    throw validationError("apiKey must be a string", { field: "apiKey" });
+  }
+  return value.trim();
+}
+
+function parseBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw validationError(`${field} must be a boolean`, { field });
+  }
+  return value;
+}
+
+function parseDimension(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 20_000) {
+    throw validationError("dimension must be an integer between 1 and 20000", {
+      field: "dimension",
+      min: 1,
+      max: 20_000
+    });
+  }
+  return value;
+}
+
+function parseQualityTier(value: unknown): EmbeddingProviderRow["qualityTier"] {
+  if (value === "basic" || value === "recommended" || value === "best_quality") {
+    return value;
+  }
+  throw validationError("qualityTier must be basic, recommended, or best_quality", {
+    field: "qualityTier"
+  });
+}
+
+function configForProvider(provider: EmbeddingProviderRow) {
+  return {
+    id: provider.id,
+    type: provider.type,
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    dimension: provider.dimension,
+    apiKey: decodeApiKey(provider.apiKeyEncrypted)
+  };
+}
+
+function encodeApiKey(apiKey: string): string | null {
+  return apiKey ? `plain:v1:${Buffer.from(apiKey, "utf8").toString("base64url")}` : null;
+}
+
+function decodeApiKey(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  if (!value.startsWith("plain:v1:")) {
+    return value;
+  }
+
+  return Buffer.from(value.slice("plain:v1:".length), "base64url").toString("utf8");
+}
+
+function randomId(prefix: string): string {
+  return `${prefix}_${randomBytes(10).toString("hex")}`;
+}
+
+function mapProvider(provider: EmbeddingProviderRow): EmbeddingProviderResponse {
+  return {
+    id: provider.id,
+    type: provider.type,
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    dimension: provider.dimension,
+    enabled: provider.enabled,
+    qualityTier: provider.qualityTier,
+    hasApiKey: Boolean(provider.apiKeyEncrypted),
+    lastTestStatus: provider.lastTestStatus,
+    lastTestError: provider.lastTestError,
+    lastTestAt: timestampToIso(provider.lastTestAt),
+    createdAt: timestampToIsoValue(provider.createdAt),
+    updatedAt: timestampToIsoValue(provider.updatedAt)
+  };
+}
+
+function mapIndex(index: EmbeddingIndexListRow): EmbeddingIndexResponse {
+  return {
+    id: index.id,
+    providerId: index.providerId,
+    model: index.model,
+    dimension: index.dimension,
+    distanceMetric: index.distanceMetric,
+    status: index.status,
+    embeddingCount: index.embeddingCount,
+    pendingJobs: index.pendingJobs,
+    failedJobs: index.failedJobs,
+    createdAt: timestampToIso(index.createdAt ?? null),
+    updatedAt: timestampToIso(index.updatedAt ?? null)
+  };
+}
+
+function providerError(error: unknown, message: string): EmbeddingProviderServiceError {
+  if (error instanceof EmbeddingProviderError) {
+    return new EmbeddingProviderServiceError(502, "PROVIDER_ERROR", message, error.details);
+  }
+  return new EmbeddingProviderServiceError(502, "PROVIDER_ERROR", message);
+}
+
+function providerErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function validationError(message: string, details?: unknown): EmbeddingProviderServiceError {
+  return new EmbeddingProviderServiceError(400, "VALIDATION_ERROR", message, details);
+}
+
+function notFound(message: string): EmbeddingProviderServiceError {
+  return new EmbeddingProviderServiceError(404, "NOT_FOUND", message);
+}
+
+function timestampToIso(value: number | null): string | null {
+  return value === null ? null : timestampToIsoValue(value);
+}
+
+function timestampToIsoValue(value: number): string {
+  return new Date(value).toISOString();
+}

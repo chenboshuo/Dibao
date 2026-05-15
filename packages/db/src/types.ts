@@ -355,6 +355,41 @@ export type EmbeddingProviderInput = {
   now?: number;
 };
 
+export type EmbeddingProviderRow = {
+  id: string;
+  type: "embedded_local" | "ollama" | "openai_compatible" | "custom_http";
+  name: string;
+  baseUrl: string | null;
+  model: string;
+  dimension: number;
+  apiKeyEncrypted: string | null;
+  enabled: boolean;
+  qualityTier: "basic" | "recommended" | "best_quality";
+  lastTestStatus: "success" | "failed" | null;
+  lastTestError: string | null;
+  lastTestAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type UpdateEmbeddingProviderInput = Partial<
+  Pick<
+    EmbeddingProviderInput,
+    "type" | "name" | "baseUrl" | "model" | "dimension" | "apiKeyEncrypted" | "enabled" | "qualityTier"
+  >
+> & {
+  id: string;
+  now?: number;
+};
+
+export type EmbeddingProviderTestResultInput = {
+  id: string;
+  status: "success" | "failed";
+  error?: string | null;
+  testedAt: number;
+  now?: number;
+};
+
 export type EmbeddingIndexInput = {
   id: string;
   providerId: string;
@@ -374,6 +409,14 @@ export type EmbeddingIndexRow = {
   distanceMetric: "cosine";
   tableName: string;
   status: "active" | "building" | "disabled" | "failed" | "retired";
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type EmbeddingIndexListRow = EmbeddingIndexRow & {
+  embeddingCount: number;
+  pendingJobs: number;
+  failedJobs: number;
 };
 
 export type ArticleVectorInput = {
@@ -393,4 +436,12 @@ export type SimilarArticleQuery = {
 export type VectorSearchResult = {
   articleId: string;
   distance: number;
+};
+
+export type ArticleEmbeddingCandidateRow = {
+  articleId: string;
+  title: string;
+  summary: string | null;
+  contentText: string | null;
+  contentHash: string;
 };

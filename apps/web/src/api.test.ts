@@ -248,6 +248,138 @@ describe("web API client", () => {
     ]);
   });
 
+  it("calls embedding provider and index endpoints", async () => {
+    const calls: Array<{ path: string; method: string | undefined; body: unknown }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      const path = String(input);
+      calls.push({
+        path,
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : null
+      });
+
+      const provider = {
+        id: "provider/openai",
+        type: "openai_compatible",
+        name: "OpenAI Compatible",
+        baseUrl: "https://api.example.com/v1",
+        model: "text-embedding-3-small",
+        dimension: 1536,
+        enabled: true,
+        qualityTier: "recommended",
+        hasApiKey: true,
+        lastTestStatus: "success",
+        lastTestError: null,
+        lastTestAt: "2026-05-14T08:00:00.000Z",
+        createdAt: "2026-05-14T08:00:00.000Z",
+        updatedAt: "2026-05-14T08:00:00.000Z"
+      };
+
+      const data = path === "/api/embedding/providers"
+        ? init?.method === "POST"
+          ? { id: "provider/openai" }
+          : [provider]
+        : path.endsWith("/test")
+          ? { status: "success", dimension: 1536, latencyMs: 12 }
+          : path === "/api/embedding/indexes"
+            ? [
+                {
+                  id: "index/openai",
+                  providerId: "provider/openai",
+                  model: "text-embedding-3-small",
+                  dimension: 1536,
+                  distanceMetric: "cosine",
+                  status: "active",
+                  embeddingCount: 2,
+                  pendingJobs: 1,
+                  failedJobs: 0,
+                  createdAt: "2026-05-14T08:00:00.000Z",
+                  updatedAt: "2026-05-14T08:00:00.000Z"
+                }
+              ]
+            : path.includes("/embedding/indexes/")
+              ? { jobId: "job/rebuild" }
+              : init?.method === "DELETE"
+                ? { ok: true }
+                : provider;
+
+      return new Response(JSON.stringify({ data }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      });
+    });
+
+    await api.listEmbeddingProviders();
+    await api.createEmbeddingProvider({
+      type: "openai_compatible",
+      name: "OpenAI Compatible",
+      baseUrl: "https://api.example.com/v1",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+      apiKey: "secret",
+      enabled: true,
+      qualityTier: "recommended"
+    });
+    await api.updateEmbeddingProvider("provider/openai", {
+      enabled: false
+    });
+    await api.testEmbeddingProvider("provider/openai");
+    await api.listEmbeddingIndexes();
+    await api.rebuildEmbeddingIndex("index/openai");
+    await api.deleteEmbeddingProvider("provider/openai");
+
+    expect(calls).toEqual([
+      {
+        path: "/api/embedding/providers",
+        method: undefined,
+        body: null
+      },
+      {
+        path: "/api/embedding/providers",
+        method: "POST",
+        body: {
+          type: "openai_compatible",
+          name: "OpenAI Compatible",
+          baseUrl: "https://api.example.com/v1",
+          model: "text-embedding-3-small",
+          dimension: 1536,
+          apiKey: "secret",
+          enabled: true,
+          qualityTier: "recommended"
+        }
+      },
+      {
+        path: "/api/embedding/providers/provider%2Fopenai",
+        method: "PATCH",
+        body: {
+          enabled: false
+        }
+      },
+      {
+        path: "/api/embedding/providers/provider%2Fopenai/test",
+        method: "POST",
+        body: null
+      },
+      {
+        path: "/api/embedding/indexes",
+        method: undefined,
+        body: null
+      },
+      {
+        path: "/api/embedding/indexes/index%2Fopenai/rebuild",
+        method: "POST",
+        body: null
+      },
+      {
+        path: "/api/embedding/providers/provider%2Fopenai",
+        method: "DELETE",
+        body: null
+      }
+    ]);
+  });
+
   it("calls feed and folder management endpoints", async () => {
     const calls: Array<{ path: string; method: string | undefined; body: unknown }> = [];
     const api = createDibaoApi(async (input, init) => {

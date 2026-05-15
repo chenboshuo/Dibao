@@ -12,6 +12,9 @@ import {
   type ArticleView,
   type AppSettings,
   type AuthSession,
+  type CreateEmbeddingProviderInput,
+  type EmbeddingIndex,
+  type EmbeddingProvider,
   type Feed,
   type FeedFolder,
   type OpmlImportResponse,
@@ -21,6 +24,7 @@ import {
   type SetupStatus,
   type UpdateFeedFolderInput,
   type UpdateFeedInput,
+  type UpdateEmbeddingProviderInput,
   type UpdateSettingsInput
 } from "./api.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
@@ -43,7 +47,11 @@ type Notice =
   | { type: "allFeedsRefreshQueued"; jobCount: number }
   | { type: "opmlImported"; result: OpmlImportResponse }
   | { type: "opmlExported" }
-  | { type: "settingsSaved" };
+  | { type: "settingsSaved" }
+  | { type: "embeddingProviderSaved" }
+  | { type: "embeddingProviderTested" }
+  | { type: "embeddingProviderDeleted" }
+  | { type: "embeddingIndexRebuildQueued" };
 
 export type SourceSelection =
   | { type: "all" }
@@ -121,6 +129,14 @@ export function App() {
   const [isSettingsLoading, setIsSettingsLoading] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [embeddingProviders, setEmbeddingProviders] = useState<EmbeddingProvider[]>([]);
+  const [embeddingIndexes, setEmbeddingIndexes] = useState<EmbeddingIndex[]>([]);
+  const [isEmbeddingLoading, setIsEmbeddingLoading] = useState(false);
+  const [isSavingEmbeddingProvider, setIsSavingEmbeddingProvider] = useState(false);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [deletingProviderId, setDeletingProviderId] = useState<string | null>(null);
+  const [rebuildingIndexId, setRebuildingIndexId] = useState<string | null>(null);
+  const [embeddingError, setEmbeddingError] = useState<string | null>(null);
   const [feedFolders, setFeedFolders] = useState<FeedFolder[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
@@ -250,6 +266,14 @@ export function App() {
     setIsSettingsLoading(false);
     setIsSavingSettings(false);
     setSettingsError(null);
+    setEmbeddingProviders([]);
+    setEmbeddingIndexes([]);
+    setIsEmbeddingLoading(false);
+    setIsSavingEmbeddingProvider(false);
+    setTestingProviderId(null);
+    setDeletingProviderId(null);
+    setRebuildingIndexId(null);
+    setEmbeddingError(null);
     setLocale(defaultLocale);
     setOpmlSummary(null);
     setNextArticleCursor(null);
@@ -370,6 +394,32 @@ export function App() {
       cancelled = true;
     };
   }, [appStage.type, applySettings, t.errors.api]);
+
+  const loadEmbeddingSettings = useCallback(async () => {
+    setIsEmbeddingLoading(true);
+    setEmbeddingError(null);
+
+    try {
+      const [providers, indexes] = await Promise.all([
+        dibaoApi.listEmbeddingProviders(),
+        dibaoApi.listEmbeddingIndexes()
+      ]);
+      setEmbeddingProviders(providers);
+      setEmbeddingIndexes(indexes);
+    } catch (error) {
+      setEmbeddingError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsEmbeddingLoading(false);
+    }
+  }, [t.errors.api]);
+
+  useEffect(() => {
+    if (appStage.type !== "reader" || appPage.type !== "settings") {
+      return;
+    }
+
+    void loadEmbeddingSettings();
+  }, [appPage.type, appStage.type, loadEmbeddingSettings]);
 
   const refreshArticleExplanation = useCallback(async (articleId: string) => {
     setIsExplanationLoading(true);
@@ -828,6 +878,78 @@ export function App() {
     }
   }
 
+  async function handleSaveEmbeddingProvider(
+    providerId: string | null,
+    input: CreateEmbeddingProviderInput | UpdateEmbeddingProviderInput
+  ) {
+    setIsSavingEmbeddingProvider(true);
+    setEmbeddingError(null);
+    setNotice(null);
+
+    try {
+      if (providerId) {
+        await dibaoApi.updateEmbeddingProvider(providerId, input);
+      } else {
+        await dibaoApi.createEmbeddingProvider(input as CreateEmbeddingProviderInput);
+      }
+      await loadEmbeddingSettings();
+      setNotice({ type: "embeddingProviderSaved" });
+    } catch (error) {
+      setEmbeddingError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsSavingEmbeddingProvider(false);
+    }
+  }
+
+  async function handleTestEmbeddingProvider(providerId: string) {
+    setTestingProviderId(providerId);
+    setEmbeddingError(null);
+    setNotice(null);
+
+    try {
+      await dibaoApi.testEmbeddingProvider(providerId);
+      await loadEmbeddingSettings();
+      setNotice({ type: "embeddingProviderTested" });
+    } catch (error) {
+      setEmbeddingError(userMessageForError(error, t.errors.api));
+      await loadEmbeddingSettings();
+    } finally {
+      setTestingProviderId(null);
+    }
+  }
+
+  async function handleDeleteEmbeddingProvider(providerId: string) {
+    setDeletingProviderId(providerId);
+    setEmbeddingError(null);
+    setNotice(null);
+
+    try {
+      await dibaoApi.deleteEmbeddingProvider(providerId);
+      await loadEmbeddingSettings();
+      setNotice({ type: "embeddingProviderDeleted" });
+    } catch (error) {
+      setEmbeddingError(userMessageForError(error, t.errors.api));
+    } finally {
+      setDeletingProviderId(null);
+    }
+  }
+
+  async function handleRebuildEmbeddingIndex(indexId: string) {
+    setRebuildingIndexId(indexId);
+    setEmbeddingError(null);
+    setNotice(null);
+
+    try {
+      await dibaoApi.rebuildEmbeddingIndex(indexId);
+      await loadEmbeddingSettings();
+      setNotice({ type: "embeddingIndexRebuildQueued" });
+    } catch (error) {
+      setEmbeddingError(userMessageForError(error, t.errors.api));
+    } finally {
+      setRebuildingIndexId(null);
+    }
+  }
+
   async function handleLoadMoreArticles() {
     if (!nextArticleCursor) {
       return;
@@ -908,7 +1030,10 @@ export function App() {
         ? t.feedManagement.loading
         : t.feedManagement.status(feeds.length, feedFolders.length)
       : appPage.type === "settings"
-        ? settingsError ?? noticeText ?? (isSettingsLoading ? t.settings.loading : t.settings.status)
+        ? settingsError ??
+          embeddingError ??
+          noticeText ??
+          (isSettingsLoading || isEmbeddingLoading ? t.settings.loading : t.settings.status)
       : noticeText ??
         (isArticlesLoading ? t.shell.loadingArticles : t.shell.viewStatus[currentArticleView]);
 
@@ -1026,11 +1151,23 @@ export function App() {
           />
         ) : appPage.type === "settings" ? (
           <SettingsWorkspace
+            embeddingError={embeddingError}
+            embeddingIndexes={embeddingIndexes}
+            embeddingProviders={embeddingProviders}
             error={settingsError}
+            isEmbeddingLoading={isEmbeddingLoading}
             isLoading={isSettingsLoading}
+            isSavingEmbeddingProvider={isSavingEmbeddingProvider}
             isSaving={isSavingSettings}
+            deletingProviderId={deletingProviderId}
+            rebuildingIndexId={rebuildingIndexId}
+            testingProviderId={testingProviderId}
+            onDeleteEmbeddingProvider={handleDeleteEmbeddingProvider}
             onPreviewSettings={handlePreviewSettings}
+            onRebuildEmbeddingIndex={handleRebuildEmbeddingIndex}
             onSaveSettings={handleSaveSettings}
+            onSaveEmbeddingProvider={handleSaveEmbeddingProvider}
+            onTestEmbeddingProvider={handleTestEmbeddingProvider}
             settings={appSettings}
           />
         ) : (
@@ -1321,21 +1458,62 @@ type SettingsDraft = {
   retentionDays: string;
 };
 
+type EmbeddingProviderDraft = {
+  providerId: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  dimension: string;
+  apiKey: string;
+  enabled: boolean;
+  qualityTier: "basic" | "recommended" | "best_quality";
+};
+
+const newEmbeddingProviderId = "__new_provider__";
+
 export function SettingsWorkspace(props: {
+  deletingProviderId: string | null;
+  embeddingError: string | null;
+  embeddingIndexes: EmbeddingIndex[];
+  embeddingProviders: EmbeddingProvider[];
   error: string | null;
+  isEmbeddingLoading: boolean;
   isLoading: boolean;
+  isSavingEmbeddingProvider: boolean;
   isSaving: boolean;
+  rebuildingIndexId: string | null;
+  testingProviderId: string | null;
+  onDeleteEmbeddingProvider: (providerId: string) => Promise<void>;
   onPreviewSettings: (settings: AppSettings) => void;
+  onRebuildEmbeddingIndex: (indexId: string) => Promise<void>;
   onSaveSettings: (input: UpdateSettingsInput) => Promise<void>;
+  onSaveEmbeddingProvider: (
+    providerId: string | null,
+    input: CreateEmbeddingProviderInput | UpdateEmbeddingProviderInput
+  ) => Promise<void>;
+  onTestEmbeddingProvider: (providerId: string) => Promise<void>;
   settings: AppSettings;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<SettingsDraft>(() => draftForSettings(props.settings));
+  const [providerDraft, setProviderDraft] = useState<EmbeddingProviderDraft>(() =>
+    draftForEmbeddingProvider(null)
+  );
   const [localError, setLocalError] = useState<string | null>(null);
+  const [providerLocalError, setProviderLocalError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(draftForSettings(props.settings));
   }, [props.settings]);
+
+  useEffect(() => {
+    const activeProvider =
+      props.embeddingProviders.find((provider) => provider.enabled) ??
+      props.embeddingProviders[0] ??
+      null;
+    setProviderDraft(draftForEmbeddingProvider(activeProvider));
+    setProviderLocalError(null);
+  }, [props.embeddingProviders]);
 
   function applyDraft(nextDraft: SettingsDraft) {
     setDraft(nextDraft);
@@ -1358,6 +1536,30 @@ export function SettingsWorkspace(props: {
 
     await props.onSaveSettings(parsed.input);
   }
+
+  async function handleProviderSubmit() {
+    const parsed = parseEmbeddingProviderDraft(providerDraft, t);
+
+    if (!parsed.ok) {
+      setProviderLocalError(parsed.error);
+      return;
+    }
+
+    setProviderLocalError(null);
+    await props.onSaveEmbeddingProvider(
+      providerDraft.providerId === newEmbeddingProviderId ? null : providerDraft.providerId,
+      parsed.input
+    );
+  }
+
+  const selectedProvider =
+    providerDraft.providerId === newEmbeddingProviderId
+      ? null
+      : props.embeddingProviders.find((provider) => provider.id === providerDraft.providerId) ??
+        null;
+  const selectedProviderIndexes = selectedProvider
+    ? props.embeddingIndexes.filter((index) => index.providerId === selectedProvider.id)
+    : [];
 
   return (
     <form
@@ -1489,8 +1691,241 @@ export function SettingsWorkspace(props: {
             <h3 id="settings-provider-title">{t.settings.sections.provider.title}</h3>
             <p>{t.settings.sections.provider.body}</p>
           </div>
-          <div className={styles.setupStatusBox}>
-            <strong>{t.settings.sections.provider.disabled}</strong>
+          {props.isEmbeddingLoading ? (
+            <p className={styles.settingsNotice}>{t.settings.sections.provider.loading}</p>
+          ) : null}
+          {props.embeddingError ? <p className={styles.errorText}>{props.embeddingError}</p> : null}
+          {providerLocalError ? <p className={styles.errorText}>{providerLocalError}</p> : null}
+
+          <div className={styles.settingsGrid}>
+            <label className={styles.settingsField} htmlFor="settings-provider-select">
+              <span>{t.settings.sections.provider.providerLabel}</span>
+              <select
+                id="settings-provider-select"
+                onChange={(event) => {
+                  const provider =
+                    props.embeddingProviders.find(
+                      (candidate) => candidate.id === event.target.value
+                    ) ?? null;
+                  setProviderDraft(draftForEmbeddingProvider(provider));
+                  setProviderLocalError(null);
+                }}
+                value={providerDraft.providerId}
+              >
+                <option value={newEmbeddingProviderId}>
+                  {t.settings.sections.provider.newProvider}
+                </option>
+                {props.embeddingProviders.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className={styles.settingsField} htmlFor="settings-provider-type">
+              <span>{t.settings.sections.provider.typeLabel}</span>
+              <select id="settings-provider-type" value="openai_compatible" disabled>
+                <option value="openai_compatible">
+                  {t.settings.sections.provider.openaiCompatible}
+                </option>
+              </select>
+            </label>
+
+            <label className={styles.settingsField} htmlFor="settings-provider-name">
+              <span>{t.settings.sections.provider.nameLabel}</span>
+              <input
+                id="settings-provider-name"
+                onChange={(event) =>
+                  setProviderDraft({ ...providerDraft, name: event.target.value })
+                }
+                value={providerDraft.name}
+              />
+            </label>
+
+            <label className={styles.settingsField} htmlFor="settings-provider-base-url">
+              <span>{t.settings.sections.provider.baseUrlLabel}</span>
+              <input
+                id="settings-provider-base-url"
+                inputMode="url"
+                onChange={(event) =>
+                  setProviderDraft({ ...providerDraft, baseUrl: event.target.value })
+                }
+                placeholder={t.settings.sections.provider.baseUrlPlaceholder}
+                type="url"
+                value={providerDraft.baseUrl}
+              />
+            </label>
+
+            <label className={styles.settingsField} htmlFor="settings-provider-model">
+              <span>{t.settings.sections.provider.modelLabel}</span>
+              <input
+                id="settings-provider-model"
+                onChange={(event) =>
+                  setProviderDraft({ ...providerDraft, model: event.target.value })
+                }
+                placeholder={t.settings.sections.provider.modelPlaceholder}
+                value={providerDraft.model}
+              />
+            </label>
+
+            <NumberSettingField
+              id="settings-provider-dimension"
+              label={t.settings.sections.provider.dimensionLabel}
+              max={20000}
+              min={1}
+              onChange={(value) => setProviderDraft({ ...providerDraft, dimension: value })}
+              step={1}
+              value={providerDraft.dimension}
+            />
+
+            <label className={styles.settingsField} htmlFor="settings-provider-api-key">
+              <span>{t.settings.sections.provider.apiKeyLabel}</span>
+              <input
+                autoComplete="off"
+                id="settings-provider-api-key"
+                onChange={(event) =>
+                  setProviderDraft({ ...providerDraft, apiKey: event.target.value })
+                }
+                placeholder={
+                  selectedProvider?.hasApiKey
+                    ? t.settings.sections.provider.apiKeyRetainPlaceholder
+                    : t.settings.sections.provider.apiKeyPlaceholder
+                }
+                type="password"
+                value={providerDraft.apiKey}
+              />
+            </label>
+
+            <label className={styles.settingsField} htmlFor="settings-provider-quality">
+              <span>{t.settings.sections.provider.qualityTierLabel}</span>
+              <select
+                id="settings-provider-quality"
+                onChange={(event) =>
+                  setProviderDraft({
+                    ...providerDraft,
+                    qualityTier: event.target.value as EmbeddingProviderDraft["qualityTier"]
+                  })
+                }
+                value={providerDraft.qualityTier}
+              >
+                <option value="basic">{t.settings.sections.provider.quality.basic}</option>
+                <option value="recommended">
+                  {t.settings.sections.provider.quality.recommended}
+                </option>
+                <option value="best_quality">
+                  {t.settings.sections.provider.quality.bestQuality}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <label className={styles.settingsInlineStatus} htmlFor="settings-provider-enabled">
+            <span>{t.settings.sections.provider.enabledLabel}</span>
+            <input
+              checked={providerDraft.enabled}
+              id="settings-provider-enabled"
+              onChange={(event) =>
+                setProviderDraft({ ...providerDraft, enabled: event.target.checked })
+              }
+              type="checkbox"
+            />
+          </label>
+
+          {selectedProvider ? (
+            <div className={styles.setupStatusBox}>
+              <strong>
+                {selectedProvider.enabled
+                  ? t.settings.sections.provider.enabledStatus
+                  : t.settings.sections.provider.disabledStatus}
+              </strong>
+              <p>
+                {selectedProvider.lastTestStatus === "success"
+                  ? t.settings.sections.provider.lastTestSuccess(
+                      selectedProvider.lastTestAt ?? t.feedManagement.na
+                    )
+                  : selectedProvider.lastTestStatus === "failed"
+                    ? t.settings.sections.provider.lastTestFailed(
+                        selectedProvider.lastTestError ?? t.feedManagement.na
+                      )
+                    : t.settings.sections.provider.lastTestUnknown}
+              </p>
+            </div>
+          ) : null}
+
+          <div className={styles.managementActions}>
+            <button
+              className={styles.primaryButton}
+              disabled={props.isSavingEmbeddingProvider}
+              onClick={() => void handleProviderSubmit()}
+              type="button"
+            >
+              {props.isSavingEmbeddingProvider
+                ? t.settings.sections.provider.saving
+                : t.settings.sections.provider.save}
+            </button>
+            <button
+              className={styles.secondaryButton}
+              disabled={!selectedProvider || props.testingProviderId === selectedProvider.id}
+              onClick={() =>
+                selectedProvider ? void props.onTestEmbeddingProvider(selectedProvider.id) : undefined
+              }
+              type="button"
+            >
+              {selectedProvider && props.testingProviderId === selectedProvider.id
+                ? t.settings.sections.provider.testing
+                : t.settings.sections.provider.test}
+            </button>
+            <button
+              className={styles.dangerButton}
+              disabled={!selectedProvider || props.deletingProviderId === selectedProvider.id}
+              onClick={() =>
+                selectedProvider
+                  ? void props.onDeleteEmbeddingProvider(selectedProvider.id)
+                  : undefined
+              }
+              type="button"
+            >
+              {selectedProvider && props.deletingProviderId === selectedProvider.id
+                ? t.settings.sections.provider.deleting
+                : t.settings.sections.provider.delete}
+            </button>
+          </div>
+
+          <p className={styles.managementHint}>{t.settings.sections.provider.deleteHint}</p>
+
+          <div className={styles.settingsSection} aria-labelledby="settings-indexes-title">
+            <div>
+              <h3 id="settings-indexes-title">{t.settings.sections.provider.indexesTitle}</h3>
+              <p>{t.settings.sections.provider.indexesBody}</p>
+            </div>
+            {selectedProviderIndexes.length === 0 ? (
+              <div className={styles.setupStatusBox}>
+                <strong>{t.settings.sections.provider.noIndexes}</strong>
+              </div>
+            ) : (
+              selectedProviderIndexes.map((index) => (
+                <div className={styles.settingsInlineStatus} key={index.id}>
+                  <span>
+                    {t.settings.sections.provider.indexStatus(
+                      index.model,
+                      index.status,
+                      index.embeddingCount
+                    )}
+                  </span>
+                  <button
+                    className={styles.secondaryButton}
+                    disabled={props.rebuildingIndexId === index.id}
+                    onClick={() => void props.onRebuildEmbeddingIndex(index.id)}
+                    type="button"
+                  >
+                    {props.rebuildingIndexId === index.id
+                      ? t.settings.sections.provider.rebuilding
+                      : t.settings.sections.provider.rebuild}
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </section>
       </div>
@@ -2075,6 +2510,19 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
   };
 }
 
+function draftForEmbeddingProvider(provider: EmbeddingProvider | null): EmbeddingProviderDraft {
+  return {
+    providerId: provider?.id ?? newEmbeddingProviderId,
+    name: provider?.name ?? "OpenAI Compatible",
+    baseUrl: provider?.baseUrl ?? "",
+    model: provider?.model ?? "text-embedding-3-small",
+    dimension: String(provider?.dimension ?? 1536),
+    apiKey: "",
+    enabled: provider?.enabled ?? false,
+    qualityTier: provider?.qualityTier ?? "recommended"
+  };
+}
+
 function parseSettingsDraft(
   draft: SettingsDraft,
   current: AppSettings,
@@ -2141,6 +2589,47 @@ function parseSettingsDraft(
       retention: {
         retentionDays
       }
+    }
+  };
+}
+
+function parseEmbeddingProviderDraft(
+  draft: EmbeddingProviderDraft,
+  t: Dictionary
+):
+  | { ok: true; input: CreateEmbeddingProviderInput | UpdateEmbeddingProviderInput }
+  | { ok: false; error: string } {
+  const name = draft.name.trim();
+  if (!name) {
+    return { ok: false, error: t.settings.sections.provider.errors.nameRequired };
+  }
+
+  const baseUrl = draft.baseUrl.trim();
+  if (!baseUrl) {
+    return { ok: false, error: t.settings.sections.provider.errors.baseUrlRequired };
+  }
+
+  const model = draft.model.trim();
+  if (!model) {
+    return { ok: false, error: t.settings.sections.provider.errors.modelRequired };
+  }
+
+  const dimension = parseNumberDraft(draft.dimension, 1, 20000, true);
+  if (dimension === null) {
+    return { ok: false, error: t.settings.sections.provider.errors.dimension };
+  }
+
+  return {
+    ok: true,
+    input: {
+      type: "openai_compatible",
+      name,
+      baseUrl,
+      model,
+      dimension,
+      enabled: draft.enabled,
+      qualityTier: draft.qualityTier,
+      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {})
     }
   };
 }
@@ -2287,6 +2776,14 @@ function noticeTextFor(notice: Notice, t: Dictionary): string {
       return t.notices.opmlExported;
     case "settingsSaved":
       return t.settings.notices.saved;
+    case "embeddingProviderSaved":
+      return t.settings.sections.provider.notices.saved;
+    case "embeddingProviderTested":
+      return t.settings.sections.provider.notices.tested;
+    case "embeddingProviderDeleted":
+      return t.settings.sections.provider.notices.deleted;
+    case "embeddingIndexRebuildQueued":
+      return t.settings.sections.provider.notices.rebuildQueued;
   }
 }
 

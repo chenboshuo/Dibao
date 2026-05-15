@@ -20,6 +20,12 @@ import {
   RETENTION_ARTICLE_DAYS_SETTING_KEY
 } from "./article-retention-service.js";
 import {
+  EmbeddingJobService,
+  EMBEDDING_GENERATE_JOB_TYPE
+} from "./embedding-job-service.js";
+import { EmbeddingProviderService } from "./embedding-provider-service.js";
+import type { EmbeddingProviderAdapter } from "./embedding/types.js";
+import {
   FeedRefreshCoordinator,
   FeedRefreshJobService,
   FeedRefreshScheduler
@@ -442,6 +448,135 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("fails invalid embedding payloads without retrying", async () => {
+    const fixture = createEmbeddingPipelineFixture();
+    const { db, jobs, embeddingJobs } = fixture;
+    let adapterCalls = 0;
+
+    try {
+      jobs.enqueue({
+        id: "job_invalid_embedding",
+        type: EMBEDDING_GENERATE_JOB_TYPE,
+        payloadJson: JSON.stringify({ embeddingIndexId: "index_openai", articleIds: [] }),
+        maxAttempts: 3,
+        runAfter: 1000,
+        now: 1000
+      });
+      fixture.adapter.embedBatch = async () => {
+        adapterCalls += 1;
+        return [];
+      };
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          embedding_generate: (job) => embeddingJobs.handleEmbeddingGenerateJob(job)
+        },
+        now: () => 2000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({
+        id: "job_invalid_embedding"
+      });
+      expect(adapterCalls).toBe(0);
+      expect(jobs.findById("job_invalid_embedding")).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        error: "Invalid embedding_generate job payload"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("filters retention-deleted embedding payload articles before provider calls", async () => {
+    const fixture = createEmbeddingPipelineFixture();
+    const { db, articles, jobs, embeddingJobs } = fixture;
+
+    try {
+      const disabledFeeds = new SqliteFeedRepository(db);
+      disabledFeeds.upsert({
+        id: "feed_embedding_disabled",
+        title: "Disabled Embedding Feed",
+        feedUrl: "https://example.com/disabled-embedding.xml",
+        enabled: false,
+        now: 1000
+      });
+      insertEmbeddingArticleFixture(db, articles, "article_active", "Active embedding article");
+      insertEmbeddingArticleFixture(db, articles, "article_deleted", "Deleted embedding article");
+      insertEmbeddingArticleFixture(
+        db,
+        articles,
+        "article_disabled_feed",
+        "Disabled feed embedding article",
+        "feed_embedding_disabled"
+      );
+      db.prepare("update articles set status = 'deleted', deleted_at = ? where id = ?").run(
+        1500,
+        "article_deleted"
+      );
+      jobs.enqueue({
+        id: "job_embedding_batch",
+        type: EMBEDDING_GENERATE_JOB_TYPE,
+        payloadJson: JSON.stringify({
+          embeddingIndexId: "index_openai",
+          articleIds: ["article_active", "article_deleted", "article_disabled_feed"]
+        }),
+        maxAttempts: 1,
+        runAfter: 1000,
+        now: 1000
+      });
+      const seenIds: string[] = [];
+      fixture.adapter.embedBatch = async ({ items }) => {
+        seenIds.push(...items.map((input) => input.id));
+        return items.map((input) => ({
+          id: input.id,
+          vector: [0.1, 0.2, 0.3]
+        }));
+      };
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          embedding_generate: (job) => embeddingJobs.handleEmbeddingGenerateJob(job)
+        },
+        now: () => 2000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({
+        id: "job_embedding_batch"
+      });
+      expect(seenIds).toEqual(["article_active"]);
+      expect(countRows(db, "article_embeddings", "article_active")).toBe(1);
+      expect(countRows(db, "article_embeddings", "article_deleted")).toBe(0);
+      expect(countRows(db, "article_embeddings", "article_disabled_feed")).toBe(0);
+      expect(countRows(db, "article_vector_rows", "article_active")).toBe(1);
+      expect(countRows(db, "article_vector_rows", "article_deleted")).toBe(0);
+      expect(countRows(db, "article_vector_rows", "article_disabled_feed")).toBe(0);
+      expect(jobs.findById("job_embedding_batch")).toMatchObject({
+        status: "succeeded"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not let old succeeded embedding jobs block future enqueue", () => {
+    const fixture = createEmbeddingPipelineFixture();
+    const { db, articles, jobs, embeddingJobs } = fixture;
+
+    try {
+      insertEmbeddingArticleFixture(db, articles, "article_requeue", "Requeue embedding article");
+      const firstBatch = embeddingJobs.enqueueArticlesForActiveIndex(["article_requeue"]);
+      expect(firstBatch).toHaveLength(1);
+      jobs.markSucceeded(firstBatch[0].id, 2000);
+
+      const secondBatch = embeddingJobs.enqueueArticlesForActiveIndex(["article_requeue"]);
+      expect(secondBatch).toHaveLength(1);
+      expect(secondBatch[0].id).not.toBe(firstBatch[0].id);
+    } finally {
+      db.close();
+    }
+  });
+
   it("scheduler tick enqueues refresh jobs and wakes the runner without using a real interval", async () => {
     let drained = false;
     const scheduler = new FeedRefreshScheduler({
@@ -500,6 +635,125 @@ describe("job runner foundation", () => {
 
 function createEmptyDatabase(): DibaoDatabase {
   return openDatabase(tempDatabasePath(), { migrate: true });
+}
+
+function createEmbeddingPipelineFixture() {
+  const db = createEmptyDatabase();
+  const feeds = new SqliteFeedRepository(db);
+  const articles = new SqliteArticleRepository(db);
+  const embeddings = new SqliteEmbeddingRepository(db);
+  const jobs = new SqliteJobRepository(db);
+  const vectorStore = new SqliteVecVectorStore(db);
+  const adapter = embeddingAdapterFixture();
+
+  feeds.upsert({
+    id: "feed_embedding",
+    title: "Embedding Feed",
+    feedUrl: "https://example.com/embedding.xml",
+    enabled: true,
+    now: 1000
+  });
+  embeddings.upsertProvider({
+    id: "provider_openai",
+    type: "openai_compatible",
+    name: "OpenAI Compatible",
+    baseUrl: "https://api.example.com/v1",
+    model: "fixture-embedding",
+    dimension: 3,
+    enabled: true,
+    qualityTier: "recommended",
+    now: 1000
+  });
+  embeddings.createIndex({
+    id: "index_openai",
+    providerId: "provider_openai",
+    model: "fixture-embedding",
+    dimension: 3,
+    now: 1000
+  });
+
+  const providerService = new EmbeddingProviderService({
+    embeddings,
+    vectorStore,
+    adapter,
+    now: () => 1000
+  });
+  const embeddingJobs = new EmbeddingJobService({
+    articles,
+    embeddings,
+    jobs,
+    providerService,
+    adapter,
+    vectorStore,
+    jobIdFactory: () => `job_embedding_${randomFixtureId()}`,
+    now: () => 1000
+  });
+
+  return {
+    db,
+    articles,
+    adapter,
+    embeddingJobs,
+    jobs
+  };
+}
+
+function insertEmbeddingArticleFixture(
+  db: DibaoDatabase,
+  articles: SqliteArticleRepository,
+  articleId: string,
+  title: string,
+  feedId = "feed_embedding"
+): void {
+  articles.upsert({
+    id: articleId,
+    feedId,
+    url: `https://example.com/${articleId}`,
+    canonicalUrl: `https://example.com/${articleId}`,
+    title,
+    summary: `${title} summary`,
+    publishedAt: 1000,
+    discoveredAt: 1000,
+    dedupeKey: articleId,
+    now: 1000
+  });
+  articles.upsertContent({
+    articleId,
+    contentHtml: null,
+    contentText: `${title} full text`,
+    extractionStatus: "success",
+    extractedAt: 1000,
+    now: 1000
+  });
+  db.prepare("update articles set content_hash = ? where id = ?").run(
+    `hash_${articleId}`,
+    articleId
+  );
+}
+
+function embeddingAdapterFixture(): EmbeddingProviderAdapter {
+  return {
+    async embedBatch({ items }) {
+      return items.map((input) => ({
+        id: input.id,
+        vector: [0.1, 0.2, 0.3]
+      }));
+    },
+    async test() {
+      return {
+        status: "success",
+        dimension: 3,
+        latencyMs: 1
+      };
+    }
+  };
+}
+
+let fixtureId = 0;
+
+function randomFixtureId(): string {
+  fixtureId += 1;
+  return String(fixtureId);
 }
 
 function tempDatabasePath(): string {

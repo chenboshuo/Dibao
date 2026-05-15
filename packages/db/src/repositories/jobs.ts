@@ -23,6 +23,7 @@ type JobDbRow = {
 
 export interface JobRepository {
   claimNextDue(now: number): JobRow | null;
+  countByTypeAndStatus(type: JobType, status: JobStatus): number;
   enqueue(input: EnqueueJobInput): JobRow;
   findById(id: string): JobRow | null;
   listOpenByType(type: JobType): JobRow[];
@@ -34,6 +35,21 @@ export interface JobRepository {
 
 export class SqliteJobRepository implements JobRepository {
   constructor(private readonly db: DibaoDatabase) {}
+
+  countByTypeAndStatus(type: JobType, status: JobStatus): number {
+    const row = this.db
+      .prepare(
+        `
+          select count(*) as count
+          from jobs
+          where type = ?
+            and status = ?
+        `
+      )
+      .get(type, status) as { count: number } | undefined;
+
+    return row?.count ?? 0;
+  }
 
   claimNextDue(now: number): JobRow | null {
     return this.db.transaction(() => {

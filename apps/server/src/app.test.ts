@@ -373,6 +373,358 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("creates, tests, and lists OpenAI-compatible embedding providers", async () => {
+    const db = createEmptyDatabase();
+    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
+      [];
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => 1000,
+      embeddingFetcher: embeddingFetcherFixture(embeddingCalls, 3)
+    });
+
+    try {
+      const created = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "OpenAI Compatible",
+        baseUrl: "https://api.example.com/v1/",
+        model: "fixture-embedding",
+        dimension: 3,
+        apiKey: "secret",
+        enabled: true,
+        qualityTier: "recommended"
+      });
+      expect(created.statusCode, created.body).toBe(200);
+      const providerId = (created.json() as { data: { id: string } }).data.id;
+      expect(providerId).toMatch(/^provider_/);
+
+      const providers = await app.inject({
+        method: "GET",
+        url: "/api/embedding/providers"
+      });
+      expect(providers.statusCode, providers.body).toBe(200);
+      expect(providers.json()).toMatchObject({
+        data: [
+          {
+            id: providerId,
+            type: "openai_compatible",
+            name: "OpenAI Compatible",
+            baseUrl: "https://api.example.com/v1",
+            model: "fixture-embedding",
+            dimension: 3,
+            enabled: true,
+            qualityTier: "recommended",
+            hasApiKey: true
+          }
+        ]
+      });
+      expect(providers.body).not.toContain("secret");
+
+      const indexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      expect(indexes.statusCode, indexes.body).toBe(200);
+      expect(indexes.json()).toMatchObject({
+        data: [
+          {
+            providerId,
+            model: "fixture-embedding",
+            dimension: 3,
+            distanceMetric: "cosine",
+            status: "active",
+            embeddingCount: 0
+          }
+        ]
+      });
+
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/setup/status"
+      });
+      expect(status.json()).toMatchObject({
+        data: {
+          hasEmbeddingProvider: true
+        }
+      });
+
+      const test = await app.inject({
+        method: "POST",
+        url: `/api/embedding/providers/${providerId}/test`
+      });
+      expect(test.statusCode, test.body).toBe(200);
+      expect(test.json()).toMatchObject({
+        data: {
+          status: "success",
+          dimension: 3,
+          latencyMs: expect.any(Number)
+        }
+      });
+      expect(embeddingCalls).toEqual([
+        {
+          url: "https://api.example.com/v1/embeddings",
+          authorization: "Bearer secret",
+          inputCount: 1
+        }
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("rejects unsupported embedding providers and invalid OpenAI-compatible base URLs", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const unsupported = await postJson(app, "/api/embedding/providers", {
+        type: "ollama",
+        name: "Ollama",
+        model: "nomic-embed-text",
+        dimension: 768,
+        enabled: true
+      });
+      expect(unsupported.statusCode, unsupported.body).toBe(400);
+      expect(unsupported.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR"
+        }
+      });
+
+      const invalidBaseUrl = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Bad Endpoint",
+        baseUrl: "https://api.example.com/v1/embeddings",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: true
+      });
+      expect(invalidBaseUrl.statusCode, invalidBaseUrl.body).toBe(400);
+      expect(invalidBaseUrl.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "baseUrl"
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("records provider test failures without storing errors on indexes", async () => {
+    const db = createEmptyDatabase();
+    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
+      [];
+    const app = buildServer({
+      db,
+      logger: false,
+      embeddingFetcher: embeddingFetcherFixture(embeddingCalls, 2)
+    });
+
+    try {
+      const created = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "OpenAI Compatible",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: true
+      });
+      const providerId = (created.json() as { data: { id: string } }).data.id;
+
+      const failed = await app.inject({
+        method: "POST",
+        url: `/api/embedding/providers/${providerId}/test`
+      });
+      expect(failed.statusCode, failed.body).toBe(502);
+      expect(failed.json()).toMatchObject({
+        error: {
+          code: "PROVIDER_ERROR"
+        }
+      });
+
+      const providers = await app.inject({
+        method: "GET",
+        url: "/api/embedding/providers"
+      });
+      expect(providers.json()).toMatchObject({
+        data: [
+          {
+            id: providerId,
+            lastTestStatus: "failed",
+            lastTestError: expect.stringContaining("dimension 2")
+          }
+        ]
+      });
+
+      const indexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      expect(indexes.body).not.toContain("lastTestError");
+      expect(indexes.body).not.toContain("error");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("prevents deleting embedding providers that already have indexes", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 1000 });
+
+    try {
+      const enabled = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Enabled Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: true
+      });
+      const enabledProviderId = (enabled.json() as { data: { id: string } }).data.id;
+
+      const conflict = await app.inject({
+        method: "DELETE",
+        url: `/api/embedding/providers/${enabledProviderId}`
+      });
+      expect(conflict.statusCode, conflict.body).toBe(409);
+      expect(conflict.json()).toMatchObject({
+        error: {
+          code: "CONFLICT"
+        }
+      });
+
+      const disabled = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Disabled Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: false
+      });
+      const disabledProviderId = (disabled.json() as { data: { id: string } }).data.id;
+
+      const deleted = await app.inject({
+        method: "DELETE",
+        url: `/api/embedding/providers/${disabledProviderId}`
+      });
+      expect(deleted.statusCode, deleted.body).toBe(200);
+      expect(deleted.json()).toEqual({
+        data: {
+          ok: true
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("enables embedding providers transactionally by disabling the previous active provider", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 1000 });
+
+    try {
+      const first = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "First Provider",
+        baseUrl: "https://api.first.example/v1",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: true
+      });
+      const firstProviderId = (first.json() as { data: { id: string } }).data.id;
+
+      const second = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Second Provider",
+        baseUrl: "https://api.second.example/v1",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: true
+      });
+      const secondProviderId = (second.json() as { data: { id: string } }).data.id;
+
+      const providers = await app.inject({
+        method: "GET",
+        url: "/api/embedding/providers"
+      });
+      expect(providers.statusCode, providers.body).toBe(200);
+      expect(providers.json()).toMatchObject({
+        data: [
+          {
+            id: secondProviderId,
+            enabled: true
+          },
+          {
+            id: firstProviderId,
+            enabled: false
+          }
+        ]
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("queues embedding jobs for newly refreshed articles without calling the provider inline", async () => {
+    const db = createEmptyDatabase();
+    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
+      [];
+    const app = buildServer({
+      db,
+      logger: false,
+      feedFetcher: fixtureFetcher({ "https://example.com/feed.xml": fixtureRss }),
+      embeddingFetcher: embeddingFetcherFixture(embeddingCalls, 3)
+    });
+
+    try {
+      await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "OpenAI Compatible",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture-embedding",
+        dimension: 3,
+        enabled: true
+      });
+
+      const feed = await postJson(app, "/api/feeds", {
+        feedUrl: "https://example.com/feed.xml"
+      });
+      expect(feed.statusCode, feed.body).toBe(200);
+
+      const queued = db
+        .prepare(
+          `
+            select payload_json as payloadJson
+            from jobs
+            where type = 'embedding_generate'
+              and status = 'queued'
+          `
+        )
+        .all() as Array<{ payloadJson: string }>;
+      expect(queued).toHaveLength(1);
+      const payload = JSON.parse(queued[0].payloadJson) as {
+        embeddingIndexId: string;
+        articleIds: string[];
+      };
+      expect(payload.embeddingIndexId).toMatch(/^index_/);
+      expect(payload.articleIds).toHaveLength(2);
+      expect(payload.articleIds.length).toBeLessThanOrEqual(16);
+      expect(embeddingCalls).toEqual([]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("protects, reads, and strictly updates app settings", async () => {
     const db = createEmptyDatabase();
     const app = buildRealServer({
@@ -2197,6 +2549,37 @@ function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
       return fixtures[url] ?? "";
     }
   });
+}
+
+function embeddingFetcherFixture(
+  calls: Array<{ url: string; authorization: string | null; inputCount: number }>,
+  dimension: number
+): typeof fetch {
+  return async (input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { input?: unknown };
+    const values = Array.isArray(body.input) ? body.input : [body.input];
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url: String(input),
+      authorization: headers.get("authorization"),
+      inputCount: values.length
+    });
+
+    return new Response(
+      JSON.stringify({
+        data: values.map((_, index) => ({
+          index,
+          embedding: Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
+        }))
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  };
 }
 
 function sequenceFetcher(url: string, responses: string[]): FeedFetcher {

@@ -191,8 +191,60 @@ export const zhCN = {
       },
       provider: {
         title: "智能能力",
-        body: "当前使用基础排序。Embedding provider 将在后续版本配置，本页不会收集连接参数。",
-        disabled: "暂未配置"
+        body: "配置 OpenAI-compatible embedding endpoint。未配置或停用时，系统继续使用基础排序。",
+        loading: "正在加载智能能力设置",
+        providerLabel: "Provider",
+        newProvider: "新建 OpenAI-compatible provider",
+        typeLabel: "类型",
+        openaiCompatible: "OpenAI-compatible",
+        nameLabel: "名称",
+        baseUrlLabel: "Base URL",
+        baseUrlPlaceholder: "https://api.example.com/v1",
+        modelLabel: "模型",
+        modelPlaceholder: "text-embedding-3-small",
+        dimensionLabel: "维度",
+        apiKeyLabel: "API Key",
+        apiKeyPlaceholder: "可选，按 endpoint 要求填写",
+        apiKeyRetainPlaceholder: "留空则保留已保存密钥",
+        qualityTierLabel: "质量档位",
+        quality: {
+          basic: "基础",
+          recommended: "推荐",
+          bestQuality: "高质量"
+        },
+        enabledLabel: "启用 provider",
+        enabledStatus: "已启用",
+        disabledStatus: "已停用",
+        disabled: "暂未配置",
+        lastTestSuccess: (value: string) => `连接测试成功：${value}`,
+        lastTestFailed: (value: string) => `连接测试失败：${value}`,
+        lastTestUnknown: "尚未测试连接。",
+        save: "保存 provider",
+        saving: "保存中",
+        test: "测试连接",
+        testing: "测试中",
+        delete: "删除",
+        deleting: "删除中",
+        deleteHint: "已有 embedding index 的 provider 不能删除；需要停用时请关闭启用状态。",
+        indexesTitle: "Embedding indexes",
+        indexesBody: "当前 index 只记录状态和队列计数；具体错误会记录在后台 jobs 或 provider 最近测试错误中。",
+        noIndexes: "保存并启用 provider 后会创建 active index。",
+        indexStatus: (model: string, status: string, count: number) =>
+          `${model} · ${status} · ${count} 条 embedding`,
+        rebuild: "重建",
+        rebuilding: "已加入",
+        notices: {
+          saved: "Embedding provider 已保存。",
+          tested: "连接测试成功。",
+          deleted: "Embedding provider 已删除。",
+          rebuildQueued: "Embedding index 重建已加入队列。"
+        },
+        errors: {
+          nameRequired: "请输入 provider 名称。",
+          baseUrlRequired: "请输入 Base URL。",
+          modelRequired: "请输入模型名称。",
+          dimension: "维度必须是 1 到 20000 的整数。"
+        }
       }
     },
     actions: {
@@ -520,8 +572,60 @@ export const enUS = {
       },
       provider: {
         title: "Intelligence",
-        body: "Baseline ranking is active. Embedding providers will be configured later, and this page does not collect connection parameters.",
-        disabled: "Not configured"
+        body: "Configure an OpenAI-compatible embedding endpoint. Without an enabled provider, Dibao keeps using baseline ranking.",
+        loading: "Loading intelligence settings",
+        providerLabel: "Provider",
+        newProvider: "New OpenAI-compatible provider",
+        typeLabel: "Type",
+        openaiCompatible: "OpenAI-compatible",
+        nameLabel: "Name",
+        baseUrlLabel: "Base URL",
+        baseUrlPlaceholder: "https://api.example.com/v1",
+        modelLabel: "Model",
+        modelPlaceholder: "text-embedding-3-small",
+        dimensionLabel: "Dimension",
+        apiKeyLabel: "API Key",
+        apiKeyPlaceholder: "Optional, depending on the endpoint",
+        apiKeyRetainPlaceholder: "Leave blank to keep the saved key",
+        qualityTierLabel: "Quality tier",
+        quality: {
+          basic: "Basic",
+          recommended: "Recommended",
+          bestQuality: "Best quality"
+        },
+        enabledLabel: "Enable provider",
+        enabledStatus: "Enabled",
+        disabledStatus: "Disabled",
+        disabled: "Not configured",
+        lastTestSuccess: (value: string) => `Connection test succeeded: ${value}`,
+        lastTestFailed: (value: string) => `Connection test failed: ${value}`,
+        lastTestUnknown: "Connection has not been tested.",
+        save: "Save provider",
+        saving: "Saving",
+        test: "Test connection",
+        testing: "Testing",
+        delete: "Delete",
+        deleting: "Deleting",
+        deleteHint: "Providers with embedding indexes cannot be deleted. Disable the provider instead.",
+        indexesTitle: "Embedding indexes",
+        indexesBody: "Indexes only store status and queue counts. Detailed errors live in jobs or the provider test state.",
+        noIndexes: "Saving and enabling a provider creates an active index.",
+        indexStatus: (model: string, status: string, count: number) =>
+          `${model} · ${status} · ${count} ${count === 1 ? "embedding" : "embeddings"}`,
+        rebuild: "Rebuild",
+        rebuilding: "Queued",
+        notices: {
+          saved: "Embedding provider saved.",
+          tested: "Connection test succeeded.",
+          deleted: "Embedding provider deleted.",
+          rebuildQueued: "Embedding index rebuild queued."
+        },
+        errors: {
+          nameRequired: "Enter a provider name.",
+          baseUrlRequired: "Enter the Base URL.",
+          modelRequired: "Enter a model name.",
+          dimension: "Dimension must be an integer from 1 to 20000."
+        }
       }
     },
     actions: {

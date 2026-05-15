@@ -1,6 +1,7 @@
 import { SqliteArticleFtsIndex } from "../fts/article-fts.js";
 import type {
   ArticleDetailRow,
+  ArticleEmbeddingCandidateRow,
   ArticleListInput,
   ArticleListItemRow,
   ArticleListResult,
@@ -55,6 +56,11 @@ export interface ArticleRepository {
   cleanupForRetention(articleIds: string[], now: number): ArticleRetentionCleanupResult;
   findById(id: string): ArticleRow | null;
   findDetailById(id: string): ArticleDetailRow | null;
+  listEmbeddingCandidates(input: {
+    embeddingIndexId: string;
+    articleIds?: string[];
+    limit?: number;
+  }): ArticleEmbeddingCandidateRow[];
   listRetentionCandidates(input: { cutoff: number; limit?: number }): ArticleRetentionCandidateRow[];
   list(input?: ArticleListInput): ArticleListResult;
   upsert(input: UpsertArticleInput): ArticleRow;
@@ -151,6 +157,57 @@ export class SqliteArticleRepository implements ArticleRepository {
       .get(BASE_RANK_CONTEXT, id) as ArticleDetailDbRow | undefined;
 
     return row ? mapArticleDetail(row) : null;
+  }
+
+  listEmbeddingCandidates(input: {
+    embeddingIndexId: string;
+    articleIds?: string[];
+    limit?: number;
+  }): ArticleEmbeddingCandidateRow[] {
+    const limit = normalizeLimit(input.limit);
+    const params: unknown[] = [input.embeddingIndexId];
+    const articleFilter =
+      input.articleIds && input.articleIds.length > 0
+        ? `and a.id in (${input.articleIds.map(() => "?").join(", ")})`
+        : "";
+
+    if (input.articleIds && input.articleIds.length > 0) {
+      params.push(...input.articleIds);
+    }
+    params.push(limit);
+
+    return (
+      this.db
+        .prepare(
+          `
+            select
+              a.id as articleId,
+              a.title,
+              a.summary,
+              ac.content_text as contentText,
+              coalesce(a.content_hash, a.id || ':' || a.updated_at) as contentHash
+            from articles a
+            join feeds f on f.id = a.feed_id
+            left join article_contents ac on ac.article_id = a.id
+            left join article_embeddings ae
+              on ae.article_id = a.id
+             and ae.embedding_index_id = ?
+            where a.deleted_at is null
+              and a.status != 'deleted'
+              and f.deleted_at is null
+              and f.enabled = 1
+              and trim(coalesce(a.title, '') || ' ' || coalesce(a.summary, '') || ' ' || coalesce(ac.content_text, '')) != ''
+              and (
+                ae.article_id is null
+                or ae.content_hash != coalesce(a.content_hash, a.id || ':' || a.updated_at)
+              )
+              ${articleFilter}
+            order by a.discovered_at desc, a.id
+            limit ?
+          `
+        )
+        .all(...params) as ArticleEmbeddingCandidateRow[]
+    );
   }
 
   listRetentionCandidates(input: {

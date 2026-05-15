@@ -176,6 +176,72 @@ export type UpdateSettingsResponse = {
   settings: AppSettings;
 };
 
+export type EmbeddingProviderType =
+  | "embedded_local"
+  | "ollama"
+  | "openai_compatible"
+  | "custom_http";
+
+export type EmbeddingProviderQualityTier = "basic" | "recommended" | "best_quality";
+
+export type EmbeddingProvider = {
+  id: string;
+  type: EmbeddingProviderType;
+  name: string;
+  baseUrl: string | null;
+  model: string;
+  dimension: number;
+  enabled: boolean;
+  qualityTier: EmbeddingProviderQualityTier;
+  hasApiKey: boolean;
+  lastTestStatus: "success" | "failed" | null;
+  lastTestError: string | null;
+  lastTestAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateEmbeddingProviderInput = {
+  type: "openai_compatible";
+  name: string;
+  baseUrl: string;
+  model: string;
+  dimension: number;
+  apiKey?: string | null;
+  enabled: boolean;
+  qualityTier?: EmbeddingProviderQualityTier;
+};
+
+export type UpdateEmbeddingProviderInput = Partial<CreateEmbeddingProviderInput>;
+
+export type CreateEmbeddingProviderResponse = {
+  id: string;
+};
+
+export type TestEmbeddingProviderResponse = {
+  status: "success";
+  dimension: number;
+  latencyMs: number;
+};
+
+export type EmbeddingIndex = {
+  id: string;
+  providerId: string;
+  model: string;
+  dimension: number;
+  distanceMetric: "cosine";
+  status: "active" | "building" | "disabled" | "failed" | "retired";
+  embeddingCount: number;
+  pendingJobs: number;
+  failedJobs: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RebuildEmbeddingIndexResponse = {
+  jobId: string;
+};
+
 export type AuthOkResponse = {
   ok: true;
 };
@@ -358,6 +424,73 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
           method: "PATCH",
           body: JSON.stringify(input)
         })
+      ).data;
+    },
+
+    async listEmbeddingProviders(): Promise<EmbeddingProvider[]> {
+      return (await request<EmbeddingProvider[]>("/api/embedding/providers")).data;
+    },
+
+    async createEmbeddingProvider(
+      input: CreateEmbeddingProviderInput
+    ): Promise<CreateEmbeddingProviderResponse> {
+      return (
+        await request<CreateEmbeddingProviderResponse>("/api/embedding/providers", {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+      ).data;
+    },
+
+    async updateEmbeddingProvider(
+      providerId: string,
+      input: UpdateEmbeddingProviderInput
+    ): Promise<EmbeddingProvider> {
+      return (
+        await request<EmbeddingProvider>(
+          `/api/embedding/providers/${encodeURIComponent(providerId)}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
+    },
+
+    async deleteEmbeddingProvider(providerId: string): Promise<DeleteResponse> {
+      return (
+        await request<DeleteResponse>(
+          `/api/embedding/providers/${encodeURIComponent(providerId)}`,
+          {
+            method: "DELETE"
+          }
+        )
+      ).data;
+    },
+
+    async testEmbeddingProvider(providerId: string): Promise<TestEmbeddingProviderResponse> {
+      return (
+        await request<TestEmbeddingProviderResponse>(
+          `/api/embedding/providers/${encodeURIComponent(providerId)}/test`,
+          {
+            method: "POST"
+          }
+        )
+      ).data;
+    },
+
+    async listEmbeddingIndexes(): Promise<EmbeddingIndex[]> {
+      return (await request<EmbeddingIndex[]>("/api/embedding/indexes")).data;
+    },
+
+    async rebuildEmbeddingIndex(indexId: string): Promise<RebuildEmbeddingIndexResponse> {
+      return (
+        await request<RebuildEmbeddingIndexResponse>(
+          `/api/embedding/indexes/${encodeURIComponent(indexId)}/rebuild`,
+          {
+            method: "POST"
+          }
+        )
       ).data;
     },
 

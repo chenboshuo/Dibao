@@ -9,6 +9,7 @@ export const DEFAULT_FEED_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 export type FeedRefreshCoordinatorOptions = {
   refreshService: FeedRefreshService;
+  afterRefresh?: (result: FeedRefreshResult) => void | Promise<void>;
 };
 
 export class FeedRefreshCoordinator {
@@ -24,6 +25,10 @@ export class FeedRefreshCoordinator {
 
     const refresh = this.options.refreshService
       .refreshFeed(feedId)
+      .then(async (result) => {
+        await this.options.afterRefresh?.(result);
+        return result;
+      })
       .finally(() => this.inFlight.delete(feedId));
     this.inFlight.set(feedId, refresh);
     return refresh;

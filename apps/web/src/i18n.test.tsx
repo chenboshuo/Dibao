@@ -306,15 +306,27 @@ describe("web i18n", () => {
     expect(html).not.toContain("Embedding");
   });
 
-  it("renders settings page controls and provider placeholder without real provider fields", () => {
+  it("renders settings page controls and OpenAI-compatible provider fields", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <SettingsWorkspace
+          deletingProviderId={null}
+          embeddingError={null}
+          embeddingIndexes={[]}
+          embeddingProviders={[]}
           error={null}
+          isEmbeddingLoading={false}
           isLoading={false}
+          isSavingEmbeddingProvider={false}
           isSaving={false}
+          rebuildingIndexId={null}
+          testingProviderId={null}
+          onDeleteEmbeddingProvider={() => Promise.resolve()}
           onPreviewSettings={() => undefined}
+          onRebuildEmbeddingIndex={() => Promise.resolve()}
+          onSaveEmbeddingProvider={() => Promise.resolve()}
           onSaveSettings={() => Promise.resolve()}
+          onTestEmbeddingProvider={() => Promise.resolve()}
           settings={defaultAppSettings}
         />
       </DibaoI18nProvider>
@@ -329,11 +341,12 @@ describe("web i18n", () => {
     expect(html).toContain("保留天数");
     expect(html).toContain("retention.retentionDays");
     expect(html).toContain("智能能力");
-    expect(html).not.toContain("API Key");
-    expect(html).not.toContain("Base URL");
-    expect(html).not.toContain("Model");
-    expect(html).not.toContain("Test connection");
-    expect(html).not.toContain("测试连接");
+    expect(html).toContain("OpenAI-compatible");
+    expect(html).toContain("API Key");
+    expect(html).toContain("Base URL");
+    expect(html).toContain("模型");
+    expect(html).toContain("测试连接");
+    expect(html).not.toContain("Ollama");
   });
 
   it("builds reader CSS variables from persisted reader settings", () => {

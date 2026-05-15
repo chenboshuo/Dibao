@@ -458,6 +458,10 @@ openai_compatible
 custom_http
 ```
 
+当前实现只提供 `openai_compatible` adapter。`ollama`、`custom_http`、
+`embedded_local` 是 schema 预留类型；如果请求启用这些类型，API 层返回
+`VALIDATION_ERROR`。
+
 `quality_tier` 可选值：
 
 ```text
@@ -476,7 +480,9 @@ idx_embedding_providers_type(type)
 约束：
 
 - 同一时间只能有一个 active provider 用于新 embedding。
-- 可通过应用层保证，也可用 partial unique index 实现。
+- provider 启用操作必须事务化：先停用其他 provider，再启用当前 provider。
+- 当前 schema 通过 `unique_embedding_providers_active where enabled = 1` 固定该约束。
+- `api_key_encrypted` 当前 MVP 使用 `plain:v1` 编码保存到本地 SQLite，不是安全加密；部署时需保护数据库文件。
 
 ### embedding_indexes
 
@@ -515,6 +521,8 @@ idx_embedding_indexes_status(status)
 
 - 不同模型生成的向量不能混用。
 - 换模型时创建新的 `embedding_index`。
+- 本表没有 error 字段；index rebuild/generate 错误记录在 `jobs.error`，provider 连接测试错误记录在 `embedding_providers.last_test_error`。
+- 因 `provider_id` 是 `ON DELETE RESTRICT`，provider 只要有关联 index 就不能物理删除；停用使用 `embedding_providers.enabled = 0`。
 
 ### article_embeddings
 
@@ -786,6 +794,9 @@ MVP runner 约定：
 - runner 启动时会把崩溃遗留的 `running` jobs 重置，避免永久卡住。
 - `feed_refresh` payload 目前只接受 `{ "feedId": "string" }`。
 - `retention_cleanup` payload 目前只接受 `null` 或 `{}`。
+- `embedding_generate` payload 目前只接受 `{ "embeddingIndexId": "string", "articleIds": ["string"] }`，`articleIds` 长度限制 `1..16`。
+- `embedding_generate` 只对 queued/running open jobs 去重，历史 succeeded job 不会阻止内容变更后的重新 embedding。
+- `vector_index_rebuild` payload 目前只接受 `{ "embeddingIndexId": "string" }`。
 
 索引：
 

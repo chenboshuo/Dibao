@@ -338,6 +338,9 @@ type RankExplanation = {
 
 `firstRefreshStatus`：
 
+- `hasEmbeddingProvider` 为真实状态：存在已启用 provider 且存在 active embedding index 时为 `true`。
+- 本轮不表示 embedding 已接入推荐排序；无 provider 或 provider 失败时继续使用 baseline ranking。
+
 ```text
 idle
 running
@@ -949,6 +952,14 @@ cursor
 
 ## Embedding
 
+当前 MVP 只实现 `openai_compatible` provider。`ollama`、`custom_http`、`embedded_local`
+保留为后续 adapter 扩展；本轮如果请求启用这些类型，API 返回
+contract-shaped `VALIDATION_ERROR`。Web Settings 也只开放 OpenAI-compatible。
+
+API key 存储说明：MVP 单用户本地/自托管版本会把 key 保存在本机 SQLite
+`embedding_providers.api_key_encrypted`，当前实现只是 `plain:v1` 编码，不是安全加密。
+部署者应保护数据库文件和数据卷；后续如需要可引入外部密钥或系统 keychain。
+
 ### GET /api/embedding/providers
 
 获取 provider 列表。
@@ -967,8 +978,12 @@ cursor
       "dimension": 1536,
       "enabled": true,
       "qualityTier": "best_quality",
+      "hasApiKey": true,
       "lastTestStatus": "success",
-      "lastTestAt": "2026-05-14T08:00:00.000Z"
+      "lastTestError": null,
+      "lastTestAt": "2026-05-14T08:00:00.000Z",
+      "createdAt": "2026-05-14T08:00:00.000Z",
+      "updatedAt": "2026-05-14T08:00:00.000Z"
     }
   ]
 }
@@ -992,6 +1007,13 @@ cursor
 }
 ```
 
+约束：
+
+- `type` 必须是 `openai_compatible` 才能启用。
+- `baseUrl` 应填写 API root，例如 `https://api.example.com/v1`；可以带 `/v1/` 尾斜杠。
+- `baseUrl` 不应填写到 `/embeddings`，否则返回 `VALIDATION_ERROR`。
+- 创建或更新为 `enabled:true` 时，服务端会事务化停用其他 provider，并为当前模型/维度创建 active index。
+
 响应：
 
 ```json
@@ -1010,10 +1032,12 @@ cursor
 
 ```json
 {
-  "name": "Local Ollama",
+  "name": "OpenAI Compatible",
   "enabled": true
 }
 ```
+
+响应为更新后的 provider，不返回 `apiKey` 明文。
 
 ### DELETE /api/embedding/providers/:id
 
@@ -1021,7 +1045,9 @@ cursor
 
 约束：
 
-- 如果 provider 仍有关联 active embedding index，返回 `CONFLICT`。
+- 如果 provider 仍有关联任何 embedding index，返回 `CONFLICT`。
+- 无 index 时才物理删除。
+- 用户需要停用 provider 时使用 `PATCH enabled=false`。
 
 ### POST /api/embedding/providers/:id/test
 
@@ -1069,11 +1095,18 @@ cursor
       "dimension": 1536,
       "distanceMetric": "cosine",
       "status": "active",
-      "createdAt": "2026-05-14T08:00:00.000Z"
+      "embeddingCount": 42,
+      "pendingJobs": 2,
+      "failedJobs": 1,
+      "createdAt": "2026-05-14T08:00:00.000Z",
+      "updatedAt": "2026-05-14T08:00:00.000Z"
     }
   ]
 }
 ```
+
+`embedding_indexes` 不保存错误字段；具体错误记录在 `jobs.error` 或 provider
+`lastTestError`。
 
 ### POST /api/embedding/indexes/:id/rebuild
 
@@ -1088,6 +1121,26 @@ cursor
   }
 }
 ```
+
+### embedding_generate job payload
+
+内部 job payload：
+
+```json
+{
+  "embeddingIndexId": "index_01",
+  "articleIds": ["article_01"]
+}
+```
+
+约束：
+
+- `articleIds` 长度为 `1..16`。
+- payload 运行时严格校验，非法 payload 直接 failed，不重试。
+- 只处理未删除文章、未删除且启用的 feed、有可 embedding 文本的文章。
+- 当前 index 已有 embedding 且 `content_hash` 未变化时跳过。
+- retention-deleted article 即使出现在 payload 中也会被过滤。
+- 只对 queued/running open jobs 做去重；历史 succeeded job 不阻止内容变化后的重新 embedding。
 
 ## Jobs
 

@@ -513,6 +513,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   border: var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -524,6 +525,11 @@
 .settingsInlineStatus strong {
   color: var(--color-ink);
   font-size: var(--text-sm);
+}
+
+.settingsInlineStatus input[type="checkbox"] {
+  width: auto;
+  height: auto;
 }
 
 .feedPanel,
