@@ -32,6 +32,14 @@ export type FeedRow = {
   updatedAt: number;
 };
 
+export type FeedFolderRow = {
+  id: string;
+  title: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type FeedListInput = {
   folderId?: string | null;
   enabled?: boolean;
@@ -46,6 +54,13 @@ export type UpsertFeedInput = {
   description?: string | null;
   enabled?: boolean;
   sourceWeight?: number;
+  now?: number;
+};
+
+export type UpsertFeedFolderInput = {
+  id: string;
+  title: string;
+  sortOrder?: number;
   now?: number;
 };
 

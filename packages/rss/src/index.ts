@@ -16,6 +16,36 @@ export type ParsedFeed = {
   items: ParsedFeedItem[];
 };
 
+export type OpmlFeed = {
+  title: string;
+  feedUrl: string;
+  siteUrl: string | null;
+  folderTitle: string | null;
+};
+
+export type ParsedOpml = {
+  title: string | null;
+  folders: string[];
+  feeds: OpmlFeed[];
+};
+
+export type GenerateOpmlInput = {
+  title: string;
+  folders: Array<{
+    title: string;
+    feeds: Array<{
+      title: string;
+      feedUrl: string;
+      siteUrl?: string | null;
+    }>;
+  }>;
+  feeds: Array<{
+    title: string;
+    feedUrl: string;
+    siteUrl?: string | null;
+  }>;
+};
+
 type XmlNode = {
   name: string;
   attributes: Record<string, string>;
@@ -27,6 +57,13 @@ export class FeedParseError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "FeedParseError";
+  }
+}
+
+export class OpmlParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpmlParseError";
   }
 }
 
@@ -54,6 +91,64 @@ export function parseFeedXml(xml: string, feedUrl: string): ParsedFeed {
   }
 
   throw new FeedParseError(`Unsupported feed root: ${root.name}`);
+}
+
+export function parseOpml(xml: string): ParsedOpml {
+  const root = parseXml(xml);
+  if (!root) {
+    throw new OpmlParseError("OPML XML is empty");
+  }
+
+  if (localName(root.name) !== "opml") {
+    throw new OpmlParseError(`Unsupported OPML root: ${root.name}`);
+  }
+
+  const body = findChild(root, "body");
+  if (!body) {
+    throw new OpmlParseError("OPML is missing body");
+  }
+
+  const title = findChild(root, "head") ? childText(findChild(root, "head")!, "title") : null;
+  const folders: string[] = [];
+  const feeds: OpmlFeed[] = [];
+
+  for (const outline of findChildren(body, "outline")) {
+    collectOpmlOutline(outline, null, folders, feeds);
+  }
+
+  return {
+    title,
+    folders: dedupeStrings(folders),
+    feeds
+  };
+}
+
+export function generateOpml(input: GenerateOpmlInput): string {
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<opml version="2.0">',
+    "  <head>",
+    `    <title>${escapeXml(input.title)}</title>`,
+    "  </head>",
+    "  <body>"
+  ];
+
+  for (const folder of input.folders) {
+    lines.push(
+      `    <outline text="${escapeXml(folder.title)}" title="${escapeXml(folder.title)}">`
+    );
+    for (const feed of inputFolderFeeds(folder.feeds)) {
+      lines.push(`      ${opmlFeedOutline(feed)}`);
+    }
+    lines.push("    </outline>");
+  }
+
+  for (const feed of inputFolderFeeds(input.feeds)) {
+    lines.push(`    ${opmlFeedOutline(feed)}`);
+  }
+
+  lines.push("  </body>", "</opml>");
+  return `${lines.join("\n")}\n`;
 }
 
 function parseRssFeed(root: XmlNode, feedUrl: string): ParsedFeed {
@@ -132,6 +227,44 @@ function parseAtomEntry(entry: XmlNode, feedUrl: string, index: number): ParsedF
   };
 }
 
+function collectOpmlOutline(
+  outline: XmlNode,
+  parentFolderTitle: string | null,
+  folders: string[],
+  feeds: OpmlFeed[]
+): void {
+  const feedUrl = cleanText(outline.attributes.xmlUrl ?? outline.attributes.xmlurl);
+  if (feedUrl) {
+    const title =
+      cleanText(outline.attributes.title) ??
+      cleanText(outline.attributes.text) ??
+      cleanText(nodeText(outline)) ??
+      feedUrl;
+
+    feeds.push({
+      title,
+      feedUrl,
+      siteUrl: cleanText(outline.attributes.htmlUrl ?? outline.attributes.htmlurl),
+      folderTitle: parentFolderTitle
+    });
+    return;
+  }
+
+  const folderTitle =
+    cleanText(outline.attributes.title) ??
+    cleanText(outline.attributes.text) ??
+    cleanText(nodeText(outline));
+  const nextFolderTitle = folderTitle ?? parentFolderTitle;
+
+  if (folderTitle) {
+    folders.push(folderTitle);
+  }
+
+  for (const child of findChildren(outline, "outline")) {
+    collectOpmlOutline(child, nextFolderTitle, folders, feeds);
+  }
+}
+
 function parseXml(xml: string): XmlNode | null {
   const document: XmlNode = {
     name: "#document",
@@ -191,6 +324,66 @@ function parseXml(xml: string): XmlNode | null {
   }
 
   return document.children[0] ?? null;
+}
+
+function inputFolderFeeds(feeds: GenerateOpmlInput["feeds"]): GenerateOpmlInput["feeds"] {
+  return [...feeds].sort((left, right) =>
+    left.title.localeCompare(right.title, "en", { sensitivity: "base" })
+  );
+}
+
+function opmlFeedOutline(feed: GenerateOpmlInput["feeds"][number]): string {
+  const attributes = [
+    `text="${escapeXml(feed.title)}"`,
+    `title="${escapeXml(feed.title)}"`,
+    'type="rss"',
+    `xmlUrl="${escapeXml(feed.feedUrl)}"`
+  ];
+
+  if (feed.siteUrl) {
+    attributes.push(`htmlUrl="${escapeXml(feed.siteUrl)}"`);
+  }
+
+  return `<outline ${attributes.join(" ")} />`;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const key = value.toLocaleLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(value);
+    }
+  }
+
+  return result;
+}
+
+function cleanText(value: string | null | undefined): string | null {
+  const cleaned = value?.trim();
+  return cleaned ? cleaned : null;
+}
+
+function escapeXml(value: string): string {
+  return value.replace(/[<>&"']/g, (char) => {
+    switch (char) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case "\"":
+        return "&quot;";
+      case "'":
+        return "&apos;";
+      default:
+        return char;
+    }
+  });
 }
 
 function readTagName(tag: string): string {

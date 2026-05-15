@@ -225,6 +225,11 @@ type RankExplanation = {
 };
 ```
 
+说明：
+
+- `label` 是后端提供的轻量调试/辅助文本，不作为最终 UI 文案。
+- 前端应优先按 `type` 和 `impact` 使用本地化 dictionary 展示推荐理由。
+
 ## Auth
 
 ### GET /api/auth/session
@@ -523,6 +528,16 @@ multipart/form-data
 file=<opml file>
 ```
 
+MVP 也接受 `application/xml` 请求体，便于本地自托管和自动化测试。
+
+导入行为：
+
+- 创建不存在的 feed folders。
+- 创建不存在的 feeds。
+- 已存在 `feedUrl` 的订阅源跳过，不重复创建。
+- 不自动抓取 RSS 内容，不触发 feed refresh。
+- 嵌套分组会扁平化为一层 folders，feed 归属最近的父分组。
+
 响应：
 
 ```json
@@ -733,7 +748,7 @@ read_progress
     "reasons": [
       {
         "type": "fallback",
-        "label": "当前使用基础排序，embedding 尚未完成",
+        "label": "Basic ranking has not been calculated yet",
         "impact": "neutral"
       }
     ],

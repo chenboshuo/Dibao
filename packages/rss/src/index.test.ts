@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeFeedUrl, parseFeedXml } from "./index.js";
+import { generateOpml, normalizeFeedUrl, parseFeedXml, parseOpml } from "./index.js";
 
 describe("rss package", () => {
   it("normalizes feed URLs for storage", () => {
@@ -70,6 +70,83 @@ describe("rss package", () => {
       guid: "tag:example.com,2026:entry",
       author: "Ada",
       summary: "Entry summary"
+    });
+  });
+
+  it("parses OPML folders and assigns feeds to the nearest parent folder", () => {
+    const opml = parseOpml(`<?xml version="1.0" encoding="UTF-8"?>
+      <opml version="2.0">
+        <head><title>Subscriptions</title></head>
+        <body>
+          <outline text="Tech">
+            <outline title="AI">
+              <outline type="rss" text="ML Feed" xmlUrl="https://example.com/ml.xml" htmlUrl="https://example.com/ml" />
+            </outline>
+          </outline>
+          <outline text="Loose Feed" type="rss" xmlUrl="https://example.com/loose.xml" />
+        </body>
+      </opml>`);
+
+    expect(opml).toEqual({
+      title: "Subscriptions",
+      folders: ["Tech", "AI"],
+      feeds: [
+        {
+          title: "ML Feed",
+          feedUrl: "https://example.com/ml.xml",
+          siteUrl: "https://example.com/ml",
+          folderTitle: "AI"
+        },
+        {
+          title: "Loose Feed",
+          feedUrl: "https://example.com/loose.xml",
+          siteUrl: null,
+          folderTitle: null
+        }
+      ]
+    });
+  });
+
+  it("generates OPML 2.0 that can be parsed back", () => {
+    const xml = generateOpml({
+      title: "Dibao Subscriptions",
+      folders: [
+        {
+          title: "Design & Tech",
+          feeds: [
+            {
+              title: "Example <Feed>",
+              feedUrl: "https://example.com/feed.xml",
+              siteUrl: "https://example.com/"
+            }
+          ]
+        }
+      ],
+      feeds: [
+        {
+          title: "Loose",
+          feedUrl: "https://example.com/loose.xml"
+        }
+      ]
+    });
+
+    expect(xml).toContain('<opml version="2.0">');
+    expect(xml).toContain("Design &amp; Tech");
+    expect(parseOpml(xml)).toMatchObject({
+      title: "Dibao Subscriptions",
+      folders: ["Design & Tech"],
+      feeds: [
+        {
+          title: "Example <Feed>",
+          feedUrl: "https://example.com/feed.xml",
+          folderTitle: "Design & Tech"
+        },
+        {
+          title: "Loose",
+          feedUrl: "https://example.com/loose.xml",
+          folderTitle: null
+        }
+      ]
     });
   });
 });

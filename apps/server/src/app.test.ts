@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   openDatabase,
   SqliteArticleRepository,
+  SqliteFeedFolderRepository,
   SqliteFeedRepository,
   type DibaoDatabase
 } from "@dibao/db";
+import { parseOpml } from "@dibao/rss";
 import { buildServer } from "./app.js";
 import type { FeedFetcher } from "./feed-refresh-service.js";
 
@@ -218,6 +220,179 @@ describe("server API vertical slice", () => {
 
       expect(articles.statusCode).toBe(200);
       expect(articles.json().data).toHaveLength(2);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("imports OPML folders and feeds without refreshing articles", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 6000 });
+
+    try {
+      const response = await postMultipartOpml(app, fixtureOpml);
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        data: {
+          foldersCreated: 2,
+          feedsCreated: 2,
+          feedsSkipped: 1,
+          errors: []
+        }
+      });
+      expect(listFolderTitles(db)).toEqual(["Tech", "AI"]);
+      expect(listFeedFolderAssignments(db)).toEqual([
+        {
+          title: "Design Feed",
+          feedUrl: "https://example.com/design.xml",
+          folderTitle: "Tech"
+        },
+        {
+          title: "ML Feed",
+          feedUrl: "https://example.com/ml.xml",
+          folderTitle: "AI"
+        }
+      ]);
+      expect(db.prepare("select count(*) as count from articles").get()).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("skips duplicate OPML feed URLs on repeated imports", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 6100 });
+
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/opml/import",
+        headers: {
+          "content-type": "application/xml"
+        },
+        payload: singleFeedOpml
+      });
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/opml/import",
+        headers: {
+          "content-type": "application/xml"
+        },
+        payload: singleFeedOpml
+      });
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toMatchObject({
+        data: {
+          foldersCreated: 1,
+          feedsCreated: 1,
+          feedsSkipped: 0
+        }
+      });
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json()).toMatchObject({
+        data: {
+          foldersCreated: 0,
+          feedsCreated: 0,
+          feedsSkipped: 1
+        }
+      });
+      expect(listFeedFolderAssignments(db)).toHaveLength(1);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("returns contract-shaped error for invalid OPML import", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/opml/import",
+        headers: {
+          "content-type": "application/xml"
+        },
+        payload: "<rss></rss>"
+      });
+
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "OPML parse failed"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("exports current folders and feeds as OPML", async () => {
+    const db = createEmptyDatabase();
+    const folders = new SqliteFeedFolderRepository(db);
+    const feeds = new SqliteFeedRepository(db);
+    const design = folders.upsert({
+      id: "folder_design",
+      title: "Design & Tech",
+      sortOrder: 0,
+      now: 1000
+    });
+    folders.upsert({
+      id: "folder_empty",
+      title: "Empty Folder",
+      sortOrder: 1,
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_design_export",
+      folderId: design.id,
+      title: "Design Feed",
+      feedUrl: "https://example.com/design.xml",
+      siteUrl: "https://example.com/design",
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_loose_export",
+      title: "Loose Feed",
+      feedUrl: "https://example.com/loose.xml",
+      now: 1000
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/opml/export"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toContain("application/xml");
+      expect(response.body).toContain('<opml version="2.0">');
+      expect(parseOpml(response.body)).toMatchObject({
+        title: "Dibao Subscriptions",
+        folders: ["Design & Tech", "Empty Folder"],
+        feeds: [
+          {
+            title: "Design Feed",
+            feedUrl: "https://example.com/design.xml",
+            siteUrl: "https://example.com/design",
+            folderTitle: "Design & Tech"
+          },
+          {
+            title: "Loose Feed",
+            feedUrl: "https://example.com/loose.xml",
+            siteUrl: null,
+            folderTitle: null
+          }
+        ]
+      });
     } finally {
       await app.close();
       db.close();
@@ -1211,6 +1386,28 @@ async function postJson(app: ReturnType<typeof buildServer>, url: string, payloa
   });
 }
 
+async function postMultipartOpml(app: ReturnType<typeof buildServer>, xml: string) {
+  const boundary = `dibao-${Date.now()}`;
+  const payload = [
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="file"; filename="subscriptions.opml"',
+    "Content-Type: text/xml",
+    "",
+    xml,
+    `--${boundary}--`,
+    ""
+  ].join("\r\n");
+
+  return app.inject({
+    method: "POST",
+    url: "/api/opml/import",
+    headers: {
+      "content-type": `multipart/form-data; boundary=${boundary}`
+    },
+    payload
+  });
+}
+
 function getArticleStateRow(db: DibaoDatabase, articleId: string) {
   return db
     .prepare(
@@ -1252,8 +1449,66 @@ function listBehaviorEvents(db: DibaoDatabase, articleId: string) {
     eventType: string;
     eventWeight: number;
     metadataJson: string | null;
+    }>;
+}
+
+function listFolderTitles(db: DibaoDatabase): string[] {
+  return db
+    .prepare(
+      `
+        select title
+        from feed_folders
+        where deleted_at is null
+        order by sort_order, title collate nocase
+      `
+    )
+    .all()
+    .map((row) => (row as { title: string }).title);
+}
+
+function listFeedFolderAssignments(db: DibaoDatabase) {
+  return db
+    .prepare(
+      `
+        select
+          feeds.title,
+          feeds.feed_url as feedUrl,
+          feed_folders.title as folderTitle
+        from feeds
+        left join feed_folders on feed_folders.id = feeds.folder_id
+        where feeds.deleted_at is null
+        order by feeds.title collate nocase
+      `
+    )
+    .all() as Array<{
+    title: string;
+    feedUrl: string;
+    folderTitle: string | null;
   }>;
 }
+
+const fixtureOpml = `<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Fixture Subscriptions</title></head>
+  <body>
+    <outline text="Tech">
+      <outline type="rss" text="Design Feed" xmlUrl="https://example.com/design.xml" htmlUrl="https://example.com/design" />
+      <outline text="AI">
+        <outline type="rss" title="ML Feed" xmlUrl="https://example.com/ml.xml" htmlUrl="https://example.com/ml" />
+        <outline type="rss" title="ML Duplicate" xmlUrl="https://example.com/ml.xml" />
+      </outline>
+    </outline>
+  </body>
+</opml>`;
+
+const singleFeedOpml = `<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="News">
+      <outline type="rss" text="News Feed" xmlUrl="https://example.com/news.xml" />
+    </outline>
+  </body>
+</opml>`;
 
 const fixtureRss = `<?xml version="1.0"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">

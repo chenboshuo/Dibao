@@ -7,6 +7,7 @@ import {
   openDatabase,
   SqliteArticleActionRepository,
   SqliteArticleRepository,
+  SqliteFeedFolderRepository,
   SqliteFeedRepository,
   SqliteRankingRepository,
   type ArticleActionType,
@@ -29,6 +30,7 @@ import {
   FeedRefreshService,
   type FeedFetcher
 } from "./feed-refresh-service.js";
+import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import { BaselineRankingService } from "./ranking-service.js";
 
 type HealthStatus = "ok" | "error";
@@ -92,6 +94,7 @@ type BuildServerOptions = {
 export function buildServer(options: BuildServerOptions = {}) {
   const db = options.db ?? openConfiguredDatabase(options);
   const closeDatabaseOnClose = options.closeDatabaseOnClose ?? !options.db;
+  const folders = new SqliteFeedFolderRepository(db);
   const feeds = new SqliteFeedRepository(db);
   const articles = new SqliteArticleRepository(db);
   const articleActions = new SqliteArticleActionRepository(db);
@@ -113,10 +116,37 @@ export function buildServer(options: BuildServerOptions = {}) {
     ranking: rankingService,
     now: options.now
   });
+  const opmlService = new OpmlService({
+    folders,
+    feeds,
+    now: options.now
+  });
 
   const app = Fastify({
     logger: options.logger ?? true
   });
+
+  app.addContentTypeParser(
+    /^multipart\/form-data(?:;.*)?$/i,
+    { parseAs: "buffer" },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
+  app.addContentTypeParser(
+    /^application\/xml(?:;.*)?$/i,
+    { parseAs: "string" },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
+  app.addContentTypeParser(
+    /^text\/xml(?:;.*)?$/i,
+    { parseAs: "string" },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
 
   app.setErrorHandler((error, request, reply) => {
     request.log.error(error);
@@ -187,6 +217,26 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendFeedIngestionError(reply, error);
     }
   });
+
+  app.post("/api/opml/import", async (request, reply) => {
+    const parsed = parseOpmlImportBody(request.body, request.headers["content-type"]);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    try {
+      const result = opmlService.importOpml(parsed.xml);
+      return {
+        data: result
+      };
+    } catch (error) {
+      return sendOpmlServiceError(reply, error);
+    }
+  });
+
+  app.get("/api/opml/export", async (_request, reply) =>
+    reply.type("application/xml; charset=utf-8").send(opmlService.exportOpml())
+  );
 
   app.get<{ Querystring: ArticleQuery }>("/api/articles", async (request, reply) => {
     const parsed = parseArticleQuery(request.query);
@@ -396,6 +446,74 @@ function parseCreateFeedBody(body: CreateFeedBody | undefined):
       ...(body.folderId !== undefined ? { folderId: body.folderId } : {})
     }
   };
+}
+
+function parseOpmlImportBody(
+  body: unknown,
+  contentTypeHeader: string | string[] | undefined
+): { ok: true; xml: string } | { ok: false; message: string; details?: unknown } {
+  const contentType = Array.isArray(contentTypeHeader)
+    ? contentTypeHeader[0]
+    : contentTypeHeader;
+
+  if (typeof body === "string") {
+    return body.trim()
+      ? { ok: true, xml: body }
+      : { ok: false, message: "OPML body is required" };
+  }
+
+  if (Buffer.isBuffer(body)) {
+    const xml = contentType?.toLowerCase().startsWith("multipart/form-data")
+      ? extractMultipartFile(body, contentType)
+      : body.toString("utf8");
+
+    if (!xml) {
+      return {
+        ok: false,
+        message: "OPML file is required",
+        details: { field: "file" }
+      };
+    }
+
+    return { ok: true, xml };
+  }
+
+  return {
+    ok: false,
+    message: "OPML import requires multipart/form-data or application/xml"
+  };
+}
+
+function extractMultipartFile(body: Buffer, contentType: string | undefined): string | null {
+  const boundaryMatch = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundary) {
+    return null;
+  }
+
+  const raw = body.toString("utf8");
+  for (const part of raw.split(`--${boundary}`)) {
+    if (!/content-disposition:/i.test(part)) {
+      continue;
+    }
+
+    const separator = part.includes("\r\n\r\n") ? "\r\n\r\n" : "\n\n";
+    const separatorIndex = part.indexOf(separator);
+    if (separatorIndex < 0) {
+      continue;
+    }
+
+    const headers = part.slice(0, separatorIndex);
+    if (!/name="file"/i.test(headers) && !/filename=/i.test(headers)) {
+      continue;
+    }
+
+    const content = part.slice(separatorIndex + separator.length).replace(/^\r?\n/, "");
+    const trimmed = content.replace(/\r?\n$/, "").trim();
+    return trimmed || null;
+  }
+
+  return null;
 }
 
 function parseArticleActionBody(body: ArticleActionBody | undefined):
@@ -666,6 +784,14 @@ function sendFeedIngestionError(reply: FastifyReply, error: unknown) {
 
 function sendArticleActionError(reply: FastifyReply, error: unknown) {
   if (error instanceof ArticleActionServiceError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendOpmlServiceError(reply: FastifyReply, error: unknown) {
+  if (error instanceof OpmlServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 
