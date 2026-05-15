@@ -8,7 +8,9 @@ import {
   type ArticleDetail,
   type ArticleListItem,
   type ArticleState,
-  type Feed
+  type Feed,
+  type RankExplanation,
+  type RankExplanationReason
 } from "./api.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
 import { useI18n, type Dictionary, type NavigationItemKey } from "./i18n.js";
@@ -41,15 +43,18 @@ export function App() {
   const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(null);
+  const [rankExplanation, setRankExplanation] = useState<RankExplanation | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
   const [isFeedsLoading, setIsFeedsLoading] = useState(true);
   const [isArticlesLoading, setIsArticlesLoading] = useState(true);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [isExplanationLoading, setIsExplanationLoading] = useState(false);
   const [isAddingFeed, setIsAddingFeed] = useState(false);
   const [refreshingFeedId, setRefreshingFeedId] = useState<string | null>(null);
   const [feedError, setFeedError] = useState<string | null>(null);
   const [articleError, setArticleError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [explanationError, setExplanationError] = useState<string | null>(null);
   const [articleActionError, setArticleActionError] = useState<string | null>(null);
   const [pendingArticleAction, setPendingArticleAction] = useState<PendingArticleAction | null>(
     null
@@ -79,6 +84,21 @@ export function App() {
         : current
     );
   }
+
+  const refreshArticleExplanation = useCallback(async (articleId: string) => {
+    setIsExplanationLoading(true);
+    setExplanationError(null);
+
+    try {
+      const explanation = await dibaoApi.getArticleExplanation(articleId);
+      setRankExplanation(explanation);
+    } catch (error) {
+      setRankExplanation(null);
+      setExplanationError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsExplanationLoading(false);
+    }
+  }, [t.errors.api]);
 
   const loadFeeds = useCallback(async () => {
     setIsFeedsLoading(true);
@@ -132,6 +152,8 @@ export function App() {
     async function loadDetail(articleId: string) {
       setIsDetailLoading(true);
       setDetailError(null);
+      setRankExplanation(null);
+      setExplanationError(null);
 
       try {
         const detail = await dibaoApi.getArticle(articleId);
@@ -156,6 +178,9 @@ export function App() {
             }
           }
         }
+        if (!cancelled) {
+          await refreshArticleExplanation(articleId);
+        }
       } catch (error) {
         if (!cancelled) {
           setArticleDetail(null);
@@ -170,8 +195,11 @@ export function App() {
 
     if (!selectedArticleId) {
       setArticleDetail(null);
+      setRankExplanation(null);
       setIsDetailLoading(false);
+      setIsExplanationLoading(false);
       setDetailError(null);
+      setExplanationError(null);
       return;
     }
 
@@ -180,7 +208,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedArticleId, t.actions.errors.open, t.errors.api]);
+  }, [refreshArticleExplanation, selectedArticleId, t.actions.errors.open, t.errors.api]);
 
   async function handleAddFeed(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -235,6 +263,7 @@ export function App() {
         requestForArticleAction(intent, article.state)
       );
       applyArticleState(article.id, result.state);
+      await refreshArticleExplanation(article.id);
     } catch {
       setArticleActionError(actionErrorMessageFor(intent, t));
     } finally {
@@ -312,7 +341,14 @@ export function App() {
             actionError={articleActionError}
             article={articleDetail}
             detailError={detailError}
+            explanation={
+              articleDetail && rankExplanation?.articleId === articleDetail.id
+                ? rankExplanation
+                : null
+            }
+            explanationError={explanationError}
             isDetailLoading={isDetailLoading}
+            isExplanationLoading={isExplanationLoading}
             onArticleAction={handleArticleAction}
             pendingAction={
               articleDetail && pendingArticleAction?.articleId === articleDetail.id
@@ -490,7 +526,10 @@ function ArticleDetailPanel(props: {
   actionError: string | null;
   article: ArticleDetail | null;
   detailError: string | null;
+  explanation: RankExplanation | null;
+  explanationError: string | null;
   isDetailLoading: boolean;
+  isExplanationLoading: boolean;
   onArticleAction: (article: ArticleDetail, intent: ArticleActionIntent) => void;
   pendingAction: ArticleActionIntent | null;
 }) {
@@ -534,6 +573,11 @@ function ArticleDetailPanel(props: {
               article={props.article}
               onAction={(intent) => props.onArticleAction(props.article as ArticleDetail, intent)}
               pendingAction={props.pendingAction}
+            />
+            <RankExplanationPanel
+              error={props.explanationError}
+              explanation={props.explanation}
+              isLoading={props.isExplanationLoading}
             />
           </header>
 
@@ -628,6 +672,46 @@ export function ArticleActionControls(props: {
       </div>
       {props.actionError ? <p className={styles.actionError}>{props.actionError}</p> : null}
     </div>
+  );
+}
+
+export function RankExplanationPanel(props: {
+  error: string | null;
+  explanation: RankExplanation | null;
+  isLoading: boolean;
+}) {
+  const { t, formatDate } = useI18n();
+
+  return (
+    <section className={styles.explanationBox} aria-labelledby="rank-explanation-title">
+      <div className={styles.explanationHeader}>
+        <h3 id="rank-explanation-title">{t.explanation.title}</h3>
+        {props.explanation ? (
+          <span>{t.explanation.generatedAt(formatDate(props.explanation.generatedAt))}</span>
+        ) : null}
+      </div>
+
+      {props.isLoading ? <p className={styles.explanationMeta}>{t.explanation.loading}</p> : null}
+      {!props.isLoading && props.error ? (
+        <p className={styles.explanationError}>{props.error}</p>
+      ) : null}
+      {!props.isLoading && !props.error && props.explanation ? (
+        props.explanation.reasons.length > 0 ? (
+          <ul className={styles.explanationList}>
+            {props.explanation.reasons.map((reason, index) => (
+              <li className={styles.explanationReason} key={`${reason.type}-${index}`}>
+                <span className={styles.explanationType}>
+                  {t.explanation.types[reason.type]}
+                </span>
+                <span>{explanationReasonText(reason, t)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className={styles.explanationMeta}>{t.explanation.empty}</p>
+        )
+      ) : null}
+    </section>
   );
 }
 
@@ -730,6 +814,27 @@ function actionErrorMessageFor(intent: ArticleActionIntent, t: Dictionary) {
       return t.actions.errors.readStatus;
     case "notInterested":
       return t.actions.errors.notInterested;
+  }
+}
+
+function explanationReasonText(reason: RankExplanationReason, t: Dictionary): string {
+  switch (reason.type) {
+    case "source":
+      return reason.impact === "negative"
+        ? t.explanation.reasons.sourceNegative(reason.label)
+        : t.explanation.reasons.sourcePositive(reason.label);
+    case "freshness":
+      return t.explanation.reasons.freshness;
+    case "state":
+      return reason.impact === "negative"
+        ? t.explanation.reasons.stateNegative
+        : t.explanation.reasons.statePositive;
+    case "fallback":
+      return t.explanation.reasons.fallback;
+    case "negative":
+      return t.explanation.reasons.negative;
+    case "penalty":
+      return t.explanation.reasons.penalty;
   }
 }
 

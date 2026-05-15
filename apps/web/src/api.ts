@@ -68,6 +68,26 @@ export type ArticleActionResponse = {
   state: ArticleState;
 };
 
+export type RankExplanationReasonType =
+  | "source"
+  | "freshness"
+  | "state"
+  | "fallback"
+  | "negative"
+  | "penalty";
+
+export type RankExplanationReason = {
+  type: RankExplanationReasonType;
+  label: string;
+  impact: "positive" | "negative" | "neutral";
+};
+
+export type RankExplanation = {
+  articleId: string;
+  reasons: RankExplanationReason[];
+  generatedAt: string;
+};
+
 export type ArticleListResponse = {
   data: ArticleListItem[];
   page: ApiPage;
@@ -189,6 +209,14 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getArticle(articleId: string): Promise<ArticleDetail> {
       return (await request<ArticleDetail>(`/api/articles/${encodeURIComponent(articleId)}`)).data;
+    },
+
+    async getArticleExplanation(articleId: string): Promise<RankExplanation> {
+      return (
+        await request<RankExplanation>(
+          `/api/articles/${encodeURIComponent(articleId)}/explanation`
+        )
+      ).data;
     },
 
     async postArticleAction(

@@ -3,6 +3,47 @@ import { ApiRequestError, createDibaoApi, userMessageForError } from "./api.js";
 import { dictionaries } from "./i18n.js";
 
 describe("web API client", () => {
+  it("fetches article rank explanations", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            articleId: "article/one",
+            reasons: [
+              {
+                type: "source",
+                label: "Fixture Feed",
+                impact: "positive"
+              }
+            ],
+            generatedAt: "2026-05-14T08:10:00.000Z"
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(api.getArticleExplanation("article/one")).resolves.toMatchObject({
+      articleId: "article/one",
+      reasons: [
+        {
+          type: "source",
+          label: "Fixture Feed",
+          impact: "positive"
+        }
+      ]
+    });
+    expect(calls).toEqual(["/api/articles/article%2Fone/explanation"]);
+  });
+
   it("posts article actions using the contract-shaped body", async () => {
     const calls: Array<{ path: string; body: unknown; method: string | undefined }> = [];
     const api = createDibaoApi(async (input, init) => {

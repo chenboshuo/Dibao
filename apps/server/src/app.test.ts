@@ -410,6 +410,88 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("returns baseline rank explanation reasons", async () => {
+    const db = createFixtureDatabase();
+    insertRank(db, "article_recommended", 1.2, 7000, {
+      interestScore: 0.08,
+      sourceScore: 0.12,
+      freshnessScore: 0.2,
+      stateScore: 0.5,
+      penaltyScore: -0.25
+    });
+    const app = buildServer({ db, logger: false, now: () => 8000 });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        data: {
+          articleId: "article_recommended",
+          generatedAt: "1970-01-01T00:00:07.000Z",
+          reasons: [
+            {
+              type: "state",
+              label: "Article state, Recent behavior",
+              impact: "positive"
+            },
+            {
+              type: "penalty",
+              label: "Negative state penalty",
+              impact: "negative"
+            },
+            {
+              type: "freshness",
+              label: "Recent article",
+              impact: "positive"
+            },
+            {
+              type: "source",
+              label: "Design Notes",
+              impact: "positive"
+            }
+          ]
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("returns fallback explanation when rank is missing", async () => {
+    const db = createRankingFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 9000 });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_rank_neutral/explanation"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        data: {
+          articleId: "article_rank_neutral",
+          generatedAt: "1970-01-01T00:00:09.000Z",
+          reasons: [
+            {
+              type: "fallback",
+              label: "Basic ranking has not been calculated yet",
+              impact: "neutral"
+            }
+          ]
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("recalculates base rank after article actions and orders recommended by score", async () => {
     const db = createRankingFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 10_000 });
@@ -1008,7 +1090,20 @@ function createRankingFixtureDatabase(): DibaoDatabase {
   return db;
 }
 
-function insertRank(db: DibaoDatabase, articleId: string, score: number, calculatedAt: number): void {
+function insertRank(
+  db: DibaoDatabase,
+  articleId: string,
+  score: number,
+  calculatedAt: number,
+  components: {
+    interestScore?: number;
+    sourceScore?: number;
+    freshnessScore?: number;
+    stateScore?: number;
+    diversityScore?: number;
+    penaltyScore?: number;
+  } = {}
+): void {
   db.prepare(
     `
       insert into article_rank_scores (
@@ -1024,9 +1119,28 @@ function insertRank(db: DibaoDatabase, articleId: string, score: number, calcula
         penalty_score,
         calculated_at
       )
-      values (?, 'base', null, ?, 0, 0, 0, 0, 0, 0, ?)
+      values (?, 'base', null, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(article_id, rank_context) do update set
+        score = excluded.score,
+        interest_score = excluded.interest_score,
+        source_score = excluded.source_score,
+        freshness_score = excluded.freshness_score,
+        state_score = excluded.state_score,
+        diversity_score = excluded.diversity_score,
+        penalty_score = excluded.penalty_score,
+        calculated_at = excluded.calculated_at
     `
-  ).run(articleId, score, calculatedAt);
+  ).run(
+    articleId,
+    score,
+    components.interestScore ?? 0,
+    components.sourceScore ?? 0,
+    components.freshnessScore ?? 0,
+    components.stateScore ?? 0,
+    components.diversityScore ?? 0,
+    components.penaltyScore ?? 0,
+    calculatedAt
+  );
 }
 
 function getRankScore(db: DibaoDatabase, articleId: string): number {

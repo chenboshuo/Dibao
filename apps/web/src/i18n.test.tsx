@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { App, ArticleActionControls } from "./App.js";
+import { App, ArticleActionControls, RankExplanationPanel } from "./App.js";
 import {
   DibaoI18nProvider,
   createI18n,
@@ -66,6 +66,38 @@ describe("web i18n", () => {
     expect(html).toContain("稍后读");
     expect(html).toContain("标记已读");
     expect(html).toContain("不感兴趣");
+  });
+
+  it("renders rank explanation copy from the dictionary", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <RankExplanationPanel
+          error={null}
+          explanation={{
+            articleId: "article_fixture",
+            generatedAt: "2026-05-14T08:10:00.000Z",
+            reasons: [
+              {
+                type: "freshness",
+                label: "Recent article",
+                impact: "positive"
+              },
+              {
+                type: "source",
+                label: "Fixture Feed",
+                impact: "positive"
+              }
+            ]
+          }}
+          isLoading={false}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("为什么推荐");
+    expect(html).toContain("新鲜度");
+    expect(html).toContain("文章较新");
+    expect(html).toContain("来源 Fixture Feed");
   });
 });
 

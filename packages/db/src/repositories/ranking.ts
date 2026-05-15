@@ -1,4 +1,5 @@
 import type {
+  ArticleRankExplanationSourceRow,
   ArticleRankingCandidateRow,
   DibaoDatabase,
   UpsertArticleRankScoreInput
@@ -27,13 +28,75 @@ type ArticleRankingCandidateDbRow = {
   behaviorEventCount: number;
 };
 
+type ArticleRankExplanationSourceDbRow = {
+  articleId: string;
+  feedTitle: string;
+  publishedAt: number | null;
+  discoveredAt: number;
+  read: 0 | 1;
+  favorited: 0 | 1;
+  readLater: 0 | 1;
+  hidden: 0 | 1;
+  notInterested: 0 | 1;
+  readingProgress: number;
+  score: number | null;
+  interestScore: number | null;
+  sourceScore: number | null;
+  freshnessScore: number | null;
+  stateScore: number | null;
+  diversityScore: number | null;
+  penaltyScore: number | null;
+  calculatedAt: number | null;
+};
+
 export interface RankingRepository {
+  findBaseExplanationSource(articleId: string): ArticleRankExplanationSourceRow | null;
   listBaseCandidates(input?: { articleIds?: string[] }): ArticleRankingCandidateRow[];
   upsertBaseScore(input: UpsertArticleRankScoreInput): void;
 }
 
 export class SqliteRankingRepository implements RankingRepository {
   constructor(private readonly db: DibaoDatabase) {}
+
+  findBaseExplanationSource(articleId: string): ArticleRankExplanationSourceRow | null {
+    const row = this.db
+      .prepare(
+        `
+          select
+            a.id as articleId,
+            f.title as feedTitle,
+            a.published_at as publishedAt,
+            a.discovered_at as discoveredAt,
+            case when s.read_at is not null then 1 else 0 end as read,
+            case when s.favorited_at is not null then 1 else 0 end as favorited,
+            case when s.read_later_at is not null then 1 else 0 end as readLater,
+            case when s.hidden_at is not null then 1 else 0 end as hidden,
+            case when s.not_interested_at is not null then 1 else 0 end as notInterested,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            rs.score,
+            rs.interest_score as interestScore,
+            rs.source_score as sourceScore,
+            rs.freshness_score as freshnessScore,
+            rs.state_score as stateScore,
+            rs.diversity_score as diversityScore,
+            rs.penalty_score as penaltyScore,
+            rs.calculated_at as calculatedAt
+          from articles a
+          join feeds f on f.id = a.feed_id
+          left join article_states s on s.article_id = a.id
+          left join article_rank_scores rs
+            on rs.article_id = a.id
+            and rs.rank_context = ?
+          where a.id = ?
+            and a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+        `
+      )
+      .get(BASE_RANK_CONTEXT, articleId) as ArticleRankExplanationSourceDbRow | undefined;
+
+    return row ? mapExplanationSource(row) : null;
+  }
 
   listBaseCandidates(input: { articleIds?: string[] } = {}): ArticleRankingCandidateRow[] {
     const articleIds = input.articleIds;
@@ -135,6 +198,47 @@ export class SqliteRankingRepository implements RankingRepository {
         input.calculatedAt
       );
   }
+}
+
+function mapExplanationSource(
+  row: ArticleRankExplanationSourceDbRow
+): ArticleRankExplanationSourceRow {
+  const state = {
+    read: row.read === 1,
+    favorited: row.favorited === 1,
+    readLater: row.readLater === 1,
+    hidden: row.hidden === 1,
+    notInterested: row.notInterested === 1,
+    readingProgress: row.readingProgress
+  };
+
+  return {
+    articleId: row.articleId,
+    feedTitle: row.feedTitle,
+    publishedAt: row.publishedAt,
+    discoveredAt: row.discoveredAt,
+    state,
+    rank:
+      row.score === null ||
+      row.interestScore === null ||
+      row.sourceScore === null ||
+      row.freshnessScore === null ||
+      row.stateScore === null ||
+      row.diversityScore === null ||
+      row.penaltyScore === null ||
+      row.calculatedAt === null
+        ? null
+        : {
+            score: row.score,
+            interestScore: row.interestScore,
+            sourceScore: row.sourceScore,
+            freshnessScore: row.freshnessScore,
+            stateScore: row.stateScore,
+            diversityScore: row.diversityScore,
+            penaltyScore: row.penaltyScore,
+            calculatedAt: row.calculatedAt
+          }
+  };
 }
 
 function mapCandidate(row: ArticleRankingCandidateDbRow): ArticleRankingCandidateRow {

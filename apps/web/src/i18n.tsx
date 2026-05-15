@@ -70,6 +70,30 @@ export const zhCN = {
     meta: (feedTitle: string, date?: string, author?: string | null) =>
       [feedTitle, date, author].filter(Boolean).join(" · ")
   },
+  explanation: {
+    title: "为什么推荐",
+    loading: "正在生成推荐解释",
+    empty: "当前没有明确的推荐信号。",
+    generatedAt: (date: string) => `生成于 ${date}`,
+    types: {
+      source: "来源",
+      freshness: "新鲜度",
+      state: "状态",
+      fallback: "基础排序",
+      negative: "负向",
+      penalty: "过滤"
+    },
+    reasons: {
+      sourcePositive: (label: string) => `来源 ${label} 对排序有正向影响。`,
+      sourceNegative: (label: string) => `来源 ${label} 当前权重偏低。`,
+      freshness: "文章较新，获得新鲜度加分。",
+      statePositive: "收藏、稍后读或阅读进度提高了排序。",
+      stateNegative: "已读等状态降低了排序优先级。",
+      fallback: "当前使用基础排序，暂时没有更强的推荐信号。",
+      negative: "近期负向行为降低了排序。",
+      penalty: "隐藏或不感兴趣会显著降低排序。"
+    }
+  },
   actions: {
     favorite: "收藏",
     unfavorite: "取消收藏",
@@ -185,6 +209,30 @@ export const enUS = {
     noContent: "This article has no body content yet.",
     meta: (feedTitle: string, date?: string, author?: string | null) =>
       [feedTitle, date, author].filter(Boolean).join(" · ")
+  },
+  explanation: {
+    title: "Why recommended",
+    loading: "Generating recommendation explanation",
+    empty: "No clear recommendation signal yet.",
+    generatedAt: (date: string) => `Generated ${date}`,
+    types: {
+      source: "Source",
+      freshness: "Freshness",
+      state: "State",
+      fallback: "Baseline",
+      negative: "Negative",
+      penalty: "Filter"
+    },
+    reasons: {
+      sourcePositive: (label: string) => `Source ${label} is helping this rank higher.`,
+      sourceNegative: (label: string) => `Source ${label} currently has a lower weight.`,
+      freshness: "The article is recent and receives a freshness boost.",
+      statePositive: "Favorite, read later, or reading progress raised the rank.",
+      stateNegative: "Read state and similar signals lowered its priority.",
+      fallback: "Baseline ranking is active and no stronger signal is available yet.",
+      negative: "Recent negative behavior lowered the rank.",
+      penalty: "Hidden or not interested state strongly lowers the rank."
+    }
   },
   actions: {
     favorite: "Favorite",

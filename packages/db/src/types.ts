@@ -149,6 +149,26 @@ export type UpsertArticleRankScoreInput = {
   calculatedAt: number;
 };
 
+export type ArticleRankScoreComponentsRow = {
+  score: number;
+  interestScore: number;
+  sourceScore: number;
+  freshnessScore: number;
+  stateScore: number;
+  diversityScore: number;
+  penaltyScore: number;
+  calculatedAt: number;
+};
+
+export type ArticleRankExplanationSourceRow = {
+  articleId: string;
+  feedTitle: string;
+  publishedAt: number | null;
+  discoveredAt: number;
+  state: ArticleStateSnapshot;
+  rank: ArticleRankScoreComponentsRow | null;
+};
+
 export type ArticleListItemRow = {
   id: string;
   feedId: string;

@@ -216,6 +216,22 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
+  app.get<{ Params: ArticleParams }>("/api/articles/:id/explanation", async (request, reply) => {
+    const explanation = rankingService.explainArticle(request.params.id);
+
+    if (!explanation) {
+      return sendApiError(reply, 404, "NOT_FOUND", "Article not found");
+    }
+
+    return {
+      data: {
+        articleId: explanation.articleId,
+        reasons: explanation.reasons,
+        generatedAt: timestampToIsoValue(explanation.generatedAt)
+      }
+    };
+  });
+
   app.post<{ Params: ArticleParams; Body: ArticleActionBody }>(
     "/api/articles/:id/actions",
     async (request, reply) => {

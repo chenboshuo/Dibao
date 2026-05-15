@@ -217,7 +217,7 @@ type ArticleDetail = ArticleListItem & {
 type RankExplanation = {
   articleId: string;
   reasons: Array<{
-    type: "positive_cluster" | "negative_cluster" | "source" | "freshness" | "duplicate" | "state" | "fallback";
+    type: "source" | "freshness" | "state" | "fallback" | "negative" | "penalty";
     label: string;
     impact: "positive" | "negative" | "neutral";
   }>;
@@ -709,13 +709,13 @@ read_progress
     "articleId": "article_01",
     "reasons": [
       {
-        "type": "positive_cluster",
-        "label": "AI 工具",
+        "type": "source",
+        "label": "The Verge",
         "impact": "positive"
       },
       {
-        "type": "source",
-        "label": "The Verge",
+        "type": "freshness",
+        "label": "Recent article",
         "impact": "positive"
       }
     ],
