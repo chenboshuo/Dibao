@@ -4,6 +4,8 @@ import type {
   ArticleListInput,
   ArticleListItemRow,
   ArticleListResult,
+  ArticleRetentionCandidateRow,
+  ArticleRetentionCleanupResult,
   ArticleRow,
   DibaoDatabase,
   UpsertArticleContentInput,
@@ -50,8 +52,10 @@ type ArticleDetailDbRow = ArticleReadDbRow & {
 };
 
 export interface ArticleRepository {
+  cleanupForRetention(articleIds: string[], now: number): ArticleRetentionCleanupResult;
   findById(id: string): ArticleRow | null;
   findDetailById(id: string): ArticleDetailRow | null;
+  listRetentionCandidates(input: { cutoff: number; limit?: number }): ArticleRetentionCandidateRow[];
   list(input?: ArticleListInput): ArticleListResult;
   upsert(input: UpsertArticleInput): ArticleRow;
   upsertContent(input: UpsertArticleContentInput): void;
@@ -62,6 +66,58 @@ export class SqliteArticleRepository implements ArticleRepository {
 
   constructor(private readonly db: DibaoDatabase) {
     this.fts = new SqliteArticleFtsIndex(db);
+  }
+
+  cleanupForRetention(articleIds: string[], now: number): ArticleRetentionCleanupResult {
+    if (articleIds.length === 0) {
+      return {
+        articlesSoftDeleted: 0,
+        contentsDeleted: 0,
+        ftsRowsDeleted: 0,
+        rankScoresDeleted: 0,
+        rankExplanationsDeleted: 0
+      };
+    }
+
+    const placeholders = articleIds.map(() => "?").join(", ");
+
+    return this.db.transaction(() => {
+      const contentsDeleted = this.db
+        .prepare(`delete from article_contents where article_id in (${placeholders})`)
+        .run(...articleIds).changes;
+      const rankScoresDeleted = this.db
+        .prepare(`delete from article_rank_scores where article_id in (${placeholders})`)
+        .run(...articleIds).changes;
+      const rankExplanationsDeleted = this.db
+        .prepare(`delete from article_rank_explanations where article_id in (${placeholders})`)
+        .run(...articleIds).changes;
+      const articlesSoftDeleted = this.db
+        .prepare(
+          `
+            update articles
+            set
+              status = 'deleted',
+              deleted_at = ?,
+              updated_at = ?
+            where id in (${placeholders})
+              and deleted_at is null
+              and status != 'deleted'
+          `
+        )
+        .run(now, now, ...articleIds).changes;
+
+      for (const articleId of articleIds) {
+        this.fts.delete(articleId);
+      }
+
+      return {
+        articlesSoftDeleted,
+        contentsDeleted,
+        ftsRowsDeleted: articleIds.length,
+        rankScoresDeleted,
+        rankExplanationsDeleted
+      };
+    })();
   }
 
   findById(id: string): ArticleRow | null {
@@ -95,6 +151,34 @@ export class SqliteArticleRepository implements ArticleRepository {
       .get(BASE_RANK_CONTEXT, id) as ArticleDetailDbRow | undefined;
 
     return row ? mapArticleDetail(row) : null;
+  }
+
+  listRetentionCandidates(input: {
+    cutoff: number;
+    limit?: number;
+  }): ArticleRetentionCandidateRow[] {
+    const limit = normalizeLimit(input.limit);
+
+    return (
+      this.db
+        .prepare(
+          `
+            select
+              a.id as articleId,
+              coalesce(a.published_at, a.discovered_at) as retainedAt
+            from articles a
+            left join article_states s on s.article_id = a.id
+            where a.deleted_at is null
+              and a.status != 'deleted'
+              and coalesce(a.published_at, a.discovered_at) < ?
+              and s.favorited_at is null
+              and s.read_later_at is null
+            order by coalesce(a.published_at, a.discovered_at), a.id
+            limit ?
+          `
+        )
+        .all(input.cutoff, limit) as ArticleRetentionCandidateRow[]
+    );
   }
 
   list(input: ArticleListInput = {}): ArticleListResult {
@@ -188,7 +272,10 @@ export class SqliteArticleRepository implements ArticleRepository {
             published_at = excluded.published_at,
             content_hash = excluded.content_hash,
             dedupe_key = excluded.dedupe_key,
-            status = excluded.status,
+            status = case
+              when articles.deleted_at is not null or articles.status = 'deleted' then 'deleted'
+              else excluded.status
+            end,
             updated_at = excluded.updated_at
         `
       )
@@ -268,6 +355,7 @@ export class SqliteArticleRepository implements ArticleRepository {
           from articles a
           left join article_contents ac on ac.article_id = a.id
           where a.id = ? and a.deleted_at is null
+            and a.status != 'deleted'
         `
       )
       .get(articleId) as

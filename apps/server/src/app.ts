@@ -14,6 +14,7 @@ import {
   SqliteJobRepository,
   SqliteRankingRepository,
   SqliteSessionRepository,
+  SqliteVecVectorStore,
   type ArticleActionType,
   type ArticleDetailRow,
   type ArticleListInput,
@@ -36,6 +37,7 @@ import {
   serializeSessionCookie
 } from "./auth-cookie.js";
 import { AuthService, AuthServiceError } from "./auth-service.js";
+import { ArticleRetentionService } from "./article-retention-service.js";
 import {
   FeedManagementService,
   FeedManagementServiceError
@@ -54,6 +56,11 @@ import {
 import { JobRunner } from "./job-runner.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import { BaselineRankingService } from "./ranking-service.js";
+import {
+  DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
+  RetentionCleanupJobService,
+  RetentionCleanupScheduler
+} from "./retention-cleanup-job-service.js";
 
 type HealthStatus = "ok" | "error";
 
@@ -130,6 +137,7 @@ type BuildServerOptions = {
   authRequired?: boolean;
   backgroundJobs?: boolean;
   feedRefreshIntervalMs?: number;
+  retentionCleanupIntervalMs?: number;
   jobRunnerIntervalMs?: number;
   jobRetryDelayMs?: number;
 };
@@ -146,6 +154,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const articles = new SqliteArticleRepository(db);
   const articleActions = new SqliteArticleActionRepository(db);
   const rankings = new SqliteRankingRepository(db);
+  const vectorStore = new SqliteVecVectorStore(db);
   const rankingService = new BaselineRankingService({
     rankings,
     now: options.now
@@ -189,6 +198,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     settings,
     now: options.now
   });
+  const articleRetentionService = new ArticleRetentionService({
+    settings,
+    articles,
+    vectorStore,
+    now: options.now
+  });
+  const retentionCleanupJobService = new RetentionCleanupJobService({
+    jobs,
+    retention: articleRetentionService,
+    now: options.now
+  });
   const cookieOptions = {
     secure: resolveCookieSecure(options.cookieSecure)
   };
@@ -201,7 +221,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   const jobRunner = new JobRunner({
     jobs,
     handlers: {
-      feed_refresh: (job) => feedRefreshJobService.handleFeedRefreshJob(job)
+      feed_refresh: (job) => feedRefreshJobService.handleFeedRefreshJob(job),
+      retention_cleanup: (job) => retentionCleanupJobService.handleRetentionCleanupJob(job)
     },
     now: options.now,
     pollIntervalMs: options.jobRunnerIntervalMs,
@@ -212,6 +233,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     refreshJobs: feedRefreshJobService,
     runner: jobRunner,
     intervalMs: options.feedRefreshIntervalMs ?? DEFAULT_FEED_REFRESH_INTERVAL_MS,
+    onError: (error) => app.log.error(error)
+  });
+  const retentionCleanupScheduler = new RetentionCleanupScheduler({
+    cleanupJobs: retentionCleanupJobService,
+    runner: jobRunner,
+    intervalMs: options.retentionCleanupIntervalMs ?? DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
     onError: (error) => app.log.error(error)
   });
 
@@ -257,10 +284,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     app.addHook("onReady", async () => {
       jobRunner.start();
       feedRefreshScheduler.start();
+      retentionCleanupScheduler.start();
     });
   }
 
   app.addHook("onClose", async () => {
+    retentionCleanupScheduler.stop();
     feedRefreshScheduler.stop();
     jobRunner.stop();
   });

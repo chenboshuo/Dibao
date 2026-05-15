@@ -780,6 +780,7 @@ MVP runner 约定：
 - job 失败且 `attempts >= maxAttempts` 时置为 `failed`。
 - runner 启动时会把崩溃遗留的 `running` jobs 重置，避免永久卡住。
 - `feed_refresh` payload 目前只接受 `{ "feedId": "string" }`。
+- `retention_cleanup` payload 目前只接受 `null` 或 `{}`。
 
 索引：
 
@@ -795,24 +796,44 @@ idx_jobs_created_at(created_at)
 
 默认文章保留 60 天。
 
-删除旧文章时：
+保留天数配置来源：
 
-- 删除 `article_contents.content_html`。
-- 删除 `article_contents.content_text`。
+```text
+app_settings.retention.articleDays > DIBAO_ARTICLE_RETENTION_DAYS > 60
+```
+
+合法范围为 `1..3650`。非法 setting/env 会回退到默认值 `60`。
+
+过期判断使用：
+
+```text
+coalesce(published_at, discovered_at) < now - retentionDays
+```
+
+删除旧文章时采用 soft delete article row + hard cleanup 派生数据：
+
+- 将 `articles.status` 设为 `deleted`。
+- 将 `articles.deleted_at` 和 `articles.updated_at` 设为清理时间。
+- 保留 `articles` 基础元数据，避免破坏行为日志外键。
+- 删除 `article_contents` row。
+- 删除 `article_fts` row。
+- 删除 `article_rank_scores` 和 `article_rank_explanations`。
 - 删除 `article_embeddings`。
-- 删除 sqlite-vec row。
-- 删除 FTS row。
+- 删除 `article_vector_rows` 和 sqlite-vec row。
+- 保留 `behavior_events`。
+- 保留 `article_states`。
 - 保留已沉淀到 `interest_clusters` 和 `feed_stats` 的长期影响。
-- 可保留 `article_behavior_summaries`。
-
-### 收藏和稍后读
 
 默认不清理：
 
-- 收藏文章
-- 稍后读文章
+- 收藏文章。
+- 稍后读文章。
 
-用户可在设置中调整。
+说明：
+
+- `behavior_events.article_id` 当前使用 FK 关联 `articles(id)`，所以 retention 不 hard delete article row。
+- RSS refresh 遇到 retention-deleted article 时不得恢复正文、FTS、rank 或 vector。
+- 用户可在后续设置页中调整保留天数；本轮先提供内部 setting/env foundation。
 
 ## Rebuild 策略
 

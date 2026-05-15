@@ -11,6 +11,7 @@ export interface VectorStore {
   ensureIndex(embeddingIndexId: string): void;
   upsertArticleVector(input: ArticleVectorInput): void;
   deleteArticleVector(articleId: string, embeddingIndexId: string): void;
+  deleteArticleVectors(articleId: string): number;
   searchSimilarArticles(input: SimilarArticleQuery): VectorSearchResult[];
   rebuildIndex(embeddingIndexId: string): void;
 }
@@ -141,6 +142,51 @@ export class SqliteVecVectorStore implements VectorStore {
           `
         )
         .run(articleId, embeddingIndexId);
+    })();
+  }
+
+  deleteArticleVectors(articleId: string): number {
+    const rows = this.db
+      .prepare(
+        `
+          select
+            avr.embedding_index_id as embeddingIndexId,
+            avr.vec_rowid as vecRowid,
+            ei.id,
+            ei.provider_id as providerId,
+            ei.model,
+            ei.dimension,
+            ei.distance_metric as distanceMetric,
+            ei.table_name as tableName,
+            ei.status
+          from article_vector_rows avr
+          join embedding_indexes ei on ei.id = avr.embedding_index_id
+          where avr.article_id = ?
+        `
+      )
+      .all(articleId) as Array<EmbeddingIndexRow & { vecRowid: number }>;
+
+    return this.db.transaction(() => {
+      for (const row of rows) {
+        this.createVecTable(row);
+        this.db
+          .prepare(
+            `
+              delete from ${quoteIdentifier(row.tableName)}
+              where rowid = ?
+            `
+          )
+          .run(row.vecRowid);
+      }
+
+      this.db
+        .prepare("delete from article_vector_rows where article_id = ?")
+        .run(articleId);
+      const deletedEmbeddings = this.db
+        .prepare("delete from article_embeddings where article_id = ?")
+        .run(articleId);
+
+      return deletedEmbeddings.changes;
     })();
   }
 

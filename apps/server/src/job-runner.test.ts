@@ -5,11 +5,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   openDatabase,
   SqliteArticleRepository,
+  SqliteAppSettingsRepository,
+  SqliteEmbeddingRepository,
   SqliteFeedRepository,
   SqliteJobRepository,
+  SqliteRankingRepository,
+  SqliteVecVectorStore,
   type DibaoDatabase,
   type JobRow
 } from "@dibao/db";
+import {
+  ArticleRetentionService,
+  DEFAULT_ARTICLE_RETENTION_DAYS,
+  RETENTION_ARTICLE_DAYS_SETTING_KEY
+} from "./article-retention-service.js";
 import {
   FeedRefreshCoordinator,
   FeedRefreshJobService,
@@ -17,6 +26,10 @@ import {
 } from "./feed-refresh-job-service.js";
 import { FeedRefreshService, type FeedFetcher } from "./feed-refresh-service.js";
 import { JobRunner } from "./job-runner.js";
+import {
+  RetentionCleanupJobService,
+  RetentionCleanupScheduler
+} from "./retention-cleanup-job-service.js";
 
 const tempDirs: string[] = [];
 
@@ -124,6 +137,209 @@ describe("job runner foundation", () => {
         attempts: 1,
         error: "Invalid feed_refresh job payload"
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("resolves retention days using setting, env, then default with invalid fallback", () => {
+    const db = createEmptyDatabase();
+
+    try {
+      const settings = new SqliteAppSettingsRepository(db);
+      const retention = new ArticleRetentionService({
+        settings,
+        articles: new SqliteArticleRepository(db),
+        vectorStore: new SqliteVecVectorStore(db),
+        env: {
+          DIBAO_ARTICLE_RETENTION_DAYS: "45"
+        }
+      });
+
+      expect(retention.getRetentionDays()).toBe(45);
+
+      settings.setJson(RETENTION_ARTICLE_DAYS_SETTING_KEY, 30, 1000);
+      expect(retention.getRetentionDays()).toBe(30);
+
+      settings.setJson(RETENTION_ARTICLE_DAYS_SETTING_KEY, "invalid", 1000);
+      expect(retention.getRetentionDays()).toBe(DEFAULT_ARTICLE_RETENTION_DAYS);
+
+      settings.delete(RETENTION_ARTICLE_DAYS_SETTING_KEY);
+      const invalidEnv = new ArticleRetentionService({
+        settings,
+        articles: new SqliteArticleRepository(db),
+        vectorStore: new SqliteVecVectorStore(db),
+        env: {
+          DIBAO_ARTICLE_RETENTION_DAYS: "0"
+        }
+      });
+      expect(invalidEnv.getRetentionDays()).toBe(DEFAULT_ARTICLE_RETENTION_DAYS);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("fails invalid retention cleanup payloads without retrying", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    let cleanupRuns = 0;
+
+    try {
+      jobs.enqueue({
+        id: "job_invalid_retention",
+        type: "retention_cleanup",
+        payloadJson: JSON.stringify({ articleId: "not-accepted" }),
+        maxAttempts: 3,
+        runAfter: 1000,
+        now: 1000
+      });
+      const cleanupJobs = new RetentionCleanupJobService({
+        jobs,
+        retention: {
+          runCleanup() {
+            cleanupRuns += 1;
+            return undefined as never;
+          }
+        },
+        now: () => 2000
+      });
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          retention_cleanup: (job) => cleanupJobs.handleRetentionCleanupJob(job)
+        },
+        now: () => 2000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({
+        id: "job_invalid_retention"
+      });
+      expect(cleanupRuns).toBe(0);
+      expect(jobs.findById("job_invalid_retention")).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        error: "Invalid retention_cleanup job payload"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("retention cleanup prevents deleted articles from being restored by feed refresh", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const settings = new SqliteAppSettingsRepository(db);
+    const vectorStore = new SqliteVecVectorStore(db);
+    const embeddings = new SqliteEmbeddingRepository(db);
+    const rankings = new SqliteRankingRepository(db);
+    const recalculatedArticleIds: string[] = [];
+    const now = Date.parse("2026-05-15T00:00:00.000Z");
+
+    try {
+      feeds.upsert({
+        id: "feed_retention",
+        title: "Retention Feed",
+        feedUrl: "https://example.com/retention.xml",
+        now
+      });
+      const refreshService = new FeedRefreshService({
+        db,
+        feeds,
+        articles,
+        fetcher: fixtureFetcher({
+          "https://example.com/retention.xml": retentionFixtureRss
+        }),
+        ranking: {
+          recalculateArticle(articleId: string) {
+            recalculatedArticleIds.push(articleId);
+            return 1;
+          },
+          recalculateArticles(articleIds: string[]) {
+            recalculatedArticleIds.push(...articleIds);
+            return articleIds.length;
+          },
+          recalculateAll() {
+            return 0;
+          }
+        },
+        now: () => now
+      });
+
+      await refreshService.refreshFeed("feed_retention");
+      const article = articles.list({ feedId: "feed_retention" }).items[0];
+      expect(article).toMatchObject({
+        title: "Retention deleted article"
+      });
+      expect(recalculatedArticleIds).toEqual([article.id]);
+
+      rankings.upsertBaseScore({
+        articleId: article.id,
+        score: 0.5,
+        interestScore: 0,
+        sourceScore: 0,
+        freshnessScore: 0,
+        stateScore: 0,
+        diversityScore: 0,
+        penaltyScore: 0,
+        calculatedAt: now
+      });
+      embeddings.upsertProvider({
+        id: "provider_retention",
+        type: "embedded_local",
+        name: "Retention Fixture",
+        model: "fixture-4d",
+        dimension: 4,
+        enabled: true,
+        now
+      });
+      embeddings.createIndex({
+        id: "index_retention",
+        providerId: "provider_retention",
+        model: "fixture-4d",
+        dimension: 4,
+        now
+      });
+      vectorStore.upsertArticleVector({
+        articleId: article.id,
+        embeddingIndexId: "index_retention",
+        vector: [0.9, 0.1, 0.05, 0.02],
+        contentHash: "hash_retention",
+        now
+      });
+
+      const retention = new ArticleRetentionService({
+        settings,
+        articles,
+        vectorStore,
+        now: () => now,
+        env: {}
+      });
+      expect(retention.runCleanup()).toMatchObject({
+        candidateArticles: 1,
+        articlesSoftDeleted: 1,
+        contentsDeleted: 1,
+        rankScoresDeleted: 1,
+        vectorsDeleted: 1
+      });
+      expect(articles.findDetailById(article.id)).toBeNull();
+      expect(countRows(db, "article_contents", article.id)).toBe(0);
+      expect(countRows(db, "article_embeddings", article.id)).toBe(0);
+      expect(countRows(db, "article_rank_scores", article.id)).toBe(0);
+
+      recalculatedArticleIds.length = 0;
+      await refreshService.refreshFeed("feed_retention");
+
+      expect(articles.findById(article.id)).toMatchObject({
+        status: "deleted",
+        deletedAt: now
+      });
+      expect(articles.findDetailById(article.id)).toBeNull();
+      expect(articles.list({ feedId: "feed_retention" }).items).toHaveLength(0);
+      expect(countRows(db, "article_contents", article.id)).toBe(0);
+      expect(countRows(db, "article_embeddings", article.id)).toBe(0);
+      expect(countRows(db, "article_rank_scores", article.id)).toBe(0);
+      expect(recalculatedArticleIds).toEqual([]);
     } finally {
       db.close();
     }
@@ -244,6 +460,42 @@ describe("job runner foundation", () => {
     await expect(scheduler.tick()).resolves.toEqual(["job_1"]);
     expect(drained).toBe(true);
   });
+
+  it("retention scheduler enqueues one cleanup job and wakes the runner", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    let drained = false;
+
+    try {
+      const cleanupJobs = new RetentionCleanupJobService({
+        jobs,
+        retention: {
+          runCleanup() {
+            return undefined as never;
+          }
+        },
+        jobIdFactory: () => "job_retention_cleanup",
+        now: () => 1000
+      });
+      const scheduler = new RetentionCleanupScheduler({
+        cleanupJobs,
+        runner: {
+          async drainDue() {
+            drained = true;
+            return 0;
+          }
+        },
+        intervalMs: 60_000
+      });
+
+      await expect(scheduler.tick()).resolves.toBe("job_retention_cleanup");
+      await expect(scheduler.tick()).resolves.toBe("job_retention_cleanup");
+      expect(drained).toBe(true);
+      expect(jobs.listOpenByType("retention_cleanup")).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 function createEmptyDatabase(): DibaoDatabase {
@@ -284,8 +536,16 @@ function minimalJob(id: string): JobRow {
   };
 }
 
+function countRows(db: DibaoDatabase, table: string, articleId: string): number {
+  return (
+    db
+      .prepare(`select count(*) as count from ${table} where article_id = ?`)
+      .get(articleId) as { count: number }
+  ).count;
+}
+
 const fixtureRss = `<?xml version="1.0"?>
-<rss version="2.0">
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
     <title>Job Runner Feed</title>
     <link>https://example.com</link>
@@ -296,6 +556,23 @@ const fixtureRss = `<?xml version="1.0"?>
       <guid>job-runner</guid>
       <pubDate>Thu, 14 May 2026 08:00:00 GMT</pubDate>
       <description>Queued refresh content.</description>
+    </item>
+  </channel>
+</rss>`;
+
+const retentionFixtureRss = `<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Retention Feed</title>
+    <link>https://example.com</link>
+    <description>Retention fixture feed</description>
+    <item>
+      <title>Retention deleted article</title>
+      <link>https://example.com/retention-deleted</link>
+      <guid>retention-deleted</guid>
+      <pubDate>Thu, 01 Jan 2026 08:00:00 GMT</pubDate>
+      <description>cleanuprestoreguard</description>
+      <content:encoded><![CDATA[<p>cleanuprestoreguard full text</p>]]></content:encoded>
     </item>
   </channel>
 </rss>`;

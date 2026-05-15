@@ -7,6 +7,7 @@ import {
   type ParsedFeedItem
 } from "@dibao/rss";
 import type {
+  ArticleRow,
   ArticleRepository,
   DibaoDatabase,
   FeedRepository,
@@ -152,10 +153,14 @@ export class FeedRefreshService {
       for (const item of input.parsed.items) {
         const articleInput = articleInputForFeedItem(feed, item, fetchedAt);
         const existing = this.options.articles.findById(articleInput.id);
-        articleIds.push(articleInput.id);
-        this.options.articles.upsert(articleInput);
+        const article = this.options.articles.upsert(articleInput);
+        if (isRetentionDeletedArticle(article)) {
+          continue;
+        }
+
+        articleIds.push(article.id);
         this.options.articles.upsertContent({
-          articleId: articleInput.id,
+          articleId: article.id,
           contentHtml: item.contentHtml,
           contentText: item.contentText,
           extractionStatus: "feed_only",
@@ -270,6 +275,10 @@ function canonicalizeArticleUrl(value: string): string | null {
 function cleanOptional(value: string | null): string | null {
   const cleaned = value?.trim();
   return cleaned ? cleaned : null;
+}
+
+function isRetentionDeletedArticle(article: ArticleRow): boolean {
+  return article.status === "deleted" || article.deletedAt !== null;
 }
 
 function feedIdForUrl(feedUrl: string): string {

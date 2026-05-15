@@ -55,6 +55,12 @@ within retention window
 unread preferred
 ```
 
+说明：
+
+- Retention cleanup 会 soft delete 过期普通文章，并清理正文、FTS、rank 和 vector 派生数据。
+- `behavior_events`、`article_states`、`feed_stats` 和 `interest_clusters` 保留，用于长期画像和来源统计。
+- 过期文章被清理后不再作为推荐候选；后续 RSS refresh 不应恢复该 article 的正文、rank 或 vector。
+
 ## 行为权重
 
 行为权重用于更新用户画像和来源统计。

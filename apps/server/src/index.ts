@@ -6,6 +6,9 @@ const port = Number(process.env.DIBAO_PORT ?? 8080);
 const server = buildServer({
   backgroundJobs: process.env.DIBAO_BACKGROUND_JOBS !== "false",
   feedRefreshIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_FEED_REFRESH_INTERVAL_MS),
+  retentionCleanupIntervalMs: parseOptionalPositiveInteger(
+    process.env.DIBAO_RETENTION_CLEANUP_INTERVAL_MS
+  ),
   jobRunnerIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_INTERVAL_MS)
 });
 

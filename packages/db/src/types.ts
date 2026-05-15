@@ -80,6 +80,19 @@ export type EnqueueJobInput = {
   now?: number;
 };
 
+export type ArticleRetentionCandidateRow = {
+  articleId: string;
+  retainedAt: number;
+};
+
+export type ArticleRetentionCleanupResult = {
+  articlesSoftDeleted: number;
+  contentsDeleted: number;
+  ftsRowsDeleted: number;
+  rankScoresDeleted: number;
+  rankExplanationsDeleted: number;
+};
+
 export type UpsertFeedInput = {
   id: string;
   folderId?: string | null;

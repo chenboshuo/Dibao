@@ -232,6 +232,210 @@ describe("db package", () => {
     }
   });
 
+  it("cleans retention candidates without losing behavior state or saved articles", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      const articles = new SqliteArticleRepository(db);
+      const actions = new SqliteArticleActionRepository(db);
+      const embeddings = new SqliteEmbeddingRepository(db);
+      const vectorStore = new SqliteVecVectorStore(db);
+      const fts = new SqliteArticleFtsIndex(db);
+      const now = Date.parse("2026-05-15T00:00:00.000Z");
+      const cutoff = now - 60 * 24 * 60 * 60 * 1000;
+
+      feeds.upsert({
+        id: "feed_retention",
+        title: "Retention Feed",
+        feedUrl: "https://example.com/retention.xml",
+        now
+      });
+      for (const article of [
+        {
+          id: "article_old_published",
+          publishedAt: cutoff - 1000,
+          discoveredAt: cutoff + 1000,
+          title: "Old published cleanupvanish"
+        },
+        {
+          id: "article_old_discovered",
+          publishedAt: null,
+          discoveredAt: cutoff - 2000,
+          title: "Old discovered cleanupvanish"
+        },
+        {
+          id: "article_favorite_old",
+          publishedAt: cutoff - 3000,
+          discoveredAt: cutoff - 3000,
+          title: "Old favorite protected"
+        },
+        {
+          id: "article_read_later_old",
+          publishedAt: cutoff - 4000,
+          discoveredAt: cutoff - 4000,
+          title: "Old later protected"
+        },
+        {
+          id: "article_recent",
+          publishedAt: cutoff + 1000,
+          discoveredAt: cutoff + 1000,
+          title: "Recent active"
+        }
+      ]) {
+        articles.upsert({
+          id: article.id,
+          feedId: "feed_retention",
+          url: `https://example.com/${article.id}`,
+          canonicalUrl: `https://example.com/${article.id}`,
+          title: article.title,
+          summary: "Retention fixture.",
+          publishedAt: article.publishedAt,
+          discoveredAt: article.discoveredAt,
+          dedupeKey: article.id,
+          now: article.discoveredAt
+        });
+        articles.upsertContent({
+          articleId: article.id,
+          contentText: `${article.title} body`,
+          extractionStatus: "success",
+          extractedAt: article.discoveredAt,
+          now: article.discoveredAt
+        });
+      }
+
+      expect(
+        actions.record({
+          articleId: "article_old_published",
+          type: "open",
+          eventId: "event_old_open",
+          now
+        })
+      ).not.toBeNull();
+      expect(
+        actions.record({
+          articleId: "article_favorite_old",
+          type: "favorite",
+          eventId: "event_favorite",
+          now
+        })
+      ).not.toBeNull();
+      expect(
+        actions.record({
+          articleId: "article_read_later_old",
+          type: "read_later",
+          eventId: "event_later",
+          now
+        })
+      ).not.toBeNull();
+
+      insertRank(db, "article_old_published", 0.5, now);
+      embeddings.upsertProvider({
+        id: "provider_retention",
+        type: "embedded_local",
+        name: "Retention Fixture",
+        model: "fixture-4d",
+        dimension: 4,
+        enabled: true,
+        now
+      });
+      for (const index of ["index_retention_one", "index_retention_two"]) {
+        embeddings.createIndex({
+          id: index,
+          providerId: "provider_retention",
+          model: "fixture-4d",
+          dimension: 4,
+          now
+        });
+        vectorStore.upsertArticleVector({
+          articleId: "article_old_published",
+          embeddingIndexId: index,
+          vector: [0.9, 0.1, 0.05, 0.02],
+          contentHash: `hash_${index}`,
+          now
+        });
+      }
+
+      const candidates = articles.listRetentionCandidates({ cutoff, limit: 10 });
+      expect(candidates.map((candidate) => candidate.articleId)).toEqual([
+        "article_old_discovered",
+        "article_old_published"
+      ]);
+
+      const vectorRowsDeleted = candidates.reduce(
+        (count, candidate) => count + vectorStore.deleteArticleVectors(candidate.articleId),
+        0
+      );
+      const cleanup = articles.cleanupForRetention(
+        candidates.map((candidate) => candidate.articleId),
+        now
+      );
+
+      expect(vectorRowsDeleted).toBe(2);
+      expect(cleanup).toMatchObject({
+        articlesSoftDeleted: 2,
+        contentsDeleted: 2,
+        ftsRowsDeleted: 2,
+        rankScoresDeleted: 1
+      });
+      expect(articles.findById("article_old_published")).toMatchObject({
+        status: "deleted",
+        deletedAt: now
+      });
+      expect(articles.list({ feedId: "feed_retention" }).items.map((article) => article.id)).toEqual([
+        "article_recent",
+        "article_favorite_old",
+        "article_read_later_old"
+      ]);
+      expect(articles.findDetailById("article_old_published")).toBeNull();
+      expect(fts.search("cleanupvanish", 10)).toHaveLength(0);
+      expect(
+        db.prepare("select count(*) as count from article_contents where article_id = ?").get(
+          "article_old_published"
+        )
+      ).toEqual({ count: 0 });
+      expect(
+        db.prepare("select count(*) as count from article_embeddings where article_id = ?").get(
+          "article_old_published"
+        )
+      ).toEqual({ count: 0 });
+      expect(
+        db.prepare("select count(*) as count from article_vector_rows where article_id = ?").get(
+          "article_old_published"
+        )
+      ).toEqual({ count: 0 });
+      expect(
+        db.prepare("select count(*) as count from behavior_events where article_id = ?").get(
+          "article_old_published"
+        )
+      ).toEqual({ count: 1 });
+      expect(
+        db.prepare("select count(*) as count from article_states where article_id = ?").get(
+          "article_old_published"
+        )
+      ).toEqual({ count: 1 });
+
+      const upserted = articles.upsert({
+        id: "article_old_published",
+        feedId: "feed_retention",
+        url: "https://example.com/article_old_published",
+        canonicalUrl: "https://example.com/article_old_published",
+        title: "Old published returned",
+        summary: "Returned by feed.",
+        publishedAt: now,
+        discoveredAt: now,
+        dedupeKey: "article_old_published",
+        status: "active",
+        now: now + 1000
+      });
+      expect(upserted).toMatchObject({
+        status: "deleted",
+        deletedAt: now
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("initializes schema, repositories, FTS5, and sqlite-vec vector rebuild flow", () => {
     const db = openDatabase(tempDatabasePath(), { migrate: true });
     try {
@@ -472,6 +676,32 @@ function tempDatabasePath(): string {
   const dir = mkdtempSync(join(tmpdir(), "dibao-db-"));
   tempDirs.push(dir);
   return join(dir, "dibao.sqlite");
+}
+
+function insertRank(
+  db: ReturnType<typeof openDatabase>,
+  articleId: string,
+  score: number,
+  calculatedAt: number
+): void {
+  db.prepare(
+    `
+      insert into article_rank_scores (
+        article_id,
+        rank_context,
+        embedding_index_id,
+        score,
+        interest_score,
+        source_score,
+        freshness_score,
+        state_score,
+        diversity_score,
+        penalty_score,
+        calculated_at
+      )
+      values (?, 'base', null, ?, 0, 0, 0, 0, 0, 0, ?)
+    `
+  ).run(articleId, score, calculatedAt);
 }
 
 function hasTableOrView(db: ReturnType<typeof openDatabase>, name: string): boolean {
