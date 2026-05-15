@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dibaoVersion } from "@dibao/shared";
 import {
@@ -8,7 +8,10 @@ import {
   type ArticleDetail,
   type ArticleListItem,
   type ArticleState,
+  type ArticleView,
   type Feed,
+  type FeedFolder,
+  type OpmlImportResponse,
   type RankExplanation,
   type RankExplanationReason
 } from "./api.js";
@@ -27,7 +30,14 @@ const navigationItems: NavigationItemKey[] = [
 
 type Notice =
   | { type: "feedAddedAndRefreshed"; feedTitle: string }
-  | { type: "feedRefreshed"; feedTitle: string };
+  | { type: "feedRefreshed"; feedTitle: string }
+  | { type: "opmlImported"; result: OpmlImportResponse }
+  | { type: "opmlExported" };
+
+type SourceSelection =
+  | { type: "all" }
+  | { type: "folder"; folderId: string }
+  | { type: "feed"; feedId: string };
 
 export type ArticleActionIntent = "favorite" | "readLater" | "readStatus" | "notInterested";
 
@@ -38,33 +48,53 @@ type PendingArticleAction = {
 
 export function App() {
   const { t } = useI18n();
+  const [feedFolders, setFeedFolders] = useState<FeedFolder[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
-  const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
+  const [sourceSelection, setSourceSelection] = useState<SourceSelection>({ type: "all" });
+  const [articleView, setArticleView] = useState<ArticleView>("latest");
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(null);
   const [rankExplanation, setRankExplanation] = useState<RankExplanation | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
   const [isFeedsLoading, setIsFeedsLoading] = useState(true);
   const [isArticlesLoading, setIsArticlesLoading] = useState(true);
+  const [isLoadingMoreArticles, setIsLoadingMoreArticles] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isExplanationLoading, setIsExplanationLoading] = useState(false);
   const [isAddingFeed, setIsAddingFeed] = useState(false);
+  const [isImportingOpml, setIsImportingOpml] = useState(false);
+  const [isExportingOpml, setIsExportingOpml] = useState(false);
   const [refreshingFeedId, setRefreshingFeedId] = useState<string | null>(null);
   const [feedError, setFeedError] = useState<string | null>(null);
   const [articleError, setArticleError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [explanationError, setExplanationError] = useState<string | null>(null);
   const [articleActionError, setArticleActionError] = useState<string | null>(null);
+  const [opmlSummary, setOpmlSummary] = useState<OpmlImportResponse | null>(null);
+  const [nextArticleCursor, setNextArticleCursor] = useState<string | null>(null);
   const [pendingArticleAction, setPendingArticleAction] = useState<PendingArticleAction | null>(
     null
   );
   const [notice, setNotice] = useState<Notice | null>(null);
   const openedArticleIds = useRef(new Set<string>());
+  const articleRequestVersion = useRef(0);
 
   const selectedFeed = useMemo(
-    () => feeds.find((feed) => feed.id === selectedFeedId) ?? null,
-    [feeds, selectedFeedId]
+    () =>
+      sourceSelection.type === "feed"
+        ? feeds.find((feed) => feed.id === sourceSelection.feedId) ?? null
+        : null,
+    [feeds, sourceSelection]
+  );
+
+  const selectedFolder = useMemo(
+    () =>
+      sourceSelection.type === "folder"
+        ? feedFolders.find((folder) => folder.id === sourceSelection.folderId) ?? null
+        : null,
+    [feedFolders, sourceSelection]
   );
 
   function applyArticleState(articleId: string, state: ArticleState) {
@@ -83,6 +113,34 @@ export function App() {
           }
         : current
     );
+  }
+
+  function resetArticleListForPendingQuery() {
+    articleRequestVersion.current += 1;
+    setArticles([]);
+    setNextArticleCursor(null);
+    setSelectedArticleId(null);
+    setArticleDetail(null);
+    setRankExplanation(null);
+    setArticleError(null);
+    setLoadMoreError(null);
+    setIsLoadingMoreArticles(false);
+    setDetailError(null);
+    setExplanationError(null);
+  }
+
+  function handleSelectSource(source: SourceSelection) {
+    if (!sameSourceSelection(sourceSelection, source)) {
+      resetArticleListForPendingQuery();
+    }
+    setSourceSelection(source);
+  }
+
+  function handleArticleViewChange(view: ArticleView) {
+    if (articleView !== view) {
+      resetArticleListForPendingQuery();
+    }
+    setArticleView(view);
   }
 
   const refreshArticleExplanation = useCallback(async (articleId: string) => {
@@ -107,8 +165,10 @@ export function App() {
     try {
       const nextFeeds = await dibaoApi.listFeeds();
       setFeeds(nextFeeds);
-      setSelectedFeedId((current) =>
-        current && nextFeeds.some((feed) => feed.id === current) ? current : null
+      setSourceSelection((current) =>
+        current.type === "feed" && !nextFeeds.some((feed) => feed.id === current.feedId)
+          ? { type: "all" }
+          : current
       );
     } catch (error) {
       setFeedError(userMessageForError(error, t.errors.api));
@@ -117,34 +177,69 @@ export function App() {
     }
   }, [t.errors.api]);
 
-  const loadArticles = useCallback(async (feedId: string | null) => {
-    setIsArticlesLoading(true);
-    setArticleError(null);
-
+  const loadFeedFolders = useCallback(async () => {
     try {
-      const response = await dibaoApi.listArticles({ feedId, limit: 50 });
-      setArticles(response.data);
-      setSelectedArticleId((current) =>
-        current && response.data.some((article) => article.id === current)
-          ? current
-          : response.data[0]?.id ?? null
+      const nextFolders = await dibaoApi.listFeedFolders();
+      setFeedFolders(nextFolders);
+      setSourceSelection((current) =>
+        current.type === "folder" &&
+        !nextFolders.some((folder) => folder.id === current.folderId)
+          ? { type: "all" }
+          : current
       );
     } catch (error) {
+      setFeedError(userMessageForError(error, t.errors.api));
+    }
+  }, [t.errors.api]);
+
+  const loadArticles = useCallback(async (selection: SourceSelection, view: ArticleView) => {
+    const requestVersion = articleRequestVersion.current + 1;
+    articleRequestVersion.current = requestVersion;
+    setIsArticlesLoading(true);
+    setArticleError(null);
+    setLoadMoreError(null);
+    setNextArticleCursor(null);
+    setArticles([]);
+    setSelectedArticleId(null);
+    setArticleDetail(null);
+    setRankExplanation(null);
+    setDetailError(null);
+    setExplanationError(null);
+
+    try {
+      const response = await dibaoApi.listArticles({
+        ...articleQueryFor(selection),
+        view,
+        limit: 50
+      });
+      if (requestVersion !== articleRequestVersion.current) {
+        return;
+      }
+      setArticles(response.data);
+      setNextArticleCursor(response.page.nextCursor);
+      setSelectedArticleId(response.data[0]?.id ?? null);
+    } catch (error) {
+      if (requestVersion !== articleRequestVersion.current) {
+        return;
+      }
       setArticleError(userMessageForError(error, t.errors.api));
       setArticles([]);
       setSelectedArticleId(null);
+      setNextArticleCursor(null);
     } finally {
-      setIsArticlesLoading(false);
+      if (requestVersion === articleRequestVersion.current) {
+        setIsArticlesLoading(false);
+      }
     }
   }, [t.errors.api]);
 
   useEffect(() => {
-    void loadFeeds();
-  }, [loadFeeds]);
+    void Promise.all([loadFeedFolders(), loadFeeds()]);
+  }, [loadFeedFolders, loadFeeds]);
 
   useEffect(() => {
-    void loadArticles(selectedFeedId);
-  }, [loadArticles, selectedFeedId]);
+    void loadArticles(sourceSelection, articleView);
+  }, [articleView, loadArticles, sourceSelection]);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,7 +323,7 @@ export function App() {
       setFeedUrl("");
       setNotice({ type: "feedAddedAndRefreshed", feedTitle: result.feed.title });
       await loadFeeds();
-      setSelectedFeedId(result.feed.id);
+      handleSelectSource({ type: "feed", feedId: result.feed.id });
     } catch (error) {
       setFeedError(userMessageForError(error, t.errors.api));
     } finally {
@@ -245,11 +340,89 @@ export function App() {
     try {
       await dibaoApi.refreshFeed(feed.id);
       setNotice({ type: "feedRefreshed", feedTitle: feed.title });
-      await Promise.all([loadFeeds(), loadArticles(selectedFeedId)]);
+      await Promise.all([loadFeeds(), loadArticles(sourceSelection, articleView)]);
     } catch (error) {
       setFeedError(userMessageForError(error, t.errors.api));
     } finally {
       setRefreshingFeedId(null);
+    }
+  }
+
+  async function handleImportOpml(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0] ?? null;
+    event.currentTarget.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    setIsImportingOpml(true);
+    setFeedError(null);
+    setOpmlSummary(null);
+    setNotice(null);
+
+    try {
+      const result = await dibaoApi.importOpml(file);
+      setOpmlSummary(result);
+      setNotice({ type: "opmlImported", result });
+      await Promise.all([
+        loadFeedFolders(),
+        loadFeeds(),
+        loadArticles(sourceSelection, articleView)
+      ]);
+    } catch (error) {
+      setFeedError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsImportingOpml(false);
+    }
+  }
+
+  async function handleExportOpml() {
+    setIsExportingOpml(true);
+    setFeedError(null);
+    setNotice(null);
+
+    try {
+      const xml = await dibaoApi.exportOpml();
+      downloadTextFile("dibao-subscriptions.opml", xml, "application/xml");
+      setNotice({ type: "opmlExported" });
+    } catch (error) {
+      setFeedError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsExportingOpml(false);
+    }
+  }
+
+  async function handleLoadMoreArticles() {
+    if (!nextArticleCursor) {
+      return;
+    }
+
+    const requestVersion = articleRequestVersion.current;
+    setIsLoadingMoreArticles(true);
+    setLoadMoreError(null);
+
+    try {
+      const response = await dibaoApi.listArticles({
+        ...articleQueryFor(sourceSelection),
+        view: articleView,
+        limit: 50,
+        cursor: nextArticleCursor
+      });
+      if (requestVersion !== articleRequestVersion.current) {
+        return;
+      }
+      setArticles((current) => appendUniqueArticles(current, response.data));
+      setNextArticleCursor(response.page.nextCursor);
+    } catch (error) {
+      if (requestVersion !== articleRequestVersion.current) {
+        return;
+      }
+      setLoadMoreError(userMessageForError(error, t.errors.api));
+    } finally {
+      if (requestVersion === articleRequestVersion.current) {
+        setIsLoadingMoreArticles(false);
+      }
     }
   }
 
@@ -273,7 +446,17 @@ export function App() {
     }
   }
 
-  const noticeText = notice ? t.notices[notice.type](notice.feedTitle) : null;
+  function handleNavigationClick(event: MouseEvent<HTMLAnchorElement>, item: NavigationItemKey) {
+    const view = navigationViewFor(item);
+    if (!view) {
+      return;
+    }
+
+    event.preventDefault();
+    handleArticleViewChange(view);
+  }
+
+  const noticeText = notice ? noticeTextFor(notice, t) : null;
 
   return (
     <main className={styles.shell}>
@@ -288,9 +471,12 @@ export function App() {
         <nav className={styles.nav}>
           {navigationItems.map((item) => (
             <a
-              className={item === "latest" ? styles.navItemActive : styles.navItem}
+              className={
+                navigationViewFor(item) === articleView ? styles.navItemActive : styles.navItem
+              }
               href="#"
               key={item}
+              onClick={(event) => handleNavigationClick(event, item)}
             >
               {t.navigation.items[item]}
             </a>
@@ -302,11 +488,12 @@ export function App() {
         <header className={styles.topbar}>
           <div>
             <p className={styles.kicker}>{t.shell.kicker}</p>
-            <h1 id="page-title">{t.shell.pageTitle}</h1>
+            <h1 id="page-title">{t.shell.pageTitles[articleView]}</h1>
           </div>
           <div className={styles.topbarMeta}>
             <span className={styles.statusText} aria-live="polite">
-              {noticeText ?? (isArticlesLoading ? t.shell.loadingArticles : t.shell.latestView)}
+              {noticeText ??
+                (isArticlesLoading ? t.shell.loadingArticles : t.shell.viewStatus[articleView])}
             </span>
             <span className={styles.version}>{t.common.version(dibaoVersion)}</span>
           </div>
@@ -315,26 +502,38 @@ export function App() {
         <div className={styles.workspace}>
           <FeedPanel
             feedError={feedError}
+            feedFolders={feedFolders}
             feeds={feeds}
             feedUrl={feedUrl}
             isAddingFeed={isAddingFeed}
             isFeedsLoading={isFeedsLoading}
+            isExportingOpml={isExportingOpml}
+            isImportingOpml={isImportingOpml}
             onAddFeed={handleAddFeed}
+            onExportOpml={handleExportOpml}
+            onImportOpml={handleImportOpml}
             onRefreshFeed={handleRefreshFeed}
-            onSelectFeed={setSelectedFeedId}
+            onSelectSource={handleSelectSource}
             onUpdateFeedUrl={setFeedUrl}
+            opmlSummary={opmlSummary}
             refreshingFeedId={refreshingFeedId}
-            selectedFeedId={selectedFeedId}
+            sourceSelection={sourceSelection}
           />
 
           <ArticleListPanel
             articleError={articleError}
+            articleView={articleView}
             articles={articles}
             feedCount={feeds.length}
             isArticlesLoading={isArticlesLoading}
+            isLoadingMore={isLoadingMoreArticles}
+            loadMoreError={loadMoreError}
+            nextCursor={nextArticleCursor}
+            onLoadMore={handleLoadMoreArticles}
             onSelectArticle={setSelectedArticleId}
             selectedArticleId={selectedArticleId}
             selectedFeed={selectedFeed}
+            selectedFolder={selectedFolder}
           />
 
           <ArticleDetailPanel
@@ -362,20 +561,28 @@ export function App() {
   );
 }
 
-function FeedPanel(props: {
+export function FeedPanel(props: {
   feedError: string | null;
+  feedFolders: FeedFolder[];
   feeds: Feed[];
   feedUrl: string;
   isAddingFeed: boolean;
   isFeedsLoading: boolean;
+  isExportingOpml: boolean;
+  isImportingOpml: boolean;
   onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
+  onExportOpml: () => void;
+  onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
   onRefreshFeed: (feed: Feed) => void;
-  onSelectFeed: (feedId: string | null) => void;
+  onSelectSource: (source: SourceSelection) => void;
   onUpdateFeedUrl: (value: string) => void;
+  opmlSummary: OpmlImportResponse | null;
   refreshingFeedId: string | null;
-  selectedFeedId: string | null;
+  sourceSelection: SourceSelection;
 }) {
   const { t, formatDate } = useI18n();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const feedCountByFolder = useMemo(() => countFeedsByFolder(props.feeds), [props.feeds]);
 
   return (
     <section className={styles.feedPanel} aria-labelledby="feeds-title">
@@ -404,12 +611,62 @@ function FeedPanel(props: {
         </div>
       </form>
 
+      <div className={styles.opmlActions}>
+        <input
+          accept=".opml,.xml,text/xml,application/xml"
+          className={styles.fileInput}
+          onChange={props.onImportOpml}
+          ref={fileInputRef}
+          type="file"
+        />
+        <button
+          className={styles.secondaryButton}
+          disabled={props.isImportingOpml}
+          onClick={() => fileInputRef.current?.click()}
+          type="button"
+        >
+          {props.isImportingOpml ? t.opml.importing : t.opml.import}
+        </button>
+        <button
+          className={styles.secondaryButton}
+          disabled={props.isExportingOpml}
+          onClick={props.onExportOpml}
+          type="button"
+        >
+          {props.isExportingOpml ? t.opml.exporting : t.opml.export}
+        </button>
+      </div>
+
+      {props.opmlSummary ? (
+        <div className={styles.opmlSummary}>
+          <p>
+            {t.opml.importSummary(
+              props.opmlSummary.feedsCreated,
+              props.opmlSummary.feedsSkipped,
+              props.opmlSummary.foldersCreated
+            )}
+          </p>
+          {props.opmlSummary.errors.length > 0 ? (
+            <>
+              <p>{t.opml.importErrors(props.opmlSummary.errors.length)}</p>
+              <ul>
+                {props.opmlSummary.errors.map((error, index) => (
+                  <li key={`${error}-${index}`}>{error}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       {props.feedError ? <p className={styles.errorText}>{props.feedError}</p> : null}
 
       <div className={styles.feedList}>
         <button
-          className={props.selectedFeedId === null ? styles.feedItemActive : styles.feedItem}
-          onClick={() => props.onSelectFeed(null)}
+          className={
+            props.sourceSelection.type === "all" ? styles.feedItemActive : styles.feedItem
+          }
+          onClick={() => props.onSelectSource({ type: "all" })}
           type="button"
         >
           <span>{t.feeds.allFeeds}</span>
@@ -418,14 +675,39 @@ function FeedPanel(props: {
 
         {props.isFeedsLoading ? <SkeletonRows count={5} /> : null}
 
+        {!props.isFeedsLoading && props.feedFolders.length > 0 ? (
+          <>
+            <span className={styles.folderSectionLabel}>{t.folders.title}</span>
+            {props.feedFolders.map((folder) => (
+              <button
+                className={
+                  props.sourceSelection.type === "folder" &&
+                  props.sourceSelection.folderId === folder.id
+                    ? styles.feedItemActive
+                    : styles.feedItem
+                }
+                key={folder.id}
+                onClick={() => props.onSelectSource({ type: "folder", folderId: folder.id })}
+                type="button"
+              >
+                <span>{folder.title}</span>
+                <small>{t.folders.feedCount(feedCountByFolder.get(folder.id) ?? 0)}</small>
+              </button>
+            ))}
+          </>
+        ) : null}
+
         {!props.isFeedsLoading &&
           props.feeds.map((feed) => (
             <div className={styles.feedRow} key={feed.id}>
               <button
                 className={
-                  props.selectedFeedId === feed.id ? styles.feedItemActive : styles.feedItem
+                  props.sourceSelection.type === "feed" &&
+                  props.sourceSelection.feedId === feed.id
+                    ? styles.feedItemActive
+                    : styles.feedItem
                 }
-                onClick={() => props.onSelectFeed(feed.id)}
+                onClick={() => props.onSelectSource({ type: "feed", feedId: feed.id })}
                 type="button"
               >
                 <span>{feed.title}</span>
@@ -451,23 +733,31 @@ function FeedPanel(props: {
   );
 }
 
-function ArticleListPanel(props: {
+export function ArticleListPanel(props: {
   articleError: string | null;
+  articleView: ArticleView;
   articles: ArticleListItem[];
   feedCount: number;
   isArticlesLoading: boolean;
+  isLoadingMore: boolean;
+  loadMoreError: string | null;
+  nextCursor: string | null;
+  onLoadMore: () => void;
   onSelectArticle: (articleId: string) => void;
   selectedArticleId: string | null;
   selectedFeed: Feed | null;
+  selectedFolder: FeedFolder | null;
 }) {
   const { t, formatDate } = useI18n();
+  const sourceTitle =
+    props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
 
   return (
     <section className={styles.articlePanel} aria-labelledby="articles-title">
       <div className={styles.panelHeader}>
         <div>
-          <p className={styles.kicker}>{props.selectedFeed?.title ?? t.articles.allSources}</p>
-          <h2 id="articles-title">{t.articles.title}</h2>
+          <p className={styles.kicker}>{sourceTitle}</p>
+          <h2 id="articles-title">{t.articles.views[props.articleView]}</h2>
         </div>
         <span className={styles.count}>{props.articles.length}</span>
       </div>
@@ -517,6 +807,23 @@ function ArticleListPanel(props: {
               <ArticleStateBadges state={article.state} />
             </button>
           ))}
+
+        {!props.isArticlesLoading && props.nextCursor ? (
+          <div className={styles.loadMoreBar}>
+            <button
+              className={styles.secondaryButton}
+              disabled={props.isLoadingMore}
+              onClick={props.onLoadMore}
+              type="button"
+            >
+              {props.isLoadingMore ? t.articles.loadingMore : t.articles.loadMore}
+            </button>
+          </div>
+        ) : null}
+
+        {!props.isArticlesLoading && props.loadMoreError ? (
+          <p className={styles.paginationError}>{props.loadMoreError}</p>
+        ) : null}
       </div>
     </section>
   );
@@ -774,6 +1081,99 @@ function ReaderSkeleton() {
       <span />
     </div>
   );
+}
+
+function articleQueryFor(source: SourceSelection): { feedId?: string; folderId?: string } {
+  if (source.type === "feed") {
+    return { feedId: source.feedId };
+  }
+
+  if (source.type === "folder") {
+    return { folderId: source.folderId };
+  }
+
+  return {};
+}
+
+function sameSourceSelection(left: SourceSelection, right: SourceSelection): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+
+  if (left.type === "feed" && right.type === "feed") {
+    return left.feedId === right.feedId;
+  }
+
+  if (left.type === "folder" && right.type === "folder") {
+    return left.folderId === right.folderId;
+  }
+
+  return true;
+}
+
+function appendUniqueArticles(
+  current: ArticleListItem[],
+  next: ArticleListItem[]
+): ArticleListItem[] {
+  const seen = new Set(current.map((article) => article.id));
+  return [
+    ...current,
+    ...next.filter((article) => {
+      if (seen.has(article.id)) {
+        return false;
+      }
+      seen.add(article.id);
+      return true;
+    })
+  ];
+}
+
+function countFeedsByFolder(feeds: Feed[]): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const feed of feeds) {
+    if (feed.folderId) {
+      counts.set(feed.folderId, (counts.get(feed.folderId) ?? 0) + 1);
+    }
+  }
+
+  return counts;
+}
+
+function navigationViewFor(item: NavigationItemKey): ArticleView | null {
+  if (item === "latest" || item === "recommended") {
+    return item;
+  }
+
+  return null;
+}
+
+function noticeTextFor(notice: Notice, t: Dictionary): string {
+  switch (notice.type) {
+    case "feedAddedAndRefreshed":
+      return t.notices.feedAddedAndRefreshed(notice.feedTitle);
+    case "feedRefreshed":
+      return t.notices.feedRefreshed(notice.feedTitle);
+    case "opmlImported":
+      return t.notices.opmlImported(
+        notice.result.feedsCreated,
+        notice.result.feedsSkipped,
+        notice.result.foldersCreated
+      );
+    case "opmlExported":
+      return t.notices.opmlExported;
+  }
+}
+
+function downloadTextFile(filename: string, content: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function requestForArticleAction(

@@ -17,6 +17,7 @@ import {
   type ArticleListView,
   type ArticleReadStatus,
   type DibaoDatabase,
+  type FeedFolderRow,
   type FeedListInput,
   type FeedRow
 } from "@dibao/db";
@@ -164,6 +165,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     const statusCode = data.ok ? 200 : 503;
     return reply.status(statusCode).send({ data });
   });
+
+  app.get("/api/feed-folders", async () => ({
+    data: folders.list().map(mapFeedFolder)
+  }));
 
   app.get<{ Querystring: FeedQuery }>("/api/feeds", async (request, reply) => {
     const enabled = parseBooleanParam(request.query.enabled);
@@ -705,6 +710,14 @@ function decodeCursor(cursor: string | undefined): number | undefined | null {
   } catch {
     return null;
   }
+}
+
+function mapFeedFolder(folder: FeedFolderRow) {
+  return {
+    id: folder.id,
+    title: folder.title,
+    sortOrder: folder.sortOrder
+  };
 }
 
 function mapFeed(feed: FeedRow) {

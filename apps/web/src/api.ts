@@ -18,6 +18,12 @@ export type Feed = {
   updatedAt: string;
 };
 
+export type FeedFolder = {
+  id: string;
+  title: string;
+  sortOrder: number;
+};
+
 export type ArticleState = {
   read: boolean;
   favorited: boolean;
@@ -88,9 +94,18 @@ export type RankExplanation = {
   generatedAt: string;
 };
 
+export type ArticleView = "latest" | "recommended";
+
 export type ArticleListResponse = {
   data: ArticleListItem[];
   page: ApiPage;
+};
+
+export type OpmlImportResponse = {
+  foldersCreated: number;
+  feedsCreated: number;
+  feedsSkipped: number;
+  errors: string[];
 };
 
 export type CreateFeedResponse = {
@@ -137,13 +152,16 @@ type ApiErrorPayload = {
 
 export function createDibaoApi(fetcher: ApiFetch = fetch) {
   async function request<T>(path: string, init: RequestInit = {}): Promise<ApiSuccess<T>> {
+    const headers = new Headers(init.headers);
+    headers.set("accept", "application/json");
+
+    if (init.body && !isFormDataBody(init.body) && !headers.has("content-type")) {
+      headers.set("content-type", "application/json");
+    }
+
     const response = await fetcher(path, {
       ...init,
-      headers: {
-        accept: "application/json",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...init.headers
-      }
+      headers
     });
     const payload = await readJson(response);
 
@@ -165,7 +183,36 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
     return payload as ApiSuccess<T>;
   }
 
+  async function requestText(path: string, init: RequestInit = {}): Promise<string> {
+    const response = await fetcher(path, {
+      ...init,
+      headers: {
+        accept: "application/xml, text/xml, */*",
+        ...init.headers
+      }
+    });
+    const text = await response.text();
+
+    if (!response.ok) {
+      const payload = parseJsonText(text);
+      const apiError = isApiErrorPayload(payload) ? payload.error : null;
+      throw new ApiRequestError(
+        response.status,
+        apiError?.code ?? "INTERNAL_ERROR",
+        apiError?.message ?? "",
+        apiError?.details,
+        Boolean(apiError?.message)
+      );
+    }
+
+    return text;
+  }
+
   return {
+    async listFeedFolders(): Promise<FeedFolder[]> {
+      return (await request<FeedFolder[]>("/api/feed-folders")).data;
+    },
+
     async listFeeds(): Promise<Feed[]> {
       return (await request<Feed[]>("/api/feeds")).data;
     },
@@ -188,15 +235,27 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
     },
 
     async listArticles(
-      input: { feedId?: string | null; limit?: number } = {}
+      input: {
+        view?: ArticleView;
+        feedId?: string | null;
+        folderId?: string | null;
+        limit?: number;
+        cursor?: string | null;
+      } = {}
     ): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
-        view: "latest",
+        view: input.view ?? "latest",
         limit: String(input.limit ?? 50)
       });
 
       if (input.feedId) {
         params.set("feedId", input.feedId);
+      }
+      if (input.folderId) {
+        params.set("folderId", input.folderId);
+      }
+      if (input.cursor) {
+        params.set("cursor", input.cursor);
       }
 
       const response = await request<ArticleListItem[]>(`/api/articles?${params.toString()}`);
@@ -232,6 +291,22 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
           }
         )
       ).data;
+    },
+
+    async importOpml(file: File): Promise<OpmlImportResponse> {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      return (
+        await request<OpmlImportResponse>("/api/opml/import", {
+          method: "POST",
+          body: formData
+        })
+      ).data;
+    },
+
+    async exportOpml(): Promise<string> {
+      return requestText("/api/opml/export");
     }
   };
 }
@@ -252,6 +327,14 @@ async function readJson(response: Response): Promise<unknown> {
     return {};
   }
 
+  return parseJsonText(text);
+}
+
+function parseJsonText(text: string): unknown {
+  if (!text) {
+    return {};
+  }
+
   try {
     return JSON.parse(text) as unknown;
   } catch {
@@ -267,4 +350,8 @@ function isApiErrorPayload(payload: unknown): payload is ApiErrorPayload {
     typeof (payload as ApiErrorPayload).error?.code === "string" &&
     typeof (payload as ApiErrorPayload).error?.message === "string"
   );
+}
+
+function isFormDataBody(body: BodyInit): boolean {
+  return typeof FormData !== "undefined" && body instanceof FormData;
 }

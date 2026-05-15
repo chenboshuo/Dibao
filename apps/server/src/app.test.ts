@@ -84,6 +84,50 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("lists feed folders with contract fields", async () => {
+    const db = createEmptyDatabase();
+    const folders = new SqliteFeedFolderRepository(db);
+    folders.upsert({
+      id: "folder_design",
+      title: "Design",
+      sortOrder: 2,
+      now: 1000
+    });
+    folders.upsert({
+      id: "folder_news",
+      title: "News",
+      sortOrder: 1,
+      now: 1000
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/feed-folders"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        data: [
+          {
+            id: "folder_news",
+            title: "News",
+            sortOrder: 1
+          },
+          {
+            id: "folder_design",
+            title: "Design",
+            sortOrder: 2
+          }
+        ]
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("adds a feed and imports feed articles synchronously", async () => {
     const db = createEmptyDatabase();
     const app = buildServer({

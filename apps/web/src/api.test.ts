@@ -3,6 +3,142 @@ import { ApiRequestError, createDibaoApi, userMessageForError } from "./api.js";
 import { dictionaries } from "./i18n.js";
 
 describe("web API client", () => {
+  it("fetches feed folders", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "folder_design",
+              title: "Design",
+              sortOrder: 1
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(api.listFeedFolders()).resolves.toEqual([
+      {
+        id: "folder_design",
+        title: "Design",
+        sortOrder: 1
+      }
+    ]);
+    expect(calls).toEqual(["/api/feed-folders"]);
+  });
+
+  it("lists articles with view, folder, and cursor query", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+
+      return new Response(
+        JSON.stringify({
+          data: [],
+          page: {
+            nextCursor: null
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await api.listArticles({
+      view: "recommended",
+      folderId: "folder_design",
+      limit: 20,
+      cursor: "cursor_1"
+    });
+
+    expect(calls).toEqual([
+      "/api/articles?view=recommended&limit=20&folderId=folder_design&cursor=cursor_1"
+    ]);
+  });
+
+  it("imports OPML without forcing a JSON content type", async () => {
+    const calls: Array<{
+      path: string;
+      bodyIsFormData: boolean;
+      contentType: string | null;
+      method: string | undefined;
+    }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      calls.push({
+        path: String(input),
+        bodyIsFormData: init?.body instanceof FormData,
+        contentType: new Headers(init?.headers).get("content-type"),
+        method: init?.method
+      });
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            foldersCreated: 1,
+            feedsCreated: 2,
+            feedsSkipped: 3,
+            errors: []
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(
+      api.importOpml(new File(["<opml version=\"2.0\" />"], "subscriptions.opml"))
+    ).resolves.toMatchObject({
+      foldersCreated: 1,
+      feedsCreated: 2,
+      feedsSkipped: 3
+    });
+    expect(calls).toEqual([
+      {
+        path: "/api/opml/import",
+        method: "POST",
+        bodyIsFormData: true,
+        contentType: null
+      }
+    ]);
+  });
+
+  it("exports OPML as XML text", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+
+      return new Response("<?xml version=\"1.0\"?><opml version=\"2.0\"></opml>", {
+        status: 200,
+        headers: {
+          "content-type": "application/xml"
+        }
+      });
+    });
+
+    await expect(api.exportOpml()).resolves.toBe(
+      "<?xml version=\"1.0\"?><opml version=\"2.0\"></opml>"
+    );
+    expect(calls).toEqual(["/api/opml/export"]);
+  });
+
   it("fetches article rank explanations", async () => {
     const calls: string[] = [];
     const api = createDibaoApi(async (input) => {

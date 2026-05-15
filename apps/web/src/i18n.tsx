@@ -28,8 +28,16 @@ export const zhCN = {
   shell: {
     kicker: "RSS Ingestion",
     pageTitle: "最新文章",
+    pageTitles: {
+      latest: "最新文章",
+      recommended: "推荐文章"
+    },
     loadingArticles: "正在加载文章",
-    latestView: "最新视图"
+    latestView: "最新视图",
+    viewStatus: {
+      latest: "最新视图",
+      recommended: "推荐视图"
+    }
   },
   feeds: {
     kicker: "订阅源",
@@ -46,9 +54,28 @@ export const zhCN = {
     refreshing: "…",
     refreshTitle: (feedTitle: string) => `刷新 ${feedTitle}`
   },
+  folders: {
+    title: "分组",
+    feedCount: (count: number) => `${count} 个订阅源`
+  },
+  opml: {
+    import: "导入 OPML",
+    importing: "导入中",
+    export: "导出 OPML",
+    exporting: "导出中",
+    importSummary: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
+      `已导入 ${feedsCreated} 个订阅源，跳过 ${feedsSkipped} 个，新增 ${foldersCreated} 个分组。`,
+    importErrors: (count: number) => `${count} 条导入项未完成。`
+  },
   articles: {
     allSources: "全部来源",
     title: "Latest",
+    views: {
+      latest: "最新",
+      recommended: "推荐"
+    },
+    loadMore: "加载更多",
+    loadingMore: "加载中",
     emptyNoFeedsTitle: "还没有订阅源",
     emptyNoFeedsBody: "添加一个 RSS / Atom 源后，文章会出现在这里。",
     emptyNoArticlesTitle: "暂时没有文章",
@@ -125,7 +152,10 @@ export const zhCN = {
   },
   notices: {
     feedAddedAndRefreshed: (feedTitle: string) => `已添加并刷新：${feedTitle}`,
-    feedRefreshed: (feedTitle: string) => `已刷新：${feedTitle}`
+    feedRefreshed: (feedTitle: string) => `已刷新：${feedTitle}`,
+    opmlImported: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
+      `OPML 导入完成：新增 ${feedsCreated} 个订阅源，跳过 ${feedsSkipped} 个，新增 ${foldersCreated} 个分组。`,
+    opmlExported: "OPML 已导出。"
   },
   errors: {
     api: {
@@ -168,8 +198,16 @@ export const enUS = {
   shell: {
     kicker: "RSS Ingestion",
     pageTitle: "Latest Articles",
+    pageTitles: {
+      latest: "Latest Articles",
+      recommended: "Recommended Articles"
+    },
     loadingArticles: "Loading articles",
-    latestView: "Latest view"
+    latestView: "Latest view",
+    viewStatus: {
+      latest: "Latest view",
+      recommended: "Recommended view"
+    }
   },
   feeds: {
     kicker: "Feeds",
@@ -186,9 +224,28 @@ export const enUS = {
     refreshing: "…",
     refreshTitle: (feedTitle: string) => `Refresh ${feedTitle}`
   },
+  folders: {
+    title: "Folders",
+    feedCount: (count: number) => `${count} ${count === 1 ? "feed" : "feeds"}`
+  },
+  opml: {
+    import: "Import OPML",
+    importing: "Importing",
+    export: "Export OPML",
+    exporting: "Exporting",
+    importSummary: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
+      `Imported ${feedsCreated} ${feedsCreated === 1 ? "feed" : "feeds"}, skipped ${feedsSkipped}, added ${foldersCreated} ${foldersCreated === 1 ? "folder" : "folders"}.`,
+    importErrors: (count: number) => `${count} ${count === 1 ? "item" : "items"} could not be imported.`
+  },
   articles: {
     allSources: "All sources",
     title: "Latest",
+    views: {
+      latest: "Latest",
+      recommended: "Recommended"
+    },
+    loadMore: "Load more",
+    loadingMore: "Loading",
     emptyNoFeedsTitle: "No feeds yet",
     emptyNoFeedsBody: "Add an RSS / Atom feed and articles will appear here.",
     emptyNoArticlesTitle: "No articles yet",
@@ -265,7 +322,10 @@ export const enUS = {
   },
   notices: {
     feedAddedAndRefreshed: (feedTitle: string) => `Added and refreshed: ${feedTitle}`,
-    feedRefreshed: (feedTitle: string) => `Refreshed: ${feedTitle}`
+    feedRefreshed: (feedTitle: string) => `Refreshed: ${feedTitle}`,
+    opmlImported: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
+      `OPML imported: added ${feedsCreated} ${feedsCreated === 1 ? "feed" : "feeds"}, skipped ${feedsSkipped}, added ${foldersCreated} ${foldersCreated === 1 ? "folder" : "folders"}.`,
+    opmlExported: "OPML exported."
   },
   errors: {
     api: {
