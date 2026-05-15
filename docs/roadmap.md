@@ -16,12 +16,12 @@ Last updated: 2026-05-15
 
 ### MVP Progress
 
-当前 MVP 进度估算：约 75%。
+当前 MVP 进度估算：约 90%。
 
 估算依据：
 
-- 已完成基础工程、数据库、单用户 setup/auth/session、首次设置向导、RSS 入库、OPML API、Web OPML UI、feed folder 展示筛选、feed 管理 UI、后台刷新 job、文章保留清理、设置页、文章列表分页、基础 Web 阅读器、文章动作、baseline ranking、推荐解释和 i18n foundation。
-- 尚未完成让普通自托管用户可用的关键闭环：Docker 打包、embedding provider、embedding job pipeline、sqlite-vec 生产集成、Profile Algorithm v0、推荐排序 v1、E2E 测试。
+- 已完成基础工程、数据库、单用户 setup/auth/session、首次设置向导、RSS 入库、OPML API、Web OPML UI、feed folder 展示筛选、feed 管理 UI、后台刷新 job、文章保留清理、设置页、OpenAI-compatible embedding provider、embedding job pipeline、sqlite-vec 生产写入/重建、文章列表分页、基础 Web 阅读器、文章动作、baseline ranking、推荐解释和 i18n foundation。
+- 尚未完成让普通自托管用户可用的关键闭环：Docker 打包、Profile Algorithm v0、推荐排序 v1、E2E 测试和用户文档。
 - 当前系统已经有可运行纵切，但还不是可发布给第一批自托管用户的 MVP。
 - 后续执行节奏调整为更大的开发包，每轮目标推进约 15 个百分点；单轮任务会合并强相关的后端、前端、测试和文档工作。
 
@@ -86,6 +86,7 @@ Last updated: 2026-05-15
 | C-21 | Done | P0 | backend/infra/frontend/test | Background feed refresh jobs | `POST /api/feeds/refresh` 可为 enabled feeds 入队刷新；内部 job runner 支持重试、stale recovery、失败隔离和 Web “刷新全部”入口。 |
 | C-22 | Done | P0 | backend/infra/algorithm/test/docs | Article retention cleanup | 默认 60 天文章保留策略可通过 setting/env 配置；旧文章 soft delete 并清理正文、FTS、rank 和 vector serving index，同时保留行为与状态数据。 |
 | C-23 | Done | P0 | frontend/backend/design/test/docs | Settings page v0 | Web 设置页可配置语言、阅读参数和文章保留天数；Settings API 严格校验并持久化到 `app_settings`；阅读 CSS variables 即时生效。 |
+| C-24 | Done | P0 | backend/frontend/algorithm/infra/test/docs | Embedding provider pipeline | OpenAI-compatible provider 可配置和测试；新文章可入队生成 embedding；向量写入 authority table 和 sqlite-vec index；支持 index rebuild。 |
 
 ## MVP Remaining Work
 
