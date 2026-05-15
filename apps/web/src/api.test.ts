@@ -3,6 +3,66 @@ import { ApiRequestError, createDibaoApi, userMessageForError } from "./api.js";
 import { dictionaries } from "./i18n.js";
 
 describe("web API client", () => {
+  it("posts article actions using the contract-shaped body", async () => {
+    const calls: Array<{ path: string; body: unknown; method: string | undefined }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      calls.push({
+        path: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+        method: init?.method
+      });
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            state: {
+              read: false,
+              favorited: false,
+              readLater: false,
+              hidden: false,
+              notInterested: false,
+              readingProgress: 0
+            }
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await api.postArticleAction("article/one", {
+      type: "favorite",
+      value: false
+    });
+    await api.postArticleAction("article/one", {
+      type: "read_progress",
+      progress: 0.5
+    });
+
+    expect(calls).toEqual([
+      {
+        path: "/api/articles/article%2Fone/actions",
+        method: "POST",
+        body: {
+          type: "favorite",
+          value: false
+        }
+      },
+      {
+        path: "/api/articles/article%2Fone/actions",
+        method: "POST",
+        body: {
+          type: "read_progress",
+          progress: 0.5
+        }
+      }
+    ]);
+  });
+
   it("parses contract-shaped errors", async () => {
     const api = createDibaoApi(async () =>
       new Response(

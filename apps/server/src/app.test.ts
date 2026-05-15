@@ -694,6 +694,15 @@ describe("server API vertical slice", () => {
           metadataJson: null
         }
       ]);
+
+      const articles = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest"
+      });
+      expect(articles.statusCode, articles.body).toBe(200);
+      expect(
+        articles.json().data.map((article: { id: string }) => article.id)
+      ).not.toContain("article_recommended");
     } finally {
       await app.close();
       db.close();

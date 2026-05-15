@@ -47,6 +47,27 @@ export type ArticleDetail = ArticleListItem & {
   extractionError: string | null;
 };
 
+export type ArticleActionRequest =
+  | {
+      type: "open" | "hide" | "not_interested";
+      value?: true;
+      metadata?: Record<string, unknown>;
+    }
+  | {
+      type: "favorite" | "read_later" | "mark_read";
+      value: boolean;
+      metadata?: Record<string, unknown>;
+    }
+  | {
+      type: "read_progress";
+      progress: number;
+      metadata?: Record<string, unknown>;
+    };
+
+export type ArticleActionResponse = {
+  state: ArticleState;
+};
+
 export type ArticleListResponse = {
   data: ArticleListItem[];
   page: ApiPage;
@@ -168,6 +189,21 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getArticle(articleId: string): Promise<ArticleDetail> {
       return (await request<ArticleDetail>(`/api/articles/${encodeURIComponent(articleId)}`)).data;
+    },
+
+    async postArticleAction(
+      articleId: string,
+      input: ArticleActionRequest
+    ): Promise<ArticleActionResponse> {
+      return (
+        await request<ArticleActionResponse>(
+          `/api/articles/${encodeURIComponent(articleId)}/actions`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
     }
   };
 }

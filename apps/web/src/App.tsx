@@ -1,15 +1,17 @@
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dibaoVersion } from "@dibao/shared";
 import {
   dibaoApi,
   userMessageForError,
+  type ArticleActionRequest,
   type ArticleDetail,
   type ArticleListItem,
+  type ArticleState,
   type Feed
 } from "./api.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
-import { useI18n, type NavigationItemKey } from "./i18n.js";
+import { useI18n, type Dictionary, type NavigationItemKey } from "./i18n.js";
 
 const navigationItems: NavigationItemKey[] = [
   "latest",
@@ -24,6 +26,13 @@ const navigationItems: NavigationItemKey[] = [
 type Notice =
   | { type: "feedAddedAndRefreshed"; feedTitle: string }
   | { type: "feedRefreshed"; feedTitle: string };
+
+export type ArticleActionIntent = "favorite" | "readLater" | "readStatus" | "notInterested";
+
+type PendingArticleAction = {
+  articleId: string;
+  intent: ArticleActionIntent;
+};
 
 export function App() {
   const { t } = useI18n();
@@ -41,12 +50,35 @@ export function App() {
   const [feedError, setFeedError] = useState<string | null>(null);
   const [articleError, setArticleError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [articleActionError, setArticleActionError] = useState<string | null>(null);
+  const [pendingArticleAction, setPendingArticleAction] = useState<PendingArticleAction | null>(
+    null
+  );
   const [notice, setNotice] = useState<Notice | null>(null);
+  const openedArticleIds = useRef(new Set<string>());
 
   const selectedFeed = useMemo(
     () => feeds.find((feed) => feed.id === selectedFeedId) ?? null,
     [feeds, selectedFeedId]
   );
+
+  function applyArticleState(articleId: string, state: ArticleState) {
+    setArticles((current) =>
+      current
+        .map((article) => (article.id === articleId ? { ...article, state } : article))
+        .filter((article) =>
+          article.id === articleId ? !state.hidden && !state.notInterested : true
+        )
+    );
+    setArticleDetail((current) =>
+      current?.id === articleId
+        ? {
+            ...current,
+            state
+          }
+        : current
+    );
+  }
 
   const loadFeeds = useCallback(async () => {
     setIsFeedsLoading(true);
@@ -105,6 +137,24 @@ export function App() {
         const detail = await dibaoApi.getArticle(articleId);
         if (!cancelled) {
           setArticleDetail(detail);
+          setArticleActionError(null);
+        }
+        if (!openedArticleIds.current.has(articleId)) {
+          openedArticleIds.current.add(articleId);
+          try {
+            const result = await dibaoApi.postArticleAction(articleId, {
+              type: "open",
+              value: true
+            });
+            if (!cancelled) {
+              applyArticleState(articleId, result.state);
+            }
+          } catch {
+            openedArticleIds.current.delete(articleId);
+            if (!cancelled) {
+              setArticleActionError(t.actions.errors.open);
+            }
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -130,7 +180,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedArticleId, t.errors.api]);
+  }, [selectedArticleId, t.actions.errors.open, t.errors.api]);
 
   async function handleAddFeed(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -172,6 +222,25 @@ export function App() {
       setFeedError(userMessageForError(error, t.errors.api));
     } finally {
       setRefreshingFeedId(null);
+    }
+  }
+
+  async function handleArticleAction(article: ArticleDetail, intent: ArticleActionIntent) {
+    setPendingArticleAction({ articleId: article.id, intent });
+    setArticleActionError(null);
+
+    try {
+      const result = await dibaoApi.postArticleAction(
+        article.id,
+        requestForArticleAction(intent, article.state)
+      );
+      applyArticleState(article.id, result.state);
+    } catch {
+      setArticleActionError(actionErrorMessageFor(intent, t));
+    } finally {
+      setPendingArticleAction((current) =>
+        current?.articleId === article.id && current.intent === intent ? null : current
+      );
     }
   }
 
@@ -240,9 +309,16 @@ export function App() {
           />
 
           <ArticleDetailPanel
+            actionError={articleActionError}
             article={articleDetail}
             detailError={detailError}
             isDetailLoading={isDetailLoading}
+            onArticleAction={handleArticleAction}
+            pendingAction={
+              articleDetail && pendingArticleAction?.articleId === articleDetail.id
+                ? pendingArticleAction.intent
+                : null
+            }
           />
         </div>
       </section>
@@ -402,6 +478,7 @@ function ArticleListPanel(props: {
               </span>
               <strong>{article.title}</strong>
               {article.summary ? <span className={styles.summary}>{article.summary}</span> : null}
+              <ArticleStateBadges state={article.state} />
             </button>
           ))}
       </div>
@@ -410,9 +487,12 @@ function ArticleListPanel(props: {
 }
 
 function ArticleDetailPanel(props: {
+  actionError: string | null;
   article: ArticleDetail | null;
   detailError: string | null;
   isDetailLoading: boolean;
+  onArticleAction: (article: ArticleDetail, intent: ArticleActionIntent) => void;
+  pendingAction: ArticleActionIntent | null;
 }) {
   const { t, formatDate } = useI18n();
   const safeHtml = useMemo(
@@ -449,6 +529,12 @@ function ArticleDetailPanel(props: {
             {props.article.extractionStatus === "feed_only" ? (
               <span className={styles.inlineNotice}>{t.reader.feedOnlyNotice}</span>
             ) : null}
+            <ArticleActionControls
+              actionError={props.actionError}
+              article={props.article}
+              onAction={(intent) => props.onArticleAction(props.article as ArticleDetail, intent)}
+              pendingAction={props.pendingAction}
+            />
           </header>
 
           {safeHtml ? (
@@ -464,6 +550,115 @@ function ArticleDetailPanel(props: {
         </article>
       ) : null}
     </section>
+  );
+}
+
+function ArticleStateBadges(props: { state: ArticleState }) {
+  const { t } = useI18n();
+
+  return (
+    <span className={styles.articleBadges}>
+      <span className={props.state.read ? styles.articleBadgeMuted : styles.articleBadge}>
+        {props.state.read ? t.articles.state.read : t.articles.state.unread}
+      </span>
+      {props.state.favorited ? (
+        <span className={styles.articleBadgeAccent}>{t.articles.state.favorited}</span>
+      ) : null}
+      {props.state.readLater ? (
+        <span className={styles.articleBadgeAccent}>{t.articles.state.readLater}</span>
+      ) : null}
+    </span>
+  );
+}
+
+export function ArticleActionControls(props: {
+  actionError: string | null;
+  article: Pick<ArticleDetail, "id" | "state">;
+  onAction: (intent: ArticleActionIntent) => void;
+  pendingAction: ArticleActionIntent | null;
+}) {
+  const { t } = useI18n();
+  const { state } = props.article;
+  const isBusy = props.pendingAction !== null;
+
+  return (
+    <div className={styles.readerActions} aria-live="polite">
+      <div className={styles.actionButtonRow}>
+        <ActionButton
+          ariaLabel={state.favorited ? t.actions.aria.unfavorite : t.actions.aria.favorite}
+          busy={props.pendingAction === "favorite"}
+          disabled={isBusy}
+          label={state.favorited ? t.actions.unfavorite : t.actions.favorite}
+          onClick={() => props.onAction("favorite")}
+          selected={state.favorited}
+        />
+        <ActionButton
+          ariaLabel={
+            state.readLater ? t.actions.aria.removeReadLater : t.actions.aria.readLater
+          }
+          busy={props.pendingAction === "readLater"}
+          disabled={isBusy}
+          label={state.readLater ? t.actions.removeReadLater : t.actions.readLater}
+          onClick={() => props.onAction("readLater")}
+          selected={state.readLater}
+        />
+        <ActionButton
+          ariaLabel={state.read ? t.actions.aria.markUnread : t.actions.aria.markRead}
+          busy={props.pendingAction === "readStatus"}
+          disabled={isBusy}
+          label={state.read ? t.actions.markUnread : t.actions.markRead}
+          onClick={() => props.onAction("readStatus")}
+          selected={state.read}
+        />
+        <ActionButton
+          ariaLabel={
+            state.notInterested
+              ? t.actions.aria.notInterestedActive
+              : t.actions.aria.notInterested
+          }
+          busy={props.pendingAction === "notInterested"}
+          danger
+          disabled={isBusy || state.notInterested}
+          label={
+            state.notInterested ? t.actions.notInterestedActive : t.actions.notInterested
+          }
+          onClick={() => props.onAction("notInterested")}
+          selected={state.notInterested}
+        />
+      </div>
+      {props.actionError ? <p className={styles.actionError}>{props.actionError}</p> : null}
+    </div>
+  );
+}
+
+function ActionButton(props: {
+  ariaLabel: string;
+  busy: boolean;
+  danger?: boolean;
+  disabled: boolean;
+  label: string;
+  onClick: () => void;
+  selected: boolean;
+}) {
+  const { t } = useI18n();
+  const className = props.danger
+    ? styles.actionButtonDanger
+    : props.selected
+      ? styles.actionButtonSelected
+      : styles.actionButton;
+
+  return (
+    <button
+      aria-busy={props.busy}
+      aria-label={props.ariaLabel}
+      aria-pressed={props.selected}
+      className={className}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      type="button"
+    >
+      {props.busy ? t.actions.saving : props.label}
+    </button>
   );
 }
 
@@ -495,6 +690,47 @@ function ReaderSkeleton() {
       <span />
     </div>
   );
+}
+
+function requestForArticleAction(
+  intent: ArticleActionIntent,
+  state: ArticleState
+): ArticleActionRequest {
+  switch (intent) {
+    case "favorite":
+      return {
+        type: "favorite",
+        value: !state.favorited
+      };
+    case "readLater":
+      return {
+        type: "read_later",
+        value: !state.readLater
+      };
+    case "readStatus":
+      return {
+        type: "mark_read",
+        value: !state.read
+      };
+    case "notInterested":
+      return {
+        type: "not_interested",
+        value: true
+      };
+  }
+}
+
+function actionErrorMessageFor(intent: ArticleActionIntent, t: Dictionary) {
+  switch (intent) {
+    case "favorite":
+      return t.actions.errors.favorite;
+    case "readLater":
+      return t.actions.errors.readLater;
+    case "readStatus":
+      return t.actions.errors.readStatus;
+    case "notInterested":
+      return t.actions.errors.notInterested;
+  }
 }
 
 function sanitizeArticleHtml(html: string): string {

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { App } from "./App.js";
+import { App, ArticleActionControls } from "./App.js";
 import {
   DibaoI18nProvider,
   createI18n,
@@ -38,6 +38,34 @@ describe("web i18n", () => {
     expect(html).toContain("Primary navigation");
     expect(html).toContain("Add");
     expect(html).not.toContain("最新文章");
+  });
+
+  it("renders article action buttons from dictionary copy", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleActionControls
+          actionError={null}
+          article={{
+            id: "article_fixture",
+            state: {
+              read: false,
+              favorited: false,
+              readLater: false,
+              hidden: false,
+              notInterested: false,
+              readingProgress: 0
+            }
+          }}
+          onAction={() => undefined}
+          pendingAction={null}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("收藏");
+    expect(html).toContain("稍后读");
+    expect(html).toContain("标记已读");
+    expect(html).toContain("不感兴趣");
   });
 });
 

@@ -308,6 +308,38 @@
   font-size: var(--article-item-meta-size);
 }
 
+.articleBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.articleBadge,
+.articleBadgeMuted,
+.articleBadgeAccent {
+  width: fit-content;
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.articleBadge {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.articleBadgeMuted {
+  color: var(--color-faint);
+}
+
+.articleBadgeAccent {
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+}
+
 .errorText {
   margin: var(--space-3) var(--space-4);
   border-left: 2px solid var(--color-danger);
@@ -408,6 +440,63 @@
   padding: var(--space-1) var(--space-2);
   color: var(--color-muted);
   font-size: var(--text-xs);
+}
+
+.readerActions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.actionButtonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.actionButton,
+.actionButtonSelected,
+.actionButtonDanger {
+  min-height: var(--target-min);
+  border: var(--border-default);
+  border-radius: var(--button-radius);
+  padding-inline: var(--button-padding-x-md);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
+.actionButtonSelected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+}
+
+.actionButtonDanger {
+  color: var(--color-muted);
+}
+
+.actionButtonDanger[aria-pressed="true"] {
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.actionButton:disabled,
+.actionButtonSelected:disabled,
+.actionButtonDanger:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.actionError {
+  margin: 0;
+  border-left: 2px solid var(--color-danger);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  line-height: 1.5;
 }
 
 .readerBody {

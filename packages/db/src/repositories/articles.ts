@@ -101,7 +101,12 @@ export class SqliteArticleRepository implements ArticleRepository {
   list(input: ArticleListInput = {}): ArticleListResult {
     const limit = normalizeLimit(input.limit);
     const offset = normalizeOffset(input.offset);
-    const conditions = ["a.deleted_at is null", "a.status != 'deleted'"];
+    const conditions = [
+      "a.deleted_at is null",
+      "a.status != 'deleted'",
+      "s.hidden_at is null",
+      "s.not_interested_at is null"
+    ];
     const params: unknown[] = [BASE_RANK_CONTEXT];
 
     if (input.feedId) {

@@ -53,7 +53,13 @@ export const zhCN = {
     emptyNoFeedsBody: "添加一个 RSS / Atom 源后，文章会出现在这里。",
     emptyNoArticlesTitle: "暂时没有文章",
     emptyNoArticlesBody: "可以刷新订阅源，或切换到全部来源查看。",
-    itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`
+    itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
+    state: {
+      read: "已读",
+      unread: "未读",
+      favorited: "已收藏",
+      readLater: "稍后读"
+    }
   },
   reader: {
     originalLink: "原文",
@@ -63,6 +69,35 @@ export const zhCN = {
     noContent: "这篇文章暂无正文内容。",
     meta: (feedTitle: string, date?: string, author?: string | null) =>
       [feedTitle, date, author].filter(Boolean).join(" · ")
+  },
+  actions: {
+    favorite: "收藏",
+    unfavorite: "取消收藏",
+    readLater: "稍后读",
+    removeReadLater: "移出稍后读",
+    markRead: "标记已读",
+    markUnread: "标记未读",
+    notInterested: "不感兴趣",
+    notInterestedActive: "已不感兴趣",
+    saving: "处理中",
+    aria: {
+      favorite: "收藏这篇文章",
+      unfavorite: "取消收藏这篇文章",
+      readLater: "稍后读这篇文章",
+      removeReadLater: "移出稍后读",
+      markRead: "标记这篇文章为已读",
+      markUnread: "标记这篇文章为未读",
+      notInterested: "不再推荐类似文章",
+      notInterestedActive: "已标记不感兴趣"
+    },
+    errors: {
+      favorite: "收藏失败。",
+      readLater: "稍后读更新失败。",
+      readStatus: "已读状态更新失败。",
+      notInterested: "不感兴趣操作失败。",
+      open: "记录打开行为失败。",
+      generic: "操作失败，请重试。"
+    }
   },
   notices: {
     feedAddedAndRefreshed: (feedTitle: string) => `已添加并刷新：${feedTitle}`,
@@ -134,7 +169,13 @@ export const enUS = {
     emptyNoFeedsBody: "Add an RSS / Atom feed and articles will appear here.",
     emptyNoArticlesTitle: "No articles yet",
     emptyNoArticlesBody: "Refresh a feed or switch back to all sources.",
-    itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`
+    itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
+    state: {
+      read: "Read",
+      unread: "Unread",
+      favorited: "Favorited",
+      readLater: "Read later"
+    }
   },
   reader: {
     originalLink: "Original",
@@ -144,6 +185,35 @@ export const enUS = {
     noContent: "This article has no body content yet.",
     meta: (feedTitle: string, date?: string, author?: string | null) =>
       [feedTitle, date, author].filter(Boolean).join(" · ")
+  },
+  actions: {
+    favorite: "Favorite",
+    unfavorite: "Unfavorite",
+    readLater: "Read later",
+    removeReadLater: "Remove later",
+    markRead: "Mark read",
+    markUnread: "Mark unread",
+    notInterested: "Not interested",
+    notInterestedActive: "Not interested",
+    saving: "Saving",
+    aria: {
+      favorite: "Favorite this article",
+      unfavorite: "Unfavorite this article",
+      readLater: "Save this article for later",
+      removeReadLater: "Remove this article from read later",
+      markRead: "Mark this article as read",
+      markUnread: "Mark this article as unread",
+      notInterested: "Stop recommending similar articles",
+      notInterestedActive: "Already marked not interested"
+    },
+    errors: {
+      favorite: "Favorite failed.",
+      readLater: "Read later update failed.",
+      readStatus: "Read status update failed.",
+      notInterested: "Not interested action failed.",
+      open: "Failed to record article open.",
+      generic: "Action failed. Please try again."
+    }
   },
   notices: {
     feedAddedAndRefreshed: (feedTitle: string) => `Added and refreshed: ${feedTitle}`,
