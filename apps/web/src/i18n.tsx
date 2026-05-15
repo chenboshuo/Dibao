@@ -94,6 +94,8 @@ export const zhCN = {
     successAt: (date: string) => `成功：${date}`,
     refresh: "刷新",
     refreshing: "…",
+    refreshAll: "刷新全部",
+    refreshingAll: "加入队列中",
     refreshTitle: (feedTitle: string) => `刷新 ${feedTitle}`
   },
   folders: {
@@ -252,6 +254,8 @@ export const zhCN = {
   notices: {
     feedAddedAndRefreshed: (feedTitle: string) => `已添加并刷新：${feedTitle}`,
     feedRefreshed: (feedTitle: string) => `已刷新：${feedTitle}`,
+    allFeedsRefreshQueued: (count: number) =>
+      count > 0 ? `已加入刷新队列：${count} 个订阅源。` : "没有启用的订阅源需要刷新。",
     opmlImported: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
       `OPML 导入完成：新增 ${feedsCreated} 个订阅源，跳过 ${feedsSkipped} 个，新增 ${foldersCreated} 个分组。`,
     opmlExported: "OPML 已导出。"
@@ -363,6 +367,8 @@ export const enUS = {
     successAt: (date: string) => `Success: ${date}`,
     refresh: "Refresh",
     refreshing: "…",
+    refreshAll: "Refresh all",
+    refreshingAll: "Queueing",
     refreshTitle: (feedTitle: string) => `Refresh ${feedTitle}`
   },
   folders: {
@@ -521,6 +527,10 @@ export const enUS = {
   notices: {
     feedAddedAndRefreshed: (feedTitle: string) => `Added and refreshed: ${feedTitle}`,
     feedRefreshed: (feedTitle: string) => `Refreshed: ${feedTitle}`,
+    allFeedsRefreshQueued: (count: number) =>
+      count > 0
+        ? `Queued refresh for ${count} ${count === 1 ? "feed" : "feeds"}.`
+        : "No enabled feeds need refresh.",
     opmlImported: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
       `OPML imported: added ${feedsCreated} ${feedsCreated === 1 ? "feed" : "feeds"}, skipped ${feedsSkipped}, added ${foldersCreated} ${foldersCreated === 1 ? "folder" : "folders"}.`,
     opmlExported: "OPML exported."

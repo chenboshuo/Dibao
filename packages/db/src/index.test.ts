@@ -10,6 +10,7 @@ import {
   SqliteAuthCredentialRepository,
   SqliteEmbeddingRepository,
   SqliteFeedRepository,
+  SqliteJobRepository,
   SqliteRankingRepository,
   SqliteSessionRepository,
   SqliteVecVectorStore,
@@ -132,6 +133,100 @@ describe("db package", () => {
       }
 
       expect(hasFtsTable(db, "article_fts")).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("claims jobs with attempts and moves failures through retry boundaries", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const jobs = new SqliteJobRepository(db);
+      const job = jobs.enqueue({
+        id: "job_feed_refresh",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_1" }),
+        maxAttempts: 2,
+        runAfter: 1000,
+        now: 900
+      });
+
+      expect(job.status).toBe("queued");
+      expect(job.attempts).toBe(0);
+      expect(jobs.claimNextDue(999)).toBeNull();
+
+      const firstClaim = jobs.claimNextDue(1000);
+      expect(firstClaim).toMatchObject({
+        id: "job_feed_refresh",
+        status: "running",
+        attempts: 1,
+        startedAt: 1000
+      });
+
+      const retry = jobs.markFailedOrRetry("job_feed_refresh", "temporary", 1100, 5000);
+      expect(retry).toMatchObject({
+        status: "queued",
+        attempts: 1,
+        error: "temporary",
+        runAfter: 6100,
+        startedAt: null,
+        finishedAt: null
+      });
+      expect(jobs.claimNextDue(6099)).toBeNull();
+
+      expect(jobs.claimNextDue(6100)).toMatchObject({
+        attempts: 2,
+        status: "running"
+      });
+      const failed = jobs.markFailedOrRetry("job_feed_refresh", "permanent", 6200, 5000);
+      expect(failed).toMatchObject({
+        status: "failed",
+        attempts: 2,
+        error: "permanent",
+        finishedAt: 6200
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("resets stale running jobs on runner startup", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const jobs = new SqliteJobRepository(db);
+      jobs.enqueue({
+        id: "job_retryable",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_1" }),
+        maxAttempts: 2,
+        runAfter: 1000,
+        now: 1000
+      });
+      jobs.enqueue({
+        id: "job_exhausted",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_2" }),
+        maxAttempts: 1,
+        runAfter: 1000,
+        now: 1000
+      });
+
+      jobs.claimNextDue(1100);
+      jobs.claimNextDue(1200);
+
+      expect(jobs.resetStaleRunning(2000)).toBe(2);
+      expect(jobs.findById("job_retryable")).toMatchObject({
+        status: "queued",
+        attempts: 1,
+        runAfter: 2000,
+        startedAt: null,
+        finishedAt: null
+      });
+      expect(jobs.findById("job_exhausted")).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        finishedAt: 2000
+      });
     } finally {
       db.close();
     }

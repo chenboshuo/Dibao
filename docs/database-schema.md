@@ -773,6 +773,14 @@ failed
 cancelled
 ```
 
+MVP runner 约定：
+
+- claim job 时将 `attempts + 1`，并把状态置为 `running`。
+- job 失败且 `attempts < maxAttempts` 时回到 `queued`，并延后 `run_after`。
+- job 失败且 `attempts >= maxAttempts` 时置为 `failed`。
+- runner 启动时会把崩溃遗留的 `running` jobs 重置，避免永久卡住。
+- `feed_refresh` payload 目前只接受 `{ "feedId": "string" }`。
+
 索引：
 
 ```text

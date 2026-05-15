@@ -36,6 +36,7 @@ const navigationItems: NavigationItemKey[] = [
 type Notice =
   | { type: "feedAddedAndRefreshed"; feedTitle: string }
   | { type: "feedRefreshed"; feedTitle: string }
+  | { type: "allFeedsRefreshQueued"; jobCount: number }
   | { type: "opmlImported"; result: OpmlImportResponse }
   | { type: "opmlExported" };
 
@@ -127,6 +128,7 @@ export function App() {
   const [isAddingFeed, setIsAddingFeed] = useState(false);
   const [isImportingOpml, setIsImportingOpml] = useState(false);
   const [isExportingOpml, setIsExportingOpml] = useState(false);
+  const [isRefreshingAllFeeds, setIsRefreshingAllFeeds] = useState(false);
   const [refreshingFeedId, setRefreshingFeedId] = useState<string | null>(null);
   const [feedError, setFeedError] = useState<string | null>(null);
   const [articleError, setArticleError] = useState<string | null>(null);
@@ -224,6 +226,7 @@ export function App() {
     setIsAddingFeed(false);
     setIsImportingOpml(false);
     setIsExportingOpml(false);
+    setIsRefreshingAllFeeds(false);
     setRefreshingFeedId(null);
     setFeedError(null);
     setArticleError(null);
@@ -627,6 +630,22 @@ export function App() {
     }
   }
 
+  async function handleRefreshAllFeeds() {
+    setIsRefreshingAllFeeds(true);
+    setFeedError(null);
+    setNotice(null);
+
+    try {
+      const result = await dibaoApi.refreshAllFeeds();
+      setNotice({ type: "allFeedsRefreshQueued", jobCount: result.jobIds.length });
+      await loadFeeds();
+    } catch (error) {
+      setFeedError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsRefreshingAllFeeds(false);
+    }
+  }
+
   async function handleImportOpml(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0] ?? null;
     event.currentTarget.value = "";
@@ -930,9 +949,11 @@ export function App() {
               isFeedsLoading={isFeedsLoading}
               isExportingOpml={isExportingOpml}
               isImportingOpml={isImportingOpml}
+              isRefreshingAllFeeds={isRefreshingAllFeeds}
               onAddFeed={handleAddFeed}
               onExportOpml={handleExportOpml}
               onImportOpml={handleImportOpml}
+              onRefreshAllFeeds={handleRefreshAllFeeds}
               onRefreshFeed={handleRefreshFeed}
               onSelectSource={handleSelectSource}
               onUpdateFeedUrl={setFeedUrl}
@@ -1204,9 +1225,11 @@ export function FeedPanel(props: {
   isFeedsLoading: boolean;
   isExportingOpml: boolean;
   isImportingOpml: boolean;
+  isRefreshingAllFeeds: boolean;
   onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
   onExportOpml: () => void;
   onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
+  onRefreshAllFeeds: () => void;
   onRefreshFeed: (feed: Feed) => void;
   onSelectSource: (source: SourceSelection) => void;
   onUpdateFeedUrl: (value: string) => void;
@@ -1268,6 +1291,14 @@ export function FeedPanel(props: {
           type="button"
         >
           {props.isExportingOpml ? t.opml.exporting : t.opml.export}
+        </button>
+        <button
+          className={styles.secondaryButton}
+          disabled={props.isRefreshingAllFeeds || !props.feeds.some((feed) => feed.enabled)}
+          onClick={props.onRefreshAllFeeds}
+          type="button"
+        >
+          {props.isRefreshingAllFeeds ? t.feeds.refreshingAll : t.feeds.refreshAll}
         </button>
       </div>
 
@@ -1800,6 +1831,8 @@ function noticeTextFor(notice: Notice, t: Dictionary): string {
       return t.notices.feedAddedAndRefreshed(notice.feedTitle);
     case "feedRefreshed":
       return t.notices.feedRefreshed(notice.feedTitle);
+    case "allFeedsRefreshQueued":
+      return t.notices.allFeedsRefreshQueued(notice.jobCount);
     case "opmlImported":
       return t.notices.opmlImported(
         notice.result.feedsCreated,

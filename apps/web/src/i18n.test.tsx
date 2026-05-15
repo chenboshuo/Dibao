@@ -205,9 +205,11 @@ describe("web i18n", () => {
           isExportingOpml={false}
           isFeedsLoading={false}
           isImportingOpml={false}
+          isRefreshingAllFeeds={false}
           onAddFeed={() => undefined}
           onExportOpml={() => undefined}
           onImportOpml={() => undefined}
+          onRefreshAllFeeds={() => undefined}
           onRefreshFeed={() => undefined}
           onSelectSource={() => undefined}
           onUpdateFeedUrl={() => undefined}
@@ -243,6 +245,7 @@ describe("web i18n", () => {
 
     expect(feedPanel).toContain("导入 OPML");
     expect(feedPanel).toContain("导出 OPML");
+    expect(feedPanel).toContain("刷新全部");
     expect(feedPanel).toContain("分组");
     expect(articlePanel).toContain("加载更多");
     expect(articlePanel).toContain("设计");

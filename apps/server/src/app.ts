@@ -11,6 +11,7 @@ import {
   SqliteAuthCredentialRepository,
   SqliteFeedFolderRepository,
   SqliteFeedRepository,
+  SqliteJobRepository,
   SqliteRankingRepository,
   SqliteSessionRepository,
   type ArticleActionType,
@@ -40,10 +41,17 @@ import {
   FeedManagementServiceError
 } from "./feed-management-service.js";
 import {
+  DEFAULT_FEED_REFRESH_INTERVAL_MS,
+  FeedRefreshCoordinator,
+  FeedRefreshJobService,
+  FeedRefreshScheduler
+} from "./feed-refresh-job-service.js";
+import {
   FeedIngestionError,
   FeedRefreshService,
   type FeedFetcher
 } from "./feed-refresh-service.js";
+import { JobRunner } from "./job-runner.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import { BaselineRankingService } from "./ranking-service.js";
 
@@ -120,6 +128,10 @@ type BuildServerOptions = {
   logger?: boolean;
   cookieSecure?: boolean;
   authRequired?: boolean;
+  backgroundJobs?: boolean;
+  feedRefreshIntervalMs?: number;
+  jobRunnerIntervalMs?: number;
+  jobRetryDelayMs?: number;
 };
 
 export function buildServer(options: BuildServerOptions = {}) {
@@ -130,6 +142,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const sessions = new SqliteSessionRepository(db);
   const folders = new SqliteFeedFolderRepository(db);
   const feeds = new SqliteFeedRepository(db);
+  const jobs = new SqliteJobRepository(db);
   const articles = new SqliteArticleRepository(db);
   const articleActions = new SqliteArticleActionRepository(db);
   const rankings = new SqliteRankingRepository(db);
@@ -143,6 +156,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     articles,
     ranking: rankingService,
     fetcher: options.feedFetcher,
+    now: options.now
+  });
+  const feedRefreshCoordinator = new FeedRefreshCoordinator({
+    refreshService: feedRefreshService
+  });
+  const feedRefreshJobService = new FeedRefreshJobService({
+    feeds,
+    jobs,
+    refresher: feedRefreshCoordinator,
     now: options.now
   });
   const articleActionService = new ArticleActionService({
@@ -171,9 +193,26 @@ export function buildServer(options: BuildServerOptions = {}) {
     secure: resolveCookieSecure(options.cookieSecure)
   };
   const authRequired = options.authRequired ?? true;
+  const backgroundJobs = options.backgroundJobs ?? false;
 
   const app = Fastify({
     logger: options.logger ?? true
+  });
+  const jobRunner = new JobRunner({
+    jobs,
+    handlers: {
+      feed_refresh: (job) => feedRefreshJobService.handleFeedRefreshJob(job)
+    },
+    now: options.now,
+    pollIntervalMs: options.jobRunnerIntervalMs,
+    retryDelayMs: options.jobRetryDelayMs,
+    onError: (error) => app.log.error(error)
+  });
+  const feedRefreshScheduler = new FeedRefreshScheduler({
+    refreshJobs: feedRefreshJobService,
+    runner: jobRunner,
+    intervalMs: options.feedRefreshIntervalMs ?? DEFAULT_FEED_REFRESH_INTERVAL_MS,
+    onError: (error) => app.log.error(error)
   });
 
   app.addContentTypeParser(
@@ -212,6 +251,18 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!authService.authenticate(token)) {
       return sendApiError(reply, 401, "UNAUTHORIZED", "Authentication required");
     }
+  });
+
+  if (backgroundJobs) {
+    app.addHook("onReady", async () => {
+      jobRunner.start();
+      feedRefreshScheduler.start();
+    });
+  }
+
+  app.addHook("onClose", async () => {
+    feedRefreshScheduler.stop();
+    jobRunner.stop();
   });
 
   if (closeDatabaseOnClose) {
@@ -388,9 +439,22 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   });
 
+  app.post("/api/feeds/refresh", async () => {
+    const jobs = feedRefreshJobService.enqueueAllEnabledFeeds();
+    if (backgroundJobs) {
+      void jobRunner.drainDue().catch((error) => app.log.error(error));
+    }
+
+    return {
+      data: {
+        jobIds: jobs.map((job) => job.id)
+      }
+    };
+  });
+
   app.post<{ Params: FeedParams }>("/api/feeds/:id/refresh", async (request, reply) => {
     try {
-      const result = await feedRefreshService.refreshFeed(request.params.id);
+      const result = await feedRefreshCoordinator.refreshFeed(request.params.id);
 
       return {
         data: {

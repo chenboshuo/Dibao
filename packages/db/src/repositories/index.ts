@@ -5,4 +5,5 @@ export * from "./articles.js";
 export * from "./embeddings.js";
 export * from "./feed-folders.js";
 export * from "./feeds.js";
+export * from "./jobs.js";
 export * from "./ranking.js";

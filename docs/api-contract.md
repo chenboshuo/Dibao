@@ -570,6 +570,15 @@ enabled=true|false
 
 手动刷新所有启用订阅源。
 
+说明：
+
+- 只为未删除且 `enabled = true` 的 feeds 创建 `feed_refresh` jobs。
+- 已有 queued/running `feed_refresh` job 的 feed 不重复创建 job，返回既有 `jobId`。
+- 接口返回表示已加入刷新队列，不表示所有抓取已经完成。
+- 单个 feed 抓取失败不会阻塞其他 feeds；失败记录在 `jobs.error` 和 feed 的 `lastError`。
+- 抓取成功会更新 feed 的 `lastFetchedAt`、`lastSuccessAt`，并清空 `lastError`。
+- 抓取失败会更新 feed 的 `lastFetchedAt`、`lastError`，保留 `lastSuccessAt`。
+
 响应：
 
 ```json

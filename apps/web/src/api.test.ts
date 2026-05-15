@@ -154,7 +154,11 @@ describe("web API client", () => {
         body: init?.body ? JSON.parse(String(init.body)) : null
       });
 
-      const data = path.includes("/feed-folders")
+      const data = path === "/api/feeds/refresh"
+        ? {
+            jobIds: ["job_1", "job_2"]
+          }
+        : path.includes("/feed-folders")
         ? {
             id: "folder_design",
             title: "Design",
@@ -218,6 +222,7 @@ describe("web API client", () => {
       sourceWeight: 0.2
     });
     await api.deleteFeed("feed/design");
+    await api.refreshAllFeeds();
 
     expect(calls).toEqual([
       {
@@ -260,6 +265,11 @@ describe("web API client", () => {
       {
         path: "/api/feeds/feed%2Fdesign",
         method: "DELETE",
+        body: null
+      },
+      {
+        path: "/api/feeds/refresh",
+        method: "POST",
         body: null
       }
     ]);

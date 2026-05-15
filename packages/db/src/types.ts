@@ -45,6 +45,41 @@ export type FeedListInput = {
   enabled?: boolean;
 };
 
+export type JobType =
+  | "feed_refresh"
+  | "content_extract"
+  | "embedding_generate"
+  | "ranking_recalculate"
+  | "profile_decay"
+  | "retention_cleanup"
+  | "vector_index_rebuild";
+
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type JobRow = {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  payloadJson: string | null;
+  error: string | null;
+  attempts: number;
+  maxAttempts: number;
+  runAfter: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type EnqueueJobInput = {
+  id: string;
+  type: JobType;
+  payloadJson?: string | null;
+  maxAttempts?: number;
+  runAfter?: number;
+  now?: number;
+};
+
 export type UpsertFeedInput = {
   id: string;
   folderId?: string | null;

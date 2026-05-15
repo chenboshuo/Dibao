@@ -149,6 +149,10 @@ export type RefreshFeedResponse = {
   jobId: string;
 };
 
+export type RefreshAllFeedsResponse = {
+  jobIds: string[];
+};
+
 export class ApiRequestError extends Error {
   constructor(
     readonly status: number,
@@ -317,6 +321,14 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
     async refreshFeed(feedId: string): Promise<RefreshFeedResponse> {
       return (
         await request<RefreshFeedResponse>(`/api/feeds/${encodeURIComponent(feedId)}/refresh`, {
+          method: "POST"
+        })
+      ).data;
+    },
+
+    async refreshAllFeeds(): Promise<RefreshAllFeedsResponse> {
+      return (
+        await request<RefreshAllFeedsResponse>("/api/feeds/refresh", {
           method: "POST"
         })
       ).data;

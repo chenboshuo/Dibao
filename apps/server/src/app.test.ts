@@ -6,6 +6,7 @@ import {
   openDatabase,
   SqliteArticleRepository,
   SqliteFeedFolderRepository,
+  SqliteJobRepository,
   SqliteFeedRepository,
   type DibaoDatabase
 } from "@dibao/db";
@@ -822,6 +823,46 @@ describe("server API vertical slice", () => {
       });
 
       expect(articles.json().data).toHaveLength(2);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("queues refresh-all jobs for enabled feeds and deduplicates open jobs", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    feeds.upsert({
+      id: "feed_enabled",
+      title: "Enabled Feed",
+      feedUrl: "https://example.com/enabled.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_disabled",
+      title: "Disabled Feed",
+      feedUrl: "https://example.com/disabled.xml",
+      enabled: false,
+      now: 1000
+    });
+    const app = buildServer({ db, logger: false, now: () => 2000 });
+
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/feeds/refresh"
+      });
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/feeds/refresh"
+      });
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
+      expect(first.json().data.jobIds).toHaveLength(1);
+      expect(second.json().data.jobIds).toEqual(first.json().data.jobIds);
+      expect(new SqliteJobRepository(db).listOpenByType("feed_refresh")).toHaveLength(1);
     } finally {
       await app.close();
       db.close();
