@@ -10,7 +10,7 @@ import {
   type DibaoDatabase
 } from "@dibao/db";
 import { parseOpml } from "@dibao/rss";
-import { buildServer } from "./app.js";
+import { buildServer as buildRealServer } from "./app.js";
 import type { FeedFetcher } from "./feed-refresh-service.js";
 
 const tempDirs: string[] = [];
@@ -20,6 +20,13 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function buildServer(options: Parameters<typeof buildRealServer>[0] = {}) {
+  return buildRealServer({
+    authRequired: false,
+    ...options
+  });
+}
 
 describe("server API vertical slice", () => {
   it("reports database, FTS, and vector-store health", async () => {
@@ -40,6 +47,243 @@ describe("server API vertical slice", () => {
           fts: "ok",
           vectorStore: "ok",
           version: "0.0.0"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports anonymous auth session status before setup", async () => {
+    const db = createEmptyDatabase();
+    db.prepare(
+      "insert into app_settings (key, value_json, updated_at) values (?, ?, ?)"
+    ).run("setup.completed", "true", 1000);
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/auth/session"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        data: {
+          setupCompleted: false,
+          authenticated: false
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("sets up the single user with a hashed password and secure session cookie", async () => {
+    const db = createEmptyDatabase();
+    const app = buildRealServer({
+      db,
+      logger: false,
+      now: () => 1000,
+      cookieSecure: true
+    });
+
+    try {
+      const invalid = await postJson(app, "/api/auth/setup", {
+        password: "short"
+      });
+      expect(invalid.statusCode, invalid.body).toBe(400);
+      expect(invalid.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR"
+        }
+      });
+
+      const setup = await postJson(app, "/api/auth/setup", {
+        password: "correct horse battery"
+      });
+      expect(setup.statusCode, setup.body).toBe(200);
+      expect(setup.json()).toEqual({
+        data: {
+          ok: true
+        }
+      });
+      expectSessionCookieAttributes(setup.headers["set-cookie"], true);
+
+      const credential = db
+        .prepare(
+          `
+            select
+              password_hash as passwordHash,
+              password_algo as passwordAlgo
+            from auth_credentials
+          `
+        )
+        .get() as { passwordHash: string; passwordAlgo: string };
+      expect(credential.passwordAlgo).toBe("scrypt:v1");
+      expect(credential.passwordHash).toMatch(/^scrypt:v1:16384:8:1:32:64:/);
+      expect(credential.passwordHash).not.toContain("correct horse battery");
+      expect(
+        db.prepare("select value_json as valueJson from app_settings where key = ?").get(
+          "setup.completed"
+        )
+      ).toEqual({ valueJson: "true" });
+
+      const session = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        headers: {
+          cookie: cookieHeaderFromSetCookie(setup.headers["set-cookie"])
+        }
+      });
+      expect(session.statusCode, session.body).toBe(200);
+      expect(session.json()).toEqual({
+        data: {
+          setupCompleted: true,
+          authenticated: true
+        }
+      });
+
+      const repeated = await postJson(app, "/api/auth/setup", {
+        password: "another password"
+      });
+      expect(repeated.statusCode, repeated.body).toBe(409);
+      expect(repeated.json()).toMatchObject({
+        error: {
+          code: "CONFLICT"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("logs in, protects APIs, and logs out idempotently", async () => {
+    const db = createEmptyDatabase();
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const health = await app.inject({
+        method: "GET",
+        url: "/api/system/health"
+      });
+      expect(health.statusCode, health.body).toBe(200);
+
+      const protectedResponse = await app.inject({
+        method: "GET",
+        url: "/api/feeds"
+      });
+      expect(protectedResponse.statusCode, protectedResponse.body).toBe(401);
+      expect(protectedResponse.json()).toMatchObject({
+        error: {
+          code: "UNAUTHORIZED"
+        }
+      });
+
+      const setup = await postJson(app, "/api/auth/setup", {
+        password: "correct horse battery"
+      });
+      const setupCookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+
+      const wrongLogin = await postJson(app, "/api/auth/login", {
+        password: "wrong password"
+      });
+      expect(wrongLogin.statusCode, wrongLogin.body).toBe(401);
+      expect(wrongLogin.json()).toMatchObject({
+        error: {
+          code: "UNAUTHORIZED"
+        }
+      });
+
+      const logout = await app.inject({
+        method: "POST",
+        url: "/api/auth/logout",
+        headers: {
+          cookie: setupCookie
+        }
+      });
+      expect(logout.statusCode, logout.body).toBe(200);
+      expect(logout.json()).toEqual({
+        data: {
+          ok: true
+        }
+      });
+      expectClearSessionCookie(logout.headers["set-cookie"]);
+
+      const invalidLogout = await app.inject({
+        method: "POST",
+        url: "/api/auth/logout"
+      });
+      expect(invalidLogout.statusCode, invalidLogout.body).toBe(200);
+      expect(invalidLogout.json()).toEqual({
+        data: {
+          ok: true
+        }
+      });
+
+      const login = await postJson(app, "/api/auth/login", {
+        password: "correct horse battery"
+      });
+      expect(login.statusCode, login.body).toBe(200);
+      expectSessionCookieAttributes(login.headers["set-cookie"], false);
+
+      const feeds = await app.inject({
+        method: "GET",
+        url: "/api/feeds",
+        headers: {
+          cookie: cookieHeaderFromSetCookie(login.headers["set-cookie"])
+        }
+      });
+      expect(feeds.statusCode, feeds.body).toBe(200);
+      expect(feeds.json()).toEqual({
+        data: []
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("rejects expired sessions", async () => {
+    const db = createEmptyDatabase();
+    let now = 1000;
+    const app = buildRealServer({
+      db,
+      logger: false,
+      cookieSecure: false,
+      now: () => now
+    });
+
+    try {
+      const setup = await postJson(app, "/api/auth/setup", {
+        password: "correct horse battery"
+      });
+      const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+      now += 31 * 24 * 60 * 60 * 1000;
+
+      const feeds = await app.inject({
+        method: "GET",
+        url: "/api/feeds",
+        headers: {
+          cookie
+        }
+      });
+      expect(feeds.statusCode, feeds.body).toBe(401);
+
+      const session = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        headers: {
+          cookie
+        }
+      });
+      expect(session.json()).toEqual({
+        data: {
+          setupCompleted: true,
+          authenticated: false
         }
       });
     } finally {
@@ -1428,6 +1672,45 @@ async function postJson(app: ReturnType<typeof buildServer>, url: string, payloa
     },
     payload: JSON.stringify(payload)
   });
+}
+
+function cookieHeaderFromSetCookie(value: string | string[] | undefined): string {
+  const cookie = Array.isArray(value) ? value[0] : value;
+  if (!cookie) {
+    throw new Error("Expected set-cookie header");
+  }
+
+  return cookie.split(";")[0];
+}
+
+function expectSessionCookieAttributes(
+  value: string | string[] | undefined,
+  secure: boolean
+): void {
+  const cookie = Array.isArray(value) ? value[0] : value;
+  expect(cookie).toBeDefined();
+  expect(cookie).toContain("dibao_session=");
+  expect(cookie).toContain("HttpOnly");
+  expect(cookie).toContain("SameSite=Lax");
+  expect(cookie).toContain("Path=/");
+  expect(cookie).toContain("Max-Age=2592000");
+  expect(cookie).toMatch(/Expires=[^;]+GMT/);
+  if (secure) {
+    expect(cookie).toContain("Secure");
+  } else {
+    expect(cookie).not.toContain("Secure");
+  }
+}
+
+function expectClearSessionCookie(value: string | string[] | undefined): void {
+  const cookie = Array.isArray(value) ? value[0] : value;
+  expect(cookie).toBeDefined();
+  expect(cookie).toContain("dibao_session=");
+  expect(cookie).toContain("Max-Age=0");
+  expect(cookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+  expect(cookie).toContain("HttpOnly");
+  expect(cookie).toContain("SameSite=Lax");
+  expect(cookie).toContain("Path=/");
 }
 
 async function postMultipartOpml(app: ReturnType<typeof buildServer>, xml: string) {

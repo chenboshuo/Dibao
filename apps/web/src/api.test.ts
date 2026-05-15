@@ -3,6 +3,81 @@ import { ApiRequestError, createDibaoApi, userMessageForError } from "./api.js";
 import { dictionaries } from "./i18n.js";
 
 describe("web API client", () => {
+  it("calls auth endpoints with same-origin credentials", async () => {
+    const calls: Array<{
+      body: unknown;
+      credentials: RequestCredentials | undefined;
+      method: string | undefined;
+      path: string;
+    }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      calls.push({
+        path: String(input),
+        method: init?.method,
+        credentials: init?.credentials,
+        body: init?.body ? JSON.parse(String(init.body)) : null
+      });
+
+      return new Response(
+        JSON.stringify({
+          data: String(input).endsWith("/session")
+            ? {
+                setupCompleted: true,
+                authenticated: false
+              }
+            : {
+                ok: true
+              }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(api.getAuthSession()).resolves.toEqual({
+      setupCompleted: true,
+      authenticated: false
+    });
+    await api.setupAuth("correct horse battery");
+    await api.login("correct horse battery");
+    await api.logout();
+
+    expect(calls).toEqual([
+      {
+        path: "/api/auth/session",
+        method: undefined,
+        credentials: "same-origin",
+        body: null
+      },
+      {
+        path: "/api/auth/setup",
+        method: "POST",
+        credentials: "same-origin",
+        body: {
+          password: "correct horse battery"
+        }
+      },
+      {
+        path: "/api/auth/login",
+        method: "POST",
+        credentials: "same-origin",
+        body: {
+          password: "correct horse battery"
+        }
+      },
+      {
+        path: "/api/auth/logout",
+        method: "POST",
+        credentials: "same-origin",
+        body: null
+      }
+    ]);
+  });
+
   it("fetches feed folders", async () => {
     const calls: string[] = [];
     const api = createDibaoApi(async (input) => {

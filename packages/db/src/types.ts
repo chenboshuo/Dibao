@@ -64,6 +64,40 @@ export type UpsertFeedFolderInput = {
   now?: number;
 };
 
+export type AuthCredentialRow = {
+  id: string;
+  passwordHash: string;
+  passwordAlgo: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type CreateAuthCredentialInput = {
+  id: string;
+  passwordHash: string;
+  passwordAlgo: string;
+  now?: number;
+};
+
+export type SessionRow = {
+  id: string;
+  sessionHash: string;
+  createdAt: number;
+  expiresAt: number;
+  lastSeenAt: number | null;
+  userAgent: string | null;
+  ipHash: string | null;
+};
+
+export type CreateSessionInput = {
+  id: string;
+  sessionHash: string;
+  createdAt: number;
+  expiresAt: number;
+  userAgent?: string | null;
+  ipHash?: string | null;
+};
+
 export type ArticleRow = {
   id: string;
   feedId: string;

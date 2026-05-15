@@ -39,6 +39,25 @@ export const zhCN = {
       recommended: "推荐视图"
     }
   },
+  auth: {
+    loading: "正在检查登录状态",
+    setupTitle: "设置访问密码",
+    setupBody: "这是单用户自托管实例。设置一个访问密码后即可进入阅读器。",
+    loginTitle: "登录邸报",
+    loginBody: "输入访问密码继续。",
+    passwordLabel: "访问密码",
+    passwordPlaceholder: "至少 8 个字符",
+    setupSubmit: "完成设置",
+    loginSubmit: "登录",
+    submitting: "处理中",
+    logout: "退出",
+    logoutTitle: "退出登录",
+    passwordRequired: "请输入访问密码。",
+    errors: {
+      session: "无法读取登录状态。",
+      logout: "退出登录失败。"
+    }
+  },
   feeds: {
     kicker: "订阅源",
     title: "Feeds",
@@ -207,6 +226,25 @@ export const enUS = {
     viewStatus: {
       latest: "Latest view",
       recommended: "Recommended view"
+    }
+  },
+  auth: {
+    loading: "Checking session",
+    setupTitle: "Set access password",
+    setupBody: "This is a single-user self-hosted instance. Set an access password to enter the reader.",
+    loginTitle: "Log in to Dibao",
+    loginBody: "Enter the access password to continue.",
+    passwordLabel: "Access password",
+    passwordPlaceholder: "At least 8 characters",
+    setupSubmit: "Finish setup",
+    loginSubmit: "Log in",
+    submitting: "Working",
+    logout: "Log out",
+    logoutTitle: "Log out",
+    passwordRequired: "Enter the access password.",
+    errors: {
+      session: "Unable to read session state.",
+      logout: "Log out failed."
     }
   },
   feeds: {

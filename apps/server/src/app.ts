@@ -1,15 +1,18 @@
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import Fastify, { type FastifyReply } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import {
   ARTICLE_ACTION_EVENT_WEIGHTS,
   getSqliteVecVersion,
   openDatabase,
+  SqliteAppSettingsRepository,
   SqliteArticleActionRepository,
   SqliteArticleRepository,
+  SqliteAuthCredentialRepository,
   SqliteFeedFolderRepository,
   SqliteFeedRepository,
   SqliteRankingRepository,
+  SqliteSessionRepository,
   type ArticleActionType,
   type ArticleDetailRow,
   type ArticleListInput,
@@ -26,6 +29,12 @@ import {
   ArticleActionService,
   ArticleActionServiceError
 } from "./article-action-service.js";
+import {
+  readSessionCookie,
+  serializeClearSessionCookie,
+  serializeSessionCookie
+} from "./auth-cookie.js";
+import { AuthService, AuthServiceError } from "./auth-service.js";
 import {
   FeedIngestionError,
   FeedRefreshService,
@@ -52,6 +61,10 @@ type FeedQuery = {
 type CreateFeedBody = {
   feedUrl?: unknown;
   folderId?: unknown;
+};
+
+type PasswordBody = {
+  password?: unknown;
 };
 
 type FeedParams = {
@@ -90,11 +103,16 @@ type BuildServerOptions = {
   feedFetcher?: FeedFetcher;
   now?: () => number;
   logger?: boolean;
+  cookieSecure?: boolean;
+  authRequired?: boolean;
 };
 
 export function buildServer(options: BuildServerOptions = {}) {
   const db = options.db ?? openConfiguredDatabase(options);
   const closeDatabaseOnClose = options.closeDatabaseOnClose ?? !options.db;
+  const settings = new SqliteAppSettingsRepository(db);
+  const credentials = new SqliteAuthCredentialRepository(db);
+  const sessions = new SqliteSessionRepository(db);
   const folders = new SqliteFeedFolderRepository(db);
   const feeds = new SqliteFeedRepository(db);
   const articles = new SqliteArticleRepository(db);
@@ -122,6 +140,16 @@ export function buildServer(options: BuildServerOptions = {}) {
     feeds,
     now: options.now
   });
+  const authService = new AuthService({
+    credentials,
+    sessions,
+    settings,
+    now: options.now
+  });
+  const cookieOptions = {
+    secure: resolveCookieSecure(options.cookieSecure)
+  };
+  const authRequired = options.authRequired ?? true;
 
   const app = Fastify({
     logger: options.logger ?? true
@@ -154,11 +182,80 @@ export function buildServer(options: BuildServerOptions = {}) {
     return sendApiError(reply, 500, "INTERNAL_ERROR", "Internal server error");
   });
 
+  app.addHook("preHandler", async (request, reply) => {
+    if (!authRequired || isAnonymousRoute(request.method, request.routeOptions.url)) {
+      return;
+    }
+
+    const token = readSessionCookie(request.headers.cookie);
+    if (!authService.authenticate(token)) {
+      return sendApiError(reply, 401, "UNAUTHORIZED", "Authentication required");
+    }
+  });
+
   if (closeDatabaseOnClose) {
     app.addHook("onClose", async () => {
       db.close();
     });
   }
+
+  app.get("/api/auth/session", async (request) => ({
+    data: authService.getSessionStatus(readSessionCookie(request.headers.cookie))
+  }));
+
+  app.post<{ Body: PasswordBody }>("/api/auth/setup", async (request, reply) => {
+    const parsed = parsePasswordBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    try {
+      const session = await authService.setup(parsed.password, requestMeta(request));
+      reply.header(
+        "set-cookie",
+        serializeSessionCookie(session.token, session.expiresAt, cookieOptions)
+      );
+      return {
+        data: {
+          ok: true
+        }
+      };
+    } catch (error) {
+      return sendAuthError(reply, error);
+    }
+  });
+
+  app.post<{ Body: PasswordBody }>("/api/auth/login", async (request, reply) => {
+    const parsed = parsePasswordBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    try {
+      const session = await authService.login(parsed.password, requestMeta(request));
+      reply.header(
+        "set-cookie",
+        serializeSessionCookie(session.token, session.expiresAt, cookieOptions)
+      );
+      return {
+        data: {
+          ok: true
+        }
+      };
+    } catch (error) {
+      return sendAuthError(reply, error);
+    }
+  });
+
+  app.post("/api/auth/logout", async (request, reply) => {
+    authService.logout(readSessionCookie(request.headers.cookie));
+    reply.header("set-cookie", serializeClearSessionCookie(cookieOptions));
+    return {
+      data: {
+        ok: true
+      }
+    };
+  });
 
   app.get("/api/system/health", async (_request, reply) => {
     const data = getHealth(db);
@@ -346,6 +443,46 @@ function ensureDatabaseDirectory(databasePath: string): void {
   mkdirSync(dirname(databasePath), { recursive: true });
 }
 
+function resolveCookieSecure(value: boolean | undefined): boolean {
+  if (value !== undefined) {
+    return value;
+  }
+
+  if (process.env.DIBAO_COOKIE_SECURE === "true") {
+    return true;
+  }
+  if (process.env.DIBAO_COOKIE_SECURE === "false") {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "production";
+}
+
+function isAnonymousRoute(method: string, routePath: string | undefined): boolean {
+  if (!routePath) {
+    return false;
+  }
+
+  return anonymousRoutes.has(`${method.toUpperCase()} ${routePath}`);
+}
+
+const anonymousRoutes = new Set([
+  "GET /api/auth/session",
+  "POST /api/auth/setup",
+  "POST /api/auth/login",
+  "POST /api/auth/logout",
+  "GET /api/system/health"
+]);
+
+function requestMeta(request: FastifyRequest) {
+  const userAgent = request.headers["user-agent"];
+
+  return {
+    userAgent: Array.isArray(userAgent) ? userAgent.join(" ") : userAgent,
+    ip: request.ip
+  };
+}
+
 function getHealth(db: DibaoDatabase): HealthResponse {
   const database = checkHealth(() => {
     db.prepare("select 1 as ok").get();
@@ -450,6 +587,27 @@ function parseCreateFeedBody(body: CreateFeedBody | undefined):
       feedUrl: body.feedUrl,
       ...(body.folderId !== undefined ? { folderId: body.folderId } : {})
     }
+  };
+}
+
+function parsePasswordBody(body: PasswordBody | undefined):
+  | { ok: true; password: string }
+  | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+
+  if (typeof body.password !== "string" || body.password.length === 0) {
+    return {
+      ok: false,
+      message: "password is required",
+      details: { field: "password" }
+    };
+  }
+
+  return {
+    ok: true,
+    password: body.password
   };
 }
 
@@ -789,6 +947,14 @@ function sendApiError(
 
 function sendFeedIngestionError(reply: FastifyReply, error: unknown) {
   if (error instanceof FeedIngestionError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendAuthError(reply: FastifyReply, error: unknown) {
+  if (error instanceof AuthServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 

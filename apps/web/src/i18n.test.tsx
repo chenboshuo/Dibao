@@ -4,6 +4,7 @@ import {
   App,
   ArticleActionControls,
   ArticleListPanel,
+  AuthGatePanel,
   FeedPanel,
   RankExplanationPanel
 } from "./App.js";
@@ -33,19 +34,39 @@ describe("web i18n", () => {
     expect(i18n.formatDate("2026-05-14T08:00:00.000Z")).not.toBe("2026-05-14T08:00:00.000Z");
   });
 
-  it("renders App with dictionary copy for a non-default locale", () => {
+  it("renders App auth loading with dictionary copy for a non-default locale", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider locale="en-US">
         <App />
       </DibaoI18nProvider>
     );
 
-    expect(html).toContain("Latest Articles");
-    expect(html).toContain("Primary navigation");
-    expect(html).toContain("Add");
-    expect(html).toContain("Import OPML");
-    expect(html).toContain("Export OPML");
-    expect(html).not.toContain("最新文章");
+    expect(html).toContain("Checking session");
+    expect(html).toContain("Dibao");
+    expect(html).not.toContain("正在检查登录状态");
+  });
+
+  it("renders setup and login auth gate copy from the dictionary", () => {
+    const setupHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <AuthGatePanel isSubmitting={false} mode="setup" onSubmit={() => undefined} />
+      </DibaoI18nProvider>
+    );
+    const loginHtml = renderToStaticMarkup(
+      <DibaoI18nProvider locale="en-US">
+        <AuthGatePanel
+          error="Invalid password"
+          isSubmitting={false}
+          mode="login"
+          onSubmit={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(setupHtml).toContain("设置访问密码");
+    expect(setupHtml).toContain("完成设置");
+    expect(loginHtml).toContain("Log in to Dibao");
+    expect(loginHtml).toContain("Invalid password");
   });
 
   it("renders OPML, folder, and pagination copy from the dictionary", () => {

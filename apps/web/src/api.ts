@@ -108,6 +108,15 @@ export type OpmlImportResponse = {
   errors: string[];
 };
 
+export type AuthSession = {
+  setupCompleted: boolean;
+  authenticated: boolean;
+};
+
+export type AuthOkResponse = {
+  ok: true;
+};
+
 export type CreateFeedResponse = {
   feed: Feed;
   refreshJobId: string;
@@ -161,6 +170,7 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     const response = await fetcher(path, {
       ...init,
+      credentials: init.credentials ?? "same-origin",
       headers
     });
     const payload = await readJson(response);
@@ -186,6 +196,7 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
   async function requestText(path: string, init: RequestInit = {}): Promise<string> {
     const response = await fetcher(path, {
       ...init,
+      credentials: init.credentials ?? "same-origin",
       headers: {
         accept: "application/xml, text/xml, */*",
         ...init.headers
@@ -209,6 +220,36 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
   }
 
   return {
+    async getAuthSession(): Promise<AuthSession> {
+      return (await request<AuthSession>("/api/auth/session")).data;
+    },
+
+    async setupAuth(password: string): Promise<AuthOkResponse> {
+      return (
+        await request<AuthOkResponse>("/api/auth/setup", {
+          method: "POST",
+          body: JSON.stringify({ password })
+        })
+      ).data;
+    },
+
+    async login(password: string): Promise<AuthOkResponse> {
+      return (
+        await request<AuthOkResponse>("/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ password })
+        })
+      ).data;
+    },
+
+    async logout(): Promise<AuthOkResponse> {
+      return (
+        await request<AuthOkResponse>("/api/auth/logout", {
+          method: "POST"
+        })
+      ).data;
+    },
+
     async listFeedFolders(): Promise<FeedFolder[]> {
       return (await request<FeedFolder[]>("/api/feed-folders")).data;
     },

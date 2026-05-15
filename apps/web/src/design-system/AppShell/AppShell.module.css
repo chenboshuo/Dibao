@@ -8,6 +8,69 @@
   letter-spacing: 0;
 }
 
+.authShell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-ui);
+  letter-spacing: 0;
+}
+
+.authPanel {
+  width: min(100%, 420px);
+  display: grid;
+  gap: var(--space-4);
+  border: var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-5);
+  background: var(--color-surface);
+}
+
+.authPanel h1,
+.authPanel p {
+  margin: 0;
+}
+
+.authPanel .brand {
+  margin-bottom: 0;
+}
+
+.authPanel h1 {
+  font-size: var(--text-xl);
+  line-height: 1.25;
+}
+
+.authPanel p {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.authForm {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.authForm label {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.authForm input {
+  min-width: 0;
+  height: var(--input-height-md);
+  border: var(--input-border);
+  border-radius: var(--input-radius);
+  padding-inline: var(--input-padding-x);
+  background: var(--input-background);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
 .sidebar {
   border-right: var(--border-default);
   padding: var(--space-4);
@@ -105,6 +168,11 @@
 .statusText {
   min-width: 96px;
   text-align: right;
+}
+
+.logoutError {
+  color: var(--color-danger);
+  font-size: var(--text-xs);
 }
 
 .version,

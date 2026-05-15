@@ -116,7 +116,14 @@ INTERNAL_ERROR
 GET  /api/auth/session
 POST /api/auth/setup
 POST /api/auth/login
+POST /api/auth/logout
+GET  /api/system/health
 ```
+
+说明：
+
+- `POST /api/auth/logout` 允许匿名调用并保持幂等，用于清理可能存在的 session cookie。
+- `GET /api/system/health` 是自托管部署和反向代理健康检查的匿名例外。
 
 ### Pagination
 

@@ -7,9 +7,11 @@ import {
   SqliteArticleActionRepository,
   SqliteArticleRepository,
   SqliteAppSettingsRepository,
+  SqliteAuthCredentialRepository,
   SqliteEmbeddingRepository,
   SqliteFeedRepository,
   SqliteRankingRepository,
+  SqliteSessionRepository,
   SqliteVecVectorStore,
   checksumSql,
   float32VectorToBuffer,
@@ -317,6 +319,54 @@ describe("db package", () => {
         score: 0.75,
         calculatedAt: 3000
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("stores auth credentials and hashed sessions", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const credentials = new SqliteAuthCredentialRepository(db);
+      const sessions = new SqliteSessionRepository(db);
+
+      expect(credentials.hasCredential()).toBe(false);
+      credentials.createCredential({
+        id: "single_user",
+        passwordHash: "scrypt:v1:hash",
+        passwordAlgo: "scrypt:v1",
+        now: 1000
+      });
+      expect(credentials.hasCredential()).toBe(true);
+      expect(credentials.findCredential()).toMatchObject({
+        id: "single_user",
+        passwordHash: "scrypt:v1:hash",
+        passwordAlgo: "scrypt:v1",
+        createdAt: 1000,
+        updatedAt: 1000
+      });
+
+      sessions.createSession({
+        id: "session_1",
+        sessionHash: "hash_1",
+        createdAt: 2000,
+        expiresAt: 3000,
+        userAgent: "vitest",
+        ipHash: "ip_hash"
+      });
+      expect(sessions.findByHash("hash_1")).toMatchObject({
+        id: "session_1",
+        sessionHash: "hash_1",
+        lastSeenAt: 2000
+      });
+
+      sessions.touchSession("session_1", 2500);
+      expect(sessions.findByHash("hash_1")).toMatchObject({
+        lastSeenAt: 2500
+      });
+
+      sessions.deleteExpired(3000);
+      expect(sessions.findByHash("hash_1")).toBeNull();
     } finally {
       db.close();
     }

@@ -9,6 +9,7 @@ import {
   type ArticleListItem,
   type ArticleState,
   type ArticleView,
+  type AuthSession,
   type Feed,
   type FeedFolder,
   type OpmlImportResponse,
@@ -39,6 +40,8 @@ type SourceSelection =
   | { type: "folder"; folderId: string }
   | { type: "feed"; feedId: string };
 
+type AuthMode = "setup" | "login";
+
 export type ArticleActionIntent = "favorite" | "readLater" | "readStatus" | "notInterested";
 
 type PendingArticleAction = {
@@ -48,6 +51,11 @@ type PendingArticleAction = {
 
 export function App() {
   const { t } = useI18n();
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [feedFolders, setFeedFolders] = useState<FeedFolder[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
@@ -143,6 +151,74 @@ export function App() {
     setArticleView(view);
   }
 
+  const resetReaderState = useCallback(() => {
+    setFeedFolders([]);
+    setFeeds([]);
+    setArticles([]);
+    setSourceSelection({ type: "all" });
+    setArticleView("latest");
+    setSelectedArticleId(null);
+    setArticleDetail(null);
+    setRankExplanation(null);
+    setFeedUrl("");
+    setIsFeedsLoading(false);
+    setIsArticlesLoading(false);
+    setIsLoadingMoreArticles(false);
+    setIsDetailLoading(false);
+    setIsExplanationLoading(false);
+    setIsAddingFeed(false);
+    setIsImportingOpml(false);
+    setIsExportingOpml(false);
+    setRefreshingFeedId(null);
+    setFeedError(null);
+    setArticleError(null);
+    setLoadMoreError(null);
+    setDetailError(null);
+    setExplanationError(null);
+    setArticleActionError(null);
+    setOpmlSummary(null);
+    setNextArticleCursor(null);
+    setPendingArticleAction(null);
+    setNotice(null);
+    openedArticleIds.current.clear();
+    articleRequestVersion.current += 1;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAuthSession() {
+      setIsAuthLoading(true);
+      setAuthError(null);
+
+      try {
+        const session = await dibaoApi.getAuthSession();
+        if (!cancelled) {
+          setAuthSession(session);
+          if (!session.authenticated) {
+            resetReaderState();
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAuthSession(null);
+          setAuthError(userMessageForError(error, t.errors.api));
+          resetReaderState();
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAuthLoading(false);
+        }
+      }
+    }
+
+    void loadAuthSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resetReaderState, t.errors.api]);
+
   const refreshArticleExplanation = useCallback(async (articleId: string) => {
     setIsExplanationLoading(true);
     setExplanationError(null);
@@ -234,12 +310,20 @@ export function App() {
   }, [t.errors.api]);
 
   useEffect(() => {
+    if (!authSession?.authenticated) {
+      return;
+    }
+
     void Promise.all([loadFeedFolders(), loadFeeds()]);
-  }, [loadFeedFolders, loadFeeds]);
+  }, [authSession?.authenticated, loadFeedFolders, loadFeeds]);
 
   useEffect(() => {
+    if (!authSession?.authenticated) {
+      return;
+    }
+
     void loadArticles(sourceSelection, articleView);
-  }, [articleView, loadArticles, sourceSelection]);
+  }, [articleView, authSession?.authenticated, loadArticles, sourceSelection]);
 
   useEffect(() => {
     let cancelled = false;
@@ -304,6 +388,47 @@ export function App() {
       cancelled = true;
     };
   }, [refreshArticleExplanation, selectedArticleId, t.actions.errors.open, t.errors.api]);
+
+  async function handleAuthSubmit(mode: AuthMode, password: string) {
+    if (!password.trim()) {
+      setAuthError(t.auth.passwordRequired);
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    setAuthError(null);
+
+    try {
+      if (mode === "setup") {
+        await dibaoApi.setupAuth(password);
+      } else {
+        await dibaoApi.login(password);
+      }
+      setAuthSession({
+        setupCompleted: true,
+        authenticated: true
+      });
+    } catch (error) {
+      setAuthError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleLogout() {
+    setLogoutError(null);
+
+    try {
+      await dibaoApi.logout();
+      setAuthSession({
+        setupCompleted: true,
+        authenticated: false
+      });
+      resetReaderState();
+    } catch (error) {
+      setLogoutError(userMessageForError(error, t.errors.api) || t.auth.errors.logout);
+    }
+  }
 
   async function handleAddFeed(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -458,6 +583,27 @@ export function App() {
 
   const noticeText = notice ? noticeTextFor(notice, t) : null;
 
+  if (isAuthLoading) {
+    return (
+      <main className={styles.authShell}>
+        <AuthGatePanel isSubmitting={false} mode="loading" />
+      </main>
+    );
+  }
+
+  if (!authSession?.authenticated) {
+    return (
+      <main className={styles.authShell}>
+        <AuthGatePanel
+          error={authError}
+          isSubmitting={isAuthSubmitting}
+          mode={authSession?.setupCompleted ? "login" : "setup"}
+          onSubmit={handleAuthSubmit}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className={styles.shell}>
       <aside className={styles.sidebar} aria-label={t.navigation.ariaLabel}>
@@ -495,6 +641,15 @@ export function App() {
               {noticeText ??
                 (isArticlesLoading ? t.shell.loadingArticles : t.shell.viewStatus[articleView])}
             </span>
+            {logoutError ? <span className={styles.logoutError}>{logoutError}</span> : null}
+            <button
+              className={styles.secondaryButton}
+              onClick={handleLogout}
+              title={t.auth.logoutTitle}
+              type="button"
+            >
+              {t.auth.logout}
+            </button>
             <span className={styles.version}>{t.common.version(dibaoVersion)}</span>
           </div>
         </header>
@@ -558,6 +713,74 @@ export function App() {
         </div>
       </section>
     </main>
+  );
+}
+
+export function AuthGatePanel(props: {
+  error?: string | null;
+  isSubmitting: boolean;
+  mode: AuthMode | "loading";
+  onSubmit?: (mode: AuthMode, password: string) => void;
+}) {
+  const { t } = useI18n();
+  const [password, setPassword] = useState("");
+
+  if (props.mode === "loading") {
+    return (
+      <section className={styles.authPanel} aria-live="polite">
+        <div className={styles.brand}>
+          <span className={styles.brandMark}>{t.common.brandMark}</span>
+          <span>
+            <strong>{t.common.brandName}</strong>
+            <small>{t.common.brandSubtitle}</small>
+          </span>
+        </div>
+        <p>{t.auth.loading}</p>
+      </section>
+    );
+  }
+
+  const title = props.mode === "setup" ? t.auth.setupTitle : t.auth.loginTitle;
+  const body = props.mode === "setup" ? t.auth.setupBody : t.auth.loginBody;
+  const submitLabel = props.mode === "setup" ? t.auth.setupSubmit : t.auth.loginSubmit;
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    props.onSubmit?.(props.mode as AuthMode, password);
+  }
+
+  return (
+    <section className={styles.authPanel} aria-labelledby="auth-title">
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <span>
+          <strong>{t.common.brandName}</strong>
+          <small>{t.common.brandSubtitle}</small>
+        </span>
+      </div>
+      <div>
+        <p className={styles.kicker}>{t.shell.kicker}</p>
+        <h1 id="auth-title">{title}</h1>
+        <p>{body}</p>
+      </div>
+
+      <form className={styles.authForm} onSubmit={handleSubmit}>
+        <label htmlFor="auth-password">{t.auth.passwordLabel}</label>
+        <input
+          autoComplete={props.mode === "setup" ? "new-password" : "current-password"}
+          id="auth-password"
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder={t.auth.passwordPlaceholder}
+          type="password"
+          value={password}
+        />
+        <button className={styles.primaryButton} disabled={props.isSubmitting} type="submit">
+          {props.isSubmitting ? t.auth.submitting : submitLabel}
+        </button>
+      </form>
+
+      {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+    </section>
   );
 }
 
