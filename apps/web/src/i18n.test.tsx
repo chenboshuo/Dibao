@@ -306,7 +306,7 @@ describe("web i18n", () => {
     expect(html).not.toContain("Embedding");
   });
 
-  it("renders settings page controls and OpenAI-compatible provider fields", () => {
+  it("renders settings page controls and supported provider fields", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <SettingsWorkspace
@@ -342,11 +342,11 @@ describe("web i18n", () => {
     expect(html).toContain("retention.retentionDays");
     expect(html).toContain("智能能力");
     expect(html).toContain("OpenAI-compatible");
+    expect(html).toContain("Ollama");
     expect(html).toContain("API Key");
     expect(html).toContain("Base URL");
     expect(html).toContain("模型");
     expect(html).toContain("测试连接");
-    expect(html).not.toContain("Ollama");
   });
 
   it("builds reader CSS variables from persisted reader settings", () => {

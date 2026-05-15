@@ -69,8 +69,8 @@ Expected result:
 | Article actions | Done | Favorite, read later, read/unread, and not interested actions persist and update UI. |
 | Background refresh | Done | Enabled feeds can be refreshed through jobs; failures are isolated and recorded. |
 | Retention | Done | Article retention cleanup preserves behavior/profile data and clears serving indexes. |
-| Settings | Done | Language, reader settings, retention days, and OpenAI-compatible provider settings persist. |
-| Embedding provider | Done | OpenAI-compatible provider can be saved, enabled, tested, and used for embedding jobs. |
+| Settings | Done | Language, reader settings, retention days, and OpenAI-compatible/Ollama provider settings persist. |
+| Embedding provider | Done | OpenAI-compatible and Ollama providers can be saved, enabled, tested, and used for embedding jobs. |
 | sqlite-vec | Done | Vectors can be stored, rebuilt, and queried through sqlite-vec. |
 | Profile/ranking | Done | Behavior events update profile clusters; recommended ranking uses active context with fallback. |
 | Explanation | Done | Recommendation explanation displays baseline and interest-related reasons. |
@@ -82,7 +82,7 @@ Expected result:
 
 - Single-user only. No multi-user, OAuth, account management, or official hosted service.
 - Self-hosted local SQLite only. No cloud sync.
-- MVP only supports OpenAI-compatible embedding endpoints. Ollama, custom HTTP, and embedded local models are future adapters.
+- MVP supports OpenAI-compatible and Ollama embedding endpoints. Custom HTTP and embedded local models are future adapters.
 - Provider API keys are stored in local SQLite using the current MVP local-storage strategy, not a full secret-management system.
 - Search UI, PWA installability, native mobile packaging, full mobile polish, diversity reranking, duplicate penalties, and reindex migration UX are post-MVP work.
 - Docker build has not been verified in the current local environment because Docker CLI is unavailable.
@@ -105,4 +105,3 @@ git push origin v0.1.0
 - Mark as prerelease: optional. Recommended `yes` if Docker build has not been independently verified; otherwise `no`.
 - Attachments: none required for source release.
 - Body: use `docs/release-notes-v0.1.0.md`.
-

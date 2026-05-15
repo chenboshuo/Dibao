@@ -15,7 +15,7 @@ It is designed for users who want a local and controllable alternative to algori
 - Background feed refresh jobs.
 - Article retention cleanup.
 - Settings page for language, reader typography, retention, and embedding provider.
-- OpenAI-compatible embedding provider pipeline.
+- OpenAI-compatible and Ollama embedding provider pipeline.
 - sqlite-vec vector storage and rebuild support.
 - Profile Algorithm v0 and Ranking v1 fusion.
 - Recommendation explanation UI.
@@ -43,7 +43,7 @@ It is designed for users who want a local and controllable alternative to algori
 ### Recommendation
 
 - Baseline ranking works without any embedding provider.
-- OpenAI-compatible embedding providers can be configured and tested.
+- OpenAI-compatible and Ollama embedding providers can be configured and tested.
 - New articles can be embedded through background jobs.
 - Article vectors are stored in SQLite authority tables and sqlite-vec indexes.
 - User behavior can update positive and negative interest clusters.
@@ -88,7 +88,7 @@ Reason: Docker CLI is not available in the current environment.
 - No native iOS / Android / desktop app packaging yet.
 - No Search UI yet, although SQLite FTS infrastructure exists.
 - No full mobile layout hardening beyond MVP smoke coverage.
-- No Ollama/custom HTTP/embedded local provider adapter yet.
+- No custom HTTP/embedded local provider adapter yet.
 - No provider API key encryption beyond current MVP local SQLite storage.
 - No advanced diversity reranking or duplicate penalties yet.
 - No full model migration UX for changing embedding dimensions/models.
@@ -112,4 +112,3 @@ Before creating `v0.1.0`, complete:
 - Docker build and Compose smoke on a machine with Docker.
 
 See `docs/release-checklist-v0.1.0.md`.
-

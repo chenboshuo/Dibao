@@ -5,7 +5,7 @@
 当前 MVP 边界：
 
 - 单用户、自托管、本地 SQLite 数据库。
-- 支持首次设置密码、OPML 导入/导出、手动添加 RSS、后台刷新、文章动作、基础排序和 OpenAI-compatible embedding provider。
+- 支持首次设置密码、OPML 导入/导出、手动添加 RSS、后台刷新、文章动作、基础排序、OpenAI-compatible 和 Ollama embedding provider。
 - 不提供多用户、官方托管、OAuth、云同步、PWA、全文搜索 UI 或移动端 App 打包。
 
 ## Docker Compose 快速启动
@@ -58,12 +58,26 @@ Dockerfile 内置 HEALTHCHECK 不依赖 `curl`/`wget`，而是用 Node `fetch()`
 
 ## Embedding Provider
 
-MVP 只开放 OpenAI-compatible embedding endpoint。你可以在“设置”里填写：
+MVP 支持 OpenAI-compatible 和 Ollama 两类 embedding provider。你可以在“设置”里选择类型后填写：
 
 - Base URL，例如 `https://api.example.com/v1`
 - Model，例如 `text-embedding-3-small`
 - Dimension，例如 `1536`
 - API Key，按你的 endpoint 要求填写
+
+Ollama 本地测试示例：
+
+```bash
+ollama pull nomic-embed-text
+```
+
+设置页选择 `Ollama`，填写：
+
+- Base URL：`http://127.0.0.1:11434`
+- Model：`nomic-embed-text`
+- Dimension：`768`
+
+如果邸报运行在 Docker 容器里，而 Ollama 运行在宿主机上，Docker Desktop 通常需要把 Base URL 写成 `http://host.docker.internal:11434`；Linux 服务器可使用宿主机 LAN IP 或把 Ollama 作为同一 Compose 网络里的服务暴露。
 
 配置后可以点击“测试连接”。未配置、停用或测试失败时，阅读和基础推荐仍然可用。
 

@@ -15,6 +15,7 @@ import {
   type CreateEmbeddingProviderInput,
   type EmbeddingIndex,
   type EmbeddingProvider,
+  type EmbeddingProviderType,
   type Feed,
   type FeedFolder,
   type OpmlImportResponse,
@@ -1458,8 +1459,14 @@ type SettingsDraft = {
   retentionDays: string;
 };
 
+type SupportedEmbeddingProviderType = Extract<
+  EmbeddingProviderType,
+  "openai_compatible" | "ollama"
+>;
+
 type EmbeddingProviderDraft = {
   providerId: string;
+  type: SupportedEmbeddingProviderType;
   name: string;
   baseUrl: string;
   model: string;
@@ -1725,10 +1732,20 @@ export function SettingsWorkspace(props: {
 
             <label className={styles.settingsField} htmlFor="settings-provider-type">
               <span>{t.settings.sections.provider.typeLabel}</span>
-              <select id="settings-provider-type" value="openai_compatible" disabled>
+              <select
+                id="settings-provider-type"
+                onChange={(event) => {
+                  const nextType =
+                    event.target.value === "ollama" ? "ollama" : "openai_compatible";
+                  setProviderDraft(draftWithProviderType(providerDraft, nextType));
+                  setProviderLocalError(null);
+                }}
+                value={providerDraft.type}
+              >
                 <option value="openai_compatible">
                   {t.settings.sections.provider.openaiCompatible}
                 </option>
+                <option value="ollama">{t.settings.sections.provider.ollama}</option>
               </select>
             </label>
 
@@ -1751,7 +1768,11 @@ export function SettingsWorkspace(props: {
                 onChange={(event) =>
                   setProviderDraft({ ...providerDraft, baseUrl: event.target.value })
                 }
-                placeholder={t.settings.sections.provider.baseUrlPlaceholder}
+                placeholder={
+                  providerDraft.type === "ollama"
+                    ? t.settings.sections.provider.ollamaBaseUrlPlaceholder
+                    : t.settings.sections.provider.baseUrlPlaceholder
+                }
                 type="url"
                 value={providerDraft.baseUrl}
               />
@@ -1764,7 +1785,11 @@ export function SettingsWorkspace(props: {
                 onChange={(event) =>
                   setProviderDraft({ ...providerDraft, model: event.target.value })
                 }
-                placeholder={t.settings.sections.provider.modelPlaceholder}
+                placeholder={
+                  providerDraft.type === "ollama"
+                    ? t.settings.sections.provider.ollamaModelPlaceholder
+                    : t.settings.sections.provider.modelPlaceholder
+                }
                 value={providerDraft.model}
               />
             </label>
@@ -1779,23 +1804,29 @@ export function SettingsWorkspace(props: {
               value={providerDraft.dimension}
             />
 
-            <label className={styles.settingsField} htmlFor="settings-provider-api-key">
-              <span>{t.settings.sections.provider.apiKeyLabel}</span>
-              <input
-                autoComplete="off"
-                id="settings-provider-api-key"
-                onChange={(event) =>
-                  setProviderDraft({ ...providerDraft, apiKey: event.target.value })
-                }
-                placeholder={
-                  selectedProvider?.hasApiKey
-                    ? t.settings.sections.provider.apiKeyRetainPlaceholder
-                    : t.settings.sections.provider.apiKeyPlaceholder
-                }
-                type="password"
-                value={providerDraft.apiKey}
-              />
-            </label>
+            {providerDraft.type === "openai_compatible" ? (
+              <label className={styles.settingsField} htmlFor="settings-provider-api-key">
+                <span>{t.settings.sections.provider.apiKeyLabel}</span>
+                <input
+                  autoComplete="off"
+                  id="settings-provider-api-key"
+                  onChange={(event) =>
+                    setProviderDraft({ ...providerDraft, apiKey: event.target.value })
+                  }
+                  placeholder={
+                    selectedProvider?.hasApiKey
+                      ? t.settings.sections.provider.apiKeyRetainPlaceholder
+                      : t.settings.sections.provider.apiKeyPlaceholder
+                  }
+                  type="password"
+                  value={providerDraft.apiKey}
+                />
+              </label>
+            ) : (
+              <p className={styles.managementHint}>
+                {t.settings.sections.provider.ollamaApiKeyHint}
+              </p>
+            )}
 
             <label className={styles.settingsField} htmlFor="settings-provider-quality">
               <span>{t.settings.sections.provider.qualityTierLabel}</span>
@@ -2511,16 +2542,73 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
 }
 
 function draftForEmbeddingProvider(provider: EmbeddingProvider | null): EmbeddingProviderDraft {
+  const supportedType = supportedProviderType(provider?.type);
+  const defaults = defaultEmbeddingProviderDraft(supportedType);
   return {
     providerId: provider?.id ?? newEmbeddingProviderId,
-    name: provider?.name ?? "OpenAI Compatible",
-    baseUrl: provider?.baseUrl ?? "",
-    model: provider?.model ?? "text-embedding-3-small",
-    dimension: String(provider?.dimension ?? 1536),
+    type: supportedType,
+    name: provider?.name ?? defaults.name,
+    baseUrl: provider?.baseUrl ?? defaults.baseUrl,
+    model: provider?.model ?? defaults.model,
+    dimension: String(provider?.dimension ?? defaults.dimension),
     apiKey: "",
     enabled: provider?.enabled ?? false,
     qualityTier: provider?.qualityTier ?? "recommended"
   };
+}
+
+function draftWithProviderType(
+  draft: EmbeddingProviderDraft,
+  type: SupportedEmbeddingProviderType
+): EmbeddingProviderDraft {
+  const defaults = defaultEmbeddingProviderDraft(type);
+  const previousDefaults = defaultEmbeddingProviderDraft(draft.type);
+
+  return {
+    ...draft,
+    type,
+    name:
+      draft.name === previousDefaults.name || draft.name.trim() === ""
+        ? defaults.name
+        : draft.name,
+    baseUrl:
+      draft.baseUrl === previousDefaults.baseUrl || draft.baseUrl.trim() === ""
+        ? defaults.baseUrl
+        : draft.baseUrl,
+    model:
+      draft.model === previousDefaults.model || draft.model.trim() === ""
+        ? defaults.model
+        : draft.model,
+    dimension:
+      draft.dimension === String(previousDefaults.dimension) || draft.dimension.trim() === ""
+        ? String(defaults.dimension)
+        : draft.dimension,
+    apiKey: type === "ollama" ? "" : draft.apiKey
+  };
+}
+
+function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {
+  if (type === "ollama") {
+    return {
+      name: "Ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      model: "nomic-embed-text",
+      dimension: 768
+    };
+  }
+
+  return {
+    name: "OpenAI Compatible",
+    baseUrl: "",
+    model: "text-embedding-3-small",
+    dimension: 1536
+  };
+}
+
+function supportedProviderType(
+  type: EmbeddingProviderType | undefined
+): SupportedEmbeddingProviderType {
+  return type === "ollama" ? "ollama" : "openai_compatible";
 }
 
 function parseSettingsDraft(
@@ -2622,14 +2710,16 @@ function parseEmbeddingProviderDraft(
   return {
     ok: true,
     input: {
-      type: "openai_compatible",
+      type: draft.type,
       name,
       baseUrl,
       model,
       dimension,
       enabled: draft.enabled,
       qualityTier: draft.qualityTier,
-      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {})
+      ...(draft.type === "openai_compatible" && draft.apiKey.trim()
+        ? { apiKey: draft.apiKey.trim() }
+        : {})
     }
   };
 }

@@ -7,7 +7,7 @@ import type {
   JobRow,
   VectorStore
 } from "@dibao/db";
-import { EmbeddingProviderError, type EmbeddingProviderAdapter } from "./embedding/types.js";
+import { EmbeddingProviderError } from "./embedding/types.js";
 import type { EmbeddingProviderService } from "./embedding-provider-service.js";
 import { PermanentJobFailure } from "./job-runner.js";
 import type { ProfileService } from "./profile-service.js";
@@ -28,7 +28,6 @@ export type EmbeddingJobServiceOptions = {
   embeddings: EmbeddingRepository;
   jobs: JobRepository;
   providerService: Pick<EmbeddingProviderService, "activeProviderConfig">;
-  adapter: EmbeddingProviderAdapter;
   profile?: Pick<ProfileService, "processArticleEvents">;
   rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll" | "enqueueArticles">;
   vectorStore: Pick<VectorStore, "upsertArticleVector">;
@@ -94,10 +93,6 @@ export class EmbeddingJobService {
       return;
     }
 
-    if (provider.type !== "openai_compatible") {
-      throw new PermanentJobFailure("Embedding provider type is not supported");
-    }
-
     const active = this.options.providerService.activeProviderConfig();
     if (!active || active.index.id !== index.id || active.provider.id !== provider.id) {
       return;
@@ -113,7 +108,7 @@ export class EmbeddingJobService {
     }
 
     try {
-      const vectors = await this.options.adapter.embedBatch({
+      const vectors = await active.adapter.embedBatch({
         provider: active.provider,
         items: candidates.map((candidate) => ({
           id: candidate.articleId,

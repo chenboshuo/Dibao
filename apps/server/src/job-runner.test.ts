@@ -761,7 +761,9 @@ function createEmbeddingPipelineFixture() {
   const providerService = new EmbeddingProviderService({
     embeddings,
     vectorStore,
-    adapter,
+    adapters: {
+      openai_compatible: adapter
+    },
     now: () => 1000
   });
   const embeddingJobs = new EmbeddingJobService({
@@ -769,7 +771,6 @@ function createEmbeddingPipelineFixture() {
     embeddings,
     jobs,
     providerService,
-    adapter,
     vectorStore,
     jobIdFactory: () => `job_embedding_${randomFixtureId()}`,
     now: () => 1000

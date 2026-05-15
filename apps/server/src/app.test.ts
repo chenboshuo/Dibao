@@ -590,16 +590,87 @@ describe("server API vertical slice", () => {
     }
   });
 
-  it("rejects unsupported embedding providers and invalid OpenAI-compatible base URLs", async () => {
+  it("creates, tests, and lists Ollama embedding providers", async () => {
+    const db = createEmptyDatabase();
+    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number; model: string }> =
+      [];
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => 1000,
+      embeddingFetcher: ollamaEmbeddingFetcherFixture(embeddingCalls, 3)
+    });
+
+    try {
+      const created = await postJson(app, "/api/embedding/providers", {
+        type: "ollama",
+        name: "Ollama",
+        baseUrl: "http://127.0.0.1:11434/",
+        model: "nomic-embed-text",
+        dimension: 3,
+        enabled: true,
+        qualityTier: "basic"
+      });
+      expect(created.statusCode, created.body).toBe(200);
+      const providerId = (created.json() as { data: { id: string } }).data.id;
+
+      const providers = await app.inject({
+        method: "GET",
+        url: "/api/embedding/providers"
+      });
+      expect(providers.statusCode, providers.body).toBe(200);
+      expect(providers.json()).toMatchObject({
+        data: [
+          {
+            id: providerId,
+            type: "ollama",
+            name: "Ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            model: "nomic-embed-text",
+            dimension: 3,
+            enabled: true,
+            qualityTier: "basic",
+            hasApiKey: false
+          }
+        ]
+      });
+
+      const test = await app.inject({
+        method: "POST",
+        url: `/api/embedding/providers/${providerId}/test`
+      });
+      expect(test.statusCode, test.body).toBe(200);
+      expect(test.json()).toMatchObject({
+        data: {
+          status: "success",
+          dimension: 3,
+          latencyMs: expect.any(Number)
+        }
+      });
+      expect(embeddingCalls).toEqual([
+        {
+          url: "http://127.0.0.1:11434/api/embed",
+          authorization: null,
+          inputCount: 1,
+          model: "nomic-embed-text"
+        }
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("rejects unsupported embedding providers and invalid provider base URLs", async () => {
     const db = createEmptyDatabase();
     const app = buildServer({ db, logger: false });
 
     try {
       const unsupported = await postJson(app, "/api/embedding/providers", {
-        type: "ollama",
-        name: "Ollama",
-        model: "nomic-embed-text",
-        dimension: 768,
+        type: "custom_http",
+        name: "Custom HTTP",
+        model: "custom-embedding",
+        dimension: 3,
         enabled: true
       });
       expect(unsupported.statusCode, unsupported.body).toBe(400);
@@ -619,6 +690,24 @@ describe("server API vertical slice", () => {
       });
       expect(invalidBaseUrl.statusCode, invalidBaseUrl.body).toBe(400);
       expect(invalidBaseUrl.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "baseUrl"
+          }
+        }
+      });
+
+      const invalidOllamaBaseUrl = await postJson(app, "/api/embedding/providers", {
+        type: "ollama",
+        name: "Bad Ollama Endpoint",
+        baseUrl: "http://127.0.0.1:11434/api/embed",
+        model: "nomic-embed-text",
+        dimension: 768,
+        enabled: true
+      });
+      expect(invalidOllamaBaseUrl.statusCode, invalidOllamaBaseUrl.body).toBe(400);
+      expect(invalidOllamaBaseUrl.json()).toMatchObject({
         error: {
           code: "VALIDATION_ERROR",
           details: {
@@ -2727,6 +2816,38 @@ function embeddingFetcherFixture(
           index,
           embedding: Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
         }))
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  };
+}
+
+function ollamaEmbeddingFetcherFixture(
+  calls: Array<{ url: string; authorization: string | null; inputCount: number; model: string }>,
+  dimension: number
+): typeof fetch {
+  return async (input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { input?: unknown; model?: unknown };
+    const values = Array.isArray(body.input) ? body.input : [body.input];
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url: String(input),
+      authorization: headers.get("authorization"),
+      inputCount: values.length,
+      model: typeof body.model === "string" ? body.model : ""
+    });
+
+    return new Response(
+      JSON.stringify({
+        model: body.model,
+        embeddings: values.map(() =>
+          Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
+        )
       }),
       {
         status: 200,

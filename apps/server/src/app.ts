@@ -53,6 +53,7 @@ import {
   EmbeddingProviderService,
   EmbeddingProviderServiceError
 } from "./embedding-provider-service.js";
+import { OllamaEmbeddingAdapter } from "./embedding/ollama-adapter.js";
 import { OpenAiCompatibleEmbeddingAdapter } from "./embedding/openai-compatible-adapter.js";
 import {
   FeedManagementService,
@@ -199,13 +200,18 @@ export function buildServer(options: BuildServerOptions = {}) {
   const rankings = new SqliteRankingRepository(db);
   const profiles = new SqliteProfileRepository(db);
   const vectorStore = new SqliteVecVectorStore(db);
-  const embeddingAdapter = new OpenAiCompatibleEmbeddingAdapter({
-    fetcher: options.embeddingFetcher
-  });
+  const embeddingAdapters = {
+    openai_compatible: new OpenAiCompatibleEmbeddingAdapter({
+      fetcher: options.embeddingFetcher
+    }),
+    ollama: new OllamaEmbeddingAdapter({
+      fetcher: options.embeddingFetcher
+    })
+  };
   const embeddingProviderService = new EmbeddingProviderService({
     embeddings,
     vectorStore,
-    adapter: embeddingAdapter,
+    adapters: embeddingAdapters,
     now: options.now
   });
   const profileService = new ProfileService({
@@ -229,7 +235,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     embeddings,
     jobs,
     providerService: embeddingProviderService,
-    adapter: embeddingAdapter,
     profile: profileService,
     rankingJobs: rankingJobService,
     vectorStore,

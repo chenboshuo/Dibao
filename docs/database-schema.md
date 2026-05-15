@@ -458,7 +458,7 @@ openai_compatible
 custom_http
 ```
 
-当前实现只提供 `openai_compatible` adapter。`ollama`、`custom_http`、
+当前实现提供 `openai_compatible` 与 `ollama` adapter。`custom_http`、
 `embedded_local` 是 schema 预留类型；如果请求启用这些类型，API 层返回
 `VALIDATION_ERROR`。
 

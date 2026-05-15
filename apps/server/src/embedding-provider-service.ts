@@ -6,7 +6,11 @@ import type {
   EmbeddingRepository,
   VectorStore
 } from "@dibao/db";
-import { EmbeddingProviderError, type EmbeddingProviderAdapter } from "./embedding/types.js";
+import {
+  EmbeddingProviderError,
+  type EmbeddingProviderAdapter,
+  type EmbeddingProviderConfig
+} from "./embedding/types.js";
 
 export type EmbeddingProviderResponse = {
   id: string;
@@ -60,8 +64,14 @@ export class EmbeddingProviderServiceError extends Error {
 export type EmbeddingProviderServiceOptions = {
   embeddings: EmbeddingRepository;
   vectorStore: Pick<VectorStore, "ensureIndex">;
-  adapter: EmbeddingProviderAdapter;
+  adapters: Partial<Record<EmbeddingProviderRow["type"], EmbeddingProviderAdapter>>;
   now?: () => number;
+};
+
+export type ActiveEmbeddingProviderConfig = {
+  provider: EmbeddingProviderConfig;
+  index: EmbeddingIndexRow;
+  adapter: EmbeddingProviderAdapter;
 };
 
 export class EmbeddingProviderService {
@@ -89,6 +99,9 @@ export class EmbeddingProviderService {
     const providerId = randomId("provider");
 
     validateEnabledProviderType(input.type, input.enabled);
+    if (input.enabled) {
+      this.adapterForProviderType(input.type);
+    }
     this.options.embeddings.upsertProvider({
       id: providerId,
       type: input.type,
@@ -96,7 +109,12 @@ export class EmbeddingProviderService {
       baseUrl: input.baseUrl,
       model: input.model,
       dimension: input.dimension,
-      apiKeyEncrypted: input.apiKey !== undefined ? encodeApiKey(input.apiKey) : null,
+      apiKeyEncrypted:
+        input.type === "ollama"
+          ? null
+          : input.apiKey !== undefined
+            ? encodeApiKey(input.apiKey)
+            : null,
       enabled: input.enabled,
       qualityTier: input.qualityTier,
       now
@@ -115,14 +133,23 @@ export class EmbeddingProviderService {
       throw notFound("Embedding provider not found");
     }
 
-    const input = parseUpdateProviderBody(body);
+    const input = parseUpdateProviderBody(body, existing.type);
     const nextType = input.type ?? existing.type;
     const nextEnabled = input.enabled ?? existing.enabled;
     const nextModel = input.model ?? existing.model;
     const nextDimension = input.dimension ?? existing.dimension;
+    const apiKeyEncryptedPatch =
+      input.apiKey !== undefined
+        ? encodeApiKey(input.apiKey)
+        : nextType === "ollama"
+          ? null
+          : undefined;
     const now = this.now();
 
     validateEnabledProviderType(nextType, nextEnabled);
+    if (nextEnabled) {
+      this.adapterForProviderType(nextType);
+    }
 
     const updated = this.options.embeddings.updateProvider({
       id,
@@ -131,7 +158,7 @@ export class EmbeddingProviderService {
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.dimension !== undefined ? { dimension: input.dimension } : {}),
-      ...(input.apiKey !== undefined ? { apiKeyEncrypted: encodeApiKey(input.apiKey) } : {}),
+      ...(apiKeyEncryptedPatch !== undefined ? { apiKeyEncrypted: apiKeyEncryptedPatch } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.qualityTier !== undefined ? { qualityTier: input.qualityTier } : {}),
       now
@@ -175,7 +202,7 @@ export class EmbeddingProviderService {
     validateEnabledProviderType(provider.type, true);
 
     try {
-      const result = await this.options.adapter.test(configForProvider(provider));
+      const result = await this.adapterForProviderType(provider.type).test(configForProvider(provider));
       this.options.embeddings.recordProviderTestResult({
         id,
         status: "success",
@@ -231,16 +258,32 @@ export class EmbeddingProviderService {
     };
   }
 
-  activeProviderConfig() {
+  activeProviderConfig(): ActiveEmbeddingProviderConfig | null {
     const active = this.options.embeddings.findActiveProviderWithIndex();
-    if (!active || active.provider.type !== "openai_compatible") {
+    if (!active) {
+      return null;
+    }
+
+    const adapter = this.options.adapters[active.provider.type];
+    if (!adapter) {
       return null;
     }
 
     return {
       provider: configForProvider(active.provider),
-      index: active.index
+      index: active.index,
+      adapter
     };
+  }
+
+  private adapterForProviderType(type: EmbeddingProviderRow["type"]): EmbeddingProviderAdapter {
+    const adapter = this.options.adapters[type];
+    if (!adapter) {
+      throw validationError(`Embedding provider type ${type} is not supported in this version`, {
+        field: "type"
+      });
+    }
+    return adapter;
   }
 
   private mustFindProvider(id: string): EmbeddingProviderRow {
@@ -294,7 +337,10 @@ function parseCreateProviderBody(body: unknown): CreateProviderInput {
   };
 }
 
-function parseUpdateProviderBody(body: unknown): UpdateProviderInput {
+function parseUpdateProviderBody(
+  body: unknown,
+  currentType: EmbeddingProviderRow["type"]
+): UpdateProviderInput {
   const input = readObject(body);
   rejectUnknownKeys(input, [
     "type",
@@ -311,7 +357,7 @@ function parseUpdateProviderBody(body: unknown): UpdateProviderInput {
     ...(input.type !== undefined ? { type: parseProviderType(input.type) } : {}),
     ...(input.name !== undefined ? { name: parseNonEmptyString(input.name, "name") } : {}),
     ...(input.baseUrl !== undefined
-      ? { baseUrl: parseBaseUrl(input.baseUrl, parseProviderType(input.type ?? "openai_compatible")) }
+      ? { baseUrl: parseBaseUrl(input.baseUrl, parseProviderType(input.type ?? currentType)) }
       : {}),
     ...(input.model !== undefined ? { model: parseNonEmptyString(input.model, "model") } : {}),
     ...(input.dimension !== undefined ? { dimension: parseDimension(input.dimension) } : {}),
@@ -356,15 +402,18 @@ function parseProviderType(value: unknown): EmbeddingProviderRow["type"] {
 }
 
 function validateEnabledProviderType(type: EmbeddingProviderRow["type"], enabled: boolean): void {
-  if (enabled && type !== "openai_compatible") {
-    throw validationError("Only openai_compatible providers can be enabled in this version", {
-      field: "type"
-    });
+  if (enabled && type !== "openai_compatible" && type !== "ollama") {
+    throw validationError(
+      "Only openai_compatible and ollama providers can be enabled in this version",
+      {
+        field: "type"
+      }
+    );
   }
 }
 
 function parseBaseUrl(value: unknown, type: EmbeddingProviderRow["type"]): string | null {
-  if (type !== "openai_compatible") {
+  if (type !== "openai_compatible" && type !== "ollama") {
     return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
   }
 
@@ -383,13 +432,19 @@ function parseBaseUrl(value: unknown, type: EmbeddingProviderRow["type"]): strin
     throw validationError("baseUrl must use http or https", { field: "baseUrl" });
   }
 
-  if (url.pathname.replace(/\/+$/u, "").endsWith("/embeddings")) {
-    throw validationError("baseUrl must not include /embeddings; use the API root such as /v1", {
-      field: "baseUrl"
-    });
+  const normalizedPath = url.pathname.replace(/\/+$/u, "");
+  const forbiddenSuffix = type === "ollama" ? "/api/embed" : "/embeddings";
+  const exampleRoot = type === "ollama" ? "http://127.0.0.1:11434" : "/v1";
+  if (normalizedPath.endsWith(forbiddenSuffix)) {
+    throw validationError(
+      `baseUrl must not include ${forbiddenSuffix}; use the API root such as ${exampleRoot}`,
+      {
+        field: "baseUrl"
+      }
+    );
   }
 
-  url.pathname = url.pathname.replace(/\/+$/u, "");
+  url.pathname = normalizedPath;
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/+$/u, "");
@@ -403,6 +458,9 @@ function parseNonEmptyString(value: unknown, field: string): string {
 }
 
 function parseApiKey(value: unknown): string {
+  if (value === null) {
+    return "";
+  }
   if (typeof value !== "string") {
     throw validationError("apiKey must be a string", { field: "apiKey" });
   }

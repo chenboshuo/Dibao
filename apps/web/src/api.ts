@@ -203,7 +203,7 @@ export type EmbeddingProvider = {
 };
 
 export type CreateEmbeddingProviderInput = {
-  type: "openai_compatible";
+  type: "openai_compatible" | "ollama";
   name: string;
   baseUrl: string;
   model: string;
