@@ -14,7 +14,8 @@ import {
   type FeedFolder,
   type OpmlImportResponse,
   type RankExplanation,
-  type RankExplanationReason
+  type RankExplanationReason,
+  type SetupStatus
 } from "./api.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
 import { useI18n, type Dictionary, type NavigationItemKey } from "./i18n.js";
@@ -42,6 +43,16 @@ type SourceSelection =
 
 type AuthMode = "setup" | "login";
 
+export type AppStage =
+  | { type: "auth-loading" }
+  | { type: "welcome" }
+  | { type: "setup-password" }
+  | { type: "login" }
+  | { type: "setup-status-loading" }
+  | { type: "setup-sources" }
+  | { type: "setup-provider-placeholder" }
+  | { type: "reader" };
+
 export type ArticleActionIntent = "favorite" | "readLater" | "readStatus" | "notInterested";
 
 type PendingArticleAction = {
@@ -49,12 +60,32 @@ type PendingArticleAction = {
   intent: ArticleActionIntent;
 };
 
+export function stageForAuthSession(session: AuthSession): AppStage {
+  if (!session.setupCompleted) {
+    return { type: "welcome" };
+  }
+
+  if (!session.authenticated) {
+    return { type: "login" };
+  }
+
+  return { type: "setup-status-loading" };
+}
+
+export function stageForSetupStatus(status: SetupStatus): AppStage {
+  if (!status.setupCompleted) {
+    return { type: "welcome" };
+  }
+
+  return { type: status.hasFeeds ? "reader" : "setup-sources" };
+}
+
 export function App() {
   const { t } = useI18n();
-  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [appStage, setAppStage] = useState<AppStage>({ type: "auth-loading" });
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [setupSourceError, setSetupSourceError] = useState<string | null>(null);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [feedFolders, setFeedFolders] = useState<FeedFolder[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
@@ -176,6 +207,7 @@ export function App() {
     setDetailError(null);
     setExplanationError(null);
     setArticleActionError(null);
+    setSetupSourceError(null);
     setOpmlSummary(null);
     setNextArticleCursor(null);
     setPendingArticleAction(null);
@@ -188,26 +220,23 @@ export function App() {
     let cancelled = false;
 
     async function loadAuthSession() {
-      setIsAuthLoading(true);
+      setAppStage({ type: "auth-loading" });
       setAuthError(null);
 
       try {
         const session = await dibaoApi.getAuthSession();
         if (!cancelled) {
-          setAuthSession(session);
-          if (!session.authenticated) {
+          const nextStage = stageForAuthSession(session);
+          if (nextStage.type === "welcome" || nextStage.type === "login") {
             resetReaderState();
           }
+          setAppStage(nextStage);
         }
       } catch (error) {
         if (!cancelled) {
-          setAuthSession(null);
           setAuthError(userMessageForError(error, t.errors.api));
           resetReaderState();
-        }
-      } finally {
-        if (!cancelled) {
-          setIsAuthLoading(false);
+          setAppStage({ type: "login" });
         }
       }
     }
@@ -218,6 +247,41 @@ export function App() {
       cancelled = true;
     };
   }, [resetReaderState, t.errors.api]);
+
+  useEffect(() => {
+    if (appStage.type !== "setup-status-loading") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSetupStatus() {
+      setAuthError(null);
+
+      try {
+        const status = await dibaoApi.getSetupStatus();
+        if (!cancelled) {
+          const nextStage = stageForSetupStatus(status);
+          if (nextStage.type === "welcome") {
+            resetReaderState();
+          }
+          setAppStage(nextStage);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAuthError(userMessageForError(error, t.errors.api));
+          resetReaderState();
+          setAppStage({ type: "login" });
+        }
+      }
+    }
+
+    void loadSetupStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appStage.type, resetReaderState, t.errors.api]);
 
   const refreshArticleExplanation = useCallback(async (articleId: string) => {
     setIsExplanationLoading(true);
@@ -310,20 +374,20 @@ export function App() {
   }, [t.errors.api]);
 
   useEffect(() => {
-    if (!authSession?.authenticated) {
+    if (appStage.type !== "reader") {
       return;
     }
 
     void Promise.all([loadFeedFolders(), loadFeeds()]);
-  }, [authSession?.authenticated, loadFeedFolders, loadFeeds]);
+  }, [appStage.type, loadFeedFolders, loadFeeds]);
 
   useEffect(() => {
-    if (!authSession?.authenticated) {
+    if (appStage.type !== "reader") {
       return;
     }
 
     void loadArticles(sourceSelection, articleView);
-  }, [articleView, authSession?.authenticated, loadArticles, sourceSelection]);
+  }, [articleView, appStage.type, loadArticles, sourceSelection]);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,13 +465,12 @@ export function App() {
     try {
       if (mode === "setup") {
         await dibaoApi.setupAuth(password);
+        resetReaderState();
+        setAppStage({ type: "setup-sources" });
       } else {
         await dibaoApi.login(password);
+        setAppStage({ type: "setup-status-loading" });
       }
-      setAuthSession({
-        setupCompleted: true,
-        authenticated: true
-      });
     } catch (error) {
       setAuthError(userMessageForError(error, t.errors.api));
     } finally {
@@ -420,10 +483,7 @@ export function App() {
 
     try {
       await dibaoApi.logout();
-      setAuthSession({
-        setupCompleted: true,
-        authenticated: false
-      });
+      setAppStage({ type: "login" });
       resetReaderState();
     } catch (error) {
       setLogoutError(userMessageForError(error, t.errors.api) || t.auth.errors.logout);
@@ -454,6 +514,71 @@ export function App() {
     } finally {
       setIsAddingFeed(false);
     }
+  }
+
+  async function advanceSetupAfterSource(noFeedsMessage: string) {
+    const status = await dibaoApi.getSetupStatus();
+    if (status.hasFeeds) {
+      setSetupSourceError(null);
+      setAppStage({ type: "setup-provider-placeholder" });
+      return;
+    }
+
+    setSetupSourceError(noFeedsMessage);
+  }
+
+  async function handleSetupAddFeed(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextFeedUrl = feedUrl.trim();
+
+    if (!nextFeedUrl) {
+      setSetupSourceError(t.feeds.feedUrlRequired);
+      return;
+    }
+
+    setIsAddingFeed(true);
+    setSetupSourceError(null);
+    setOpmlSummary(null);
+
+    try {
+      await dibaoApi.createFeed(nextFeedUrl);
+      setFeedUrl("");
+      await advanceSetupAfterSource(t.setup.sources.noFeedsAfterAdd);
+    } catch (error) {
+      setSetupSourceError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsAddingFeed(false);
+    }
+  }
+
+  async function handleSetupImportOpml(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0] ?? null;
+    event.currentTarget.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    setIsImportingOpml(true);
+    setSetupSourceError(null);
+    setOpmlSummary(null);
+
+    try {
+      const result = await dibaoApi.importOpml(file);
+      setOpmlSummary(result);
+      await advanceSetupAfterSource(t.setup.sources.noFeedsAfterImport);
+    } catch (error) {
+      setSetupSourceError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsImportingOpml(false);
+    }
+  }
+
+  function handleSetupProviderContinue() {
+    resetReaderState();
+    setIsFeedsLoading(true);
+    setIsArticlesLoading(true);
+    setAppStage({ type: "reader" });
   }
 
   async function handleRefreshFeed(feed: Feed) {
@@ -583,7 +708,7 @@ export function App() {
 
   const noticeText = notice ? noticeTextFor(notice, t) : null;
 
-  if (isAuthLoading) {
+  if (appStage.type === "auth-loading" || appStage.type === "setup-status-loading") {
     return (
       <main className={styles.authShell}>
         <AuthGatePanel isSubmitting={false} mode="loading" />
@@ -591,15 +716,48 @@ export function App() {
     );
   }
 
-  if (!authSession?.authenticated) {
+  if (appStage.type === "welcome") {
+    return (
+      <main className={styles.authShell}>
+        <SetupWelcomePanel onStart={() => setAppStage({ type: "setup-password" })} />
+      </main>
+    );
+  }
+
+  if (appStage.type === "setup-password" || appStage.type === "login") {
     return (
       <main className={styles.authShell}>
         <AuthGatePanel
           error={authError}
           isSubmitting={isAuthSubmitting}
-          mode={authSession?.setupCompleted ? "login" : "setup"}
+          mode={appStage.type === "login" ? "login" : "setup"}
           onSubmit={handleAuthSubmit}
         />
+      </main>
+    );
+  }
+
+  if (appStage.type === "setup-sources") {
+    return (
+      <main className={styles.authShell}>
+        <SetupSourcesPanel
+          error={setupSourceError}
+          feedUrl={feedUrl}
+          isAddingFeed={isAddingFeed}
+          isImportingOpml={isImportingOpml}
+          onAddFeed={handleSetupAddFeed}
+          onImportOpml={handleSetupImportOpml}
+          onUpdateFeedUrl={setFeedUrl}
+          opmlSummary={opmlSummary}
+        />
+      </main>
+    );
+  }
+
+  if (appStage.type === "setup-provider-placeholder") {
+    return (
+      <main className={styles.authShell}>
+        <SetupProviderPlaceholderPanel onContinue={handleSetupProviderContinue} />
       </main>
     );
   }
@@ -716,6 +874,30 @@ export function App() {
   );
 }
 
+export function SetupWelcomePanel(props: { onStart: () => void }) {
+  const { t } = useI18n();
+
+  return (
+    <section className={styles.authPanel} aria-labelledby="setup-welcome-title">
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <span>
+          <strong>{t.common.brandName}</strong>
+          <small>{t.common.brandSubtitle}</small>
+        </span>
+      </div>
+      <div>
+        <p className={styles.kicker}>{t.setup.kicker}</p>
+        <h1 id="setup-welcome-title">{t.setup.welcome.title}</h1>
+        <p>{t.setup.welcome.body}</p>
+      </div>
+      <button className={styles.primaryButton} onClick={props.onStart} type="button">
+        {t.setup.welcome.start}
+      </button>
+    </section>
+  );
+}
+
 export function AuthGatePanel(props: {
   error?: string | null;
   isSubmitting: boolean;
@@ -780,6 +962,126 @@ export function AuthGatePanel(props: {
       </form>
 
       {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+    </section>
+  );
+}
+
+export function SetupSourcesPanel(props: {
+  error: string | null;
+  feedUrl: string;
+  isAddingFeed: boolean;
+  isImportingOpml: boolean;
+  onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
+  onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
+  onUpdateFeedUrl: (value: string) => void;
+  opmlSummary: OpmlImportResponse | null;
+}) {
+  const { t } = useI18n();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <section className={styles.authPanel} aria-labelledby="setup-sources-title">
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <span>
+          <strong>{t.common.brandName}</strong>
+          <small>{t.common.brandSubtitle}</small>
+        </span>
+      </div>
+      <div>
+        <p className={styles.kicker}>{t.setup.kicker}</p>
+        <h1 id="setup-sources-title">{t.setup.sources.title}</h1>
+        <p>{t.setup.sources.body}</p>
+      </div>
+
+      <div className={styles.setupSourceActions}>
+        <input
+          accept=".opml,.xml,text/xml,application/xml"
+          className={styles.fileInput}
+          onChange={props.onImportOpml}
+          ref={fileInputRef}
+          type="file"
+        />
+        <button
+          className={styles.secondaryButton}
+          disabled={props.isImportingOpml || props.isAddingFeed}
+          onClick={() => fileInputRef.current?.click()}
+          type="button"
+        >
+          {props.isImportingOpml ? t.opml.importing : t.setup.sources.importOpml}
+        </button>
+      </div>
+
+      <form className={styles.authForm} onSubmit={props.onAddFeed}>
+        <label htmlFor="setup-feed-url">{t.feeds.inputLabel}</label>
+        <input
+          id="setup-feed-url"
+          inputMode="url"
+          onChange={(event) => props.onUpdateFeedUrl(event.target.value)}
+          placeholder={t.feeds.inputPlaceholder}
+          type="url"
+          value={props.feedUrl}
+        />
+        <button
+          className={styles.primaryButton}
+          disabled={props.isAddingFeed || props.isImportingOpml}
+          type="submit"
+        >
+          {props.isAddingFeed ? t.feeds.adding : t.setup.sources.addFeed}
+        </button>
+      </form>
+
+      {props.opmlSummary ? (
+        <div className={styles.opmlSummary}>
+          <p>
+            {t.opml.importSummary(
+              props.opmlSummary.feedsCreated,
+              props.opmlSummary.feedsSkipped,
+              props.opmlSummary.foldersCreated
+            )}
+          </p>
+          {props.opmlSummary.errors.length > 0 ? (
+            <>
+              <p>{t.opml.importErrors(props.opmlSummary.errors.length)}</p>
+              <ul>
+                {props.opmlSummary.errors.map((error, index) => (
+                  <li key={`${error}-${index}`}>{error}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+    </section>
+  );
+}
+
+export function SetupProviderPlaceholderPanel(props: { onContinue: () => void }) {
+  const { t } = useI18n();
+
+  return (
+    <section className={styles.authPanel} aria-labelledby="setup-provider-title">
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <span>
+          <strong>{t.common.brandName}</strong>
+          <small>{t.common.brandSubtitle}</small>
+        </span>
+      </div>
+      <div>
+        <p className={styles.kicker}>{t.setup.kicker}</p>
+        <h1 id="setup-provider-title">{t.setup.provider.title}</h1>
+        <p>{t.setup.provider.body}</p>
+      </div>
+      <div className={styles.setupStatusBox}>
+        <strong>{t.setup.provider.currentTitle}</strong>
+        <p>{t.setup.provider.currentBody}</p>
+      </div>
+      <button className={styles.primaryButton} onClick={props.onContinue} type="button">
+        {t.setup.provider.continue}
+      </button>
     </section>
   );
 }

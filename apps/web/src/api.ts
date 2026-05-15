@@ -113,6 +113,13 @@ export type AuthSession = {
   authenticated: boolean;
 };
 
+export type SetupStatus = {
+  setupCompleted: boolean;
+  hasFeeds: boolean;
+  hasEmbeddingProvider: boolean;
+  firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+};
+
 export type AuthOkResponse = {
   ok: true;
 };
@@ -248,6 +255,10 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
           method: "POST"
         })
       ).data;
+    },
+
+    async getSetupStatus(): Promise<SetupStatus> {
+      return (await request<SetupStatus>("/api/setup/status")).data;
     },
 
     async listFeedFolders(): Promise<FeedFolder[]> {

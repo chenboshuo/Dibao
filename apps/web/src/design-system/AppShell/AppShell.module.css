@@ -71,6 +71,37 @@
   font-size: var(--text-sm);
 }
 
+.setupSourceActions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.setupSourceActions .secondaryButton {
+  width: 100%;
+}
+
+.setupStatusBox {
+  display: grid;
+  gap: var(--space-1);
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--color-surface-subtle);
+}
+
+.setupStatusBox strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
+.setupStatusBox p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
 .sidebar {
   border-right: var(--border-default);
   padding: var(--space-4);
@@ -839,5 +870,9 @@
 
   .loadMoreBar .secondaryButton {
     width: 100%;
+  }
+
+  .authPanel {
+    padding: var(--space-4);
   }
 }

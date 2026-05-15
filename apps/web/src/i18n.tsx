@@ -58,6 +58,29 @@ export const zhCN = {
       logout: "退出登录失败。"
     }
   },
+  setup: {
+    kicker: "首次设置",
+    welcome: {
+      title: "欢迎使用邸报",
+      body: "一个自托管的个人 RSS 推荐阅读器。先完成几个必要步骤，再进入阅读界面。",
+      start: "开始设置"
+    },
+    sources: {
+      title: "添加订阅源",
+      body: "导入 OPML 文件，或手动添加一个 RSS / Atom 源。至少需要一个订阅源才能继续。",
+      importOpml: "导入 OPML 文件",
+      addFeed: "添加订阅源",
+      noFeedsAfterImport: "导入完成，但没有创建新的订阅源。请检查 OPML 文件或手动添加 RSS / Atom 地址。",
+      noFeedsAfterAdd: "订阅源尚未创建成功，请重试。"
+    },
+    provider: {
+      title: "推荐能力",
+      body: "当前先使用基础排序。Embedding provider 会在后续设置中配置，本轮不会发送正文到外部服务。",
+      currentTitle: "当前使用基础排序",
+      currentBody: "你仍然可以阅读、收藏、稍后读，并让基础排序使用这些行为信号。",
+      continue: "暂不配置，继续"
+    }
+  },
   feeds: {
     kicker: "订阅源",
     title: "Feeds",
@@ -245,6 +268,29 @@ export const enUS = {
     errors: {
       session: "Unable to read session state.",
       logout: "Log out failed."
+    }
+  },
+  setup: {
+    kicker: "First-run setup",
+    welcome: {
+      title: "Welcome to Dibao",
+      body: "A self-hosted personal RSS recommendation reader. Complete the required steps before entering the reader.",
+      start: "Start setup"
+    },
+    sources: {
+      title: "Add feeds",
+      body: "Import an OPML file or manually add an RSS / Atom feed. At least one feed is required to continue.",
+      importOpml: "Import OPML file",
+      addFeed: "Add feed",
+      noFeedsAfterImport: "Import finished, but no feeds were created. Check the OPML file or add an RSS / Atom URL manually.",
+      noFeedsAfterAdd: "The feed was not created. Please try again."
+    },
+    provider: {
+      title: "Recommendation capability",
+      body: "Dibao will use baseline ranking for now. Embedding providers will be configured in later settings, and this step does not send article text to external services.",
+      currentTitle: "Baseline ranking is active",
+      currentBody: "You can still read, favorite, save for later, and let baseline ranking use those behavior signals.",
+      continue: "Skip for now and continue"
     }
   },
   feeds: {

@@ -6,7 +6,12 @@ import {
   ArticleListPanel,
   AuthGatePanel,
   FeedPanel,
-  RankExplanationPanel
+  RankExplanationPanel,
+  SetupProviderPlaceholderPanel,
+  SetupSourcesPanel,
+  SetupWelcomePanel,
+  stageForAuthSession,
+  stageForSetupStatus
 } from "./App.js";
 import {
   DibaoI18nProvider,
@@ -46,6 +51,37 @@ describe("web i18n", () => {
     expect(html).not.toContain("正在检查登录状态");
   });
 
+  it("maps auth and setup status to first-run stages", () => {
+    expect(
+      stageForAuthSession({
+        setupCompleted: false,
+        authenticated: false
+      })
+    ).toEqual({ type: "welcome" });
+    expect(
+      stageForAuthSession({
+        setupCompleted: true,
+        authenticated: false
+      })
+    ).toEqual({ type: "login" });
+    expect(
+      stageForSetupStatus({
+        setupCompleted: true,
+        hasFeeds: false,
+        hasEmbeddingProvider: false,
+        firstRefreshStatus: "idle"
+      })
+    ).toEqual({ type: "setup-sources" });
+    expect(
+      stageForSetupStatus({
+        setupCompleted: true,
+        hasFeeds: true,
+        hasEmbeddingProvider: false,
+        firstRefreshStatus: "idle"
+      })
+    ).toEqual({ type: "reader" });
+  });
+
   it("renders setup and login auth gate copy from the dictionary", () => {
     const setupHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
@@ -67,6 +103,46 @@ describe("web i18n", () => {
     expect(setupHtml).toContain("完成设置");
     expect(loginHtml).toContain("Log in to Dibao");
     expect(loginHtml).toContain("Invalid password");
+  });
+
+  it("renders first-run wizard copy without provider configuration fields", () => {
+    const welcomeHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <SetupWelcomePanel onStart={() => undefined} />
+      </DibaoI18nProvider>
+    );
+    const sourcesHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <SetupSourcesPanel
+          error={null}
+          feedUrl=""
+          isAddingFeed={false}
+          isImportingOpml={false}
+          onAddFeed={() => undefined}
+          onImportOpml={() => undefined}
+          onUpdateFeedUrl={() => undefined}
+          opmlSummary={null}
+        />
+      </DibaoI18nProvider>
+    );
+    const providerHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <SetupProviderPlaceholderPanel onContinue={() => undefined} />
+      </DibaoI18nProvider>
+    );
+
+    expect(welcomeHtml).toContain("欢迎使用邸报");
+    expect(welcomeHtml).toContain("开始设置");
+    expect(sourcesHtml).toContain("添加订阅源");
+    expect(sourcesHtml).toContain("导入 OPML 文件");
+    expect(sourcesHtml).toContain("RSS / Atom URL");
+    expect(providerHtml).toContain("推荐能力");
+    expect(providerHtml).toContain("当前使用基础排序");
+    expect(providerHtml).toContain("暂不配置，继续");
+    expect(providerHtml).not.toContain("API Key");
+    expect(providerHtml).not.toContain("Provider URL");
+    expect(providerHtml).not.toContain("Model");
+    expect(providerHtml).not.toContain("测试连接");
   });
 
   it("renders OPML, folder, and pagination copy from the dictionary", () => {

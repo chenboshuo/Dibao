@@ -112,6 +112,38 @@ describe("web API client", () => {
     expect(calls).toEqual(["/api/feed-folders"]);
   });
 
+  it("fetches setup status", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            setupCompleted: true,
+            hasFeeds: false,
+            hasEmbeddingProvider: false,
+            firstRefreshStatus: "idle"
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(api.getSetupStatus()).resolves.toEqual({
+      setupCompleted: true,
+      hasFeeds: false,
+      hasEmbeddingProvider: false,
+      firstRefreshStatus: "idle"
+    });
+    expect(calls).toEqual(["/api/setup/status"]);
+  });
+
   it("lists articles with view, folder, and cursor query", async () => {
     const calls: string[] = [];
     const api = createDibaoApi(async (input) => {

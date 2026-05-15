@@ -292,6 +292,86 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("protects setup status and reports no feeds after login", async () => {
+    const db = createEmptyDatabase();
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/api/setup/status"
+      });
+      expect(anonymous.statusCode, anonymous.body).toBe(401);
+      expect(anonymous.json()).toMatchObject({
+        error: {
+          code: "UNAUTHORIZED"
+        }
+      });
+
+      const setup = await postJson(app, "/api/auth/setup", {
+        password: "correct horse battery"
+      });
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/setup/status",
+        headers: {
+          cookie: cookieHeaderFromSetCookie(setup.headers["set-cookie"])
+        }
+      });
+
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json()).toEqual({
+        data: {
+          setupCompleted: true,
+          hasFeeds: false,
+          hasEmbeddingProvider: false,
+          firstRefreshStatus: "idle"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports setup status with existing undeleted feeds", async () => {
+    const db = createEmptyDatabase();
+    const feedRepository = new SqliteFeedRepository(db);
+    feedRepository.upsert({
+      id: "feed_fixture",
+      title: "Fixture Feed",
+      feedUrl: "https://example.com/feed.xml",
+      now: 1000
+    });
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const setup = await postJson(app, "/api/auth/setup", {
+        password: "correct horse battery"
+      });
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/setup/status",
+        headers: {
+          cookie: cookieHeaderFromSetCookie(setup.headers["set-cookie"])
+        }
+      });
+
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json()).toEqual({
+        data: {
+          setupCompleted: true,
+          hasFeeds: true,
+          hasEmbeddingProvider: false,
+          firstRefreshStatus: "idle"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("lists feeds from the migrated database with API timestamps", async () => {
     const db = createFixtureDatabase();
     const app = buildServer({ db, logger: false });

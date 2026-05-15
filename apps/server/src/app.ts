@@ -53,6 +53,13 @@ type HealthResponse = {
   version: string;
 };
 
+type SetupStatusResponse = {
+  setupCompleted: boolean;
+  hasFeeds: boolean;
+  hasEmbeddingProvider: boolean;
+  firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+};
+
 type FeedQuery = {
   folderId?: string;
   enabled?: string;
@@ -256,6 +263,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
     };
   });
+
+  app.get("/api/setup/status", async () => ({
+    data: getSetupStatus(credentials.hasCredential(), feeds.list().length > 0)
+  }));
 
   app.get("/api/system/health", async (_request, reply) => {
     const data = getHealth(db);
@@ -510,6 +521,15 @@ function checkHealth(fn: () => void): HealthStatus {
   } catch {
     return "error";
   }
+}
+
+function getSetupStatus(setupCompleted: boolean, hasFeeds: boolean): SetupStatusResponse {
+  return {
+    setupCompleted,
+    hasFeeds,
+    hasEmbeddingProvider: false,
+    firstRefreshStatus: "idle"
+  };
 }
 
 function parseArticleQuery(query: ArticleQuery):
