@@ -122,6 +122,13 @@ describe("server API vertical slice", () => {
         "Second fixture article",
         "First fixture article"
       ]);
+      expect(
+        articleBody.data.every(
+          (article: { rank?: { score: number; calculatedAt: string } }) =>
+            typeof article.rank?.score === "number" &&
+            article.rank.calculatedAt === "2026-05-14T08:00:00.000Z"
+        )
+      ).toBe(true);
 
       const detail = await app.inject({
         method: "GET",
@@ -396,6 +403,82 @@ describe("server API vertical slice", () => {
       expect(response.json().data.map((article: { id: string }) => article.id)).toEqual([
         "article_recommended",
         "article_recent"
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("recalculates base rank after article actions and orders recommended by score", async () => {
+    const db = createRankingFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 10_000 });
+
+    try {
+      const progress = await postJson(app, "/api/articles/article_rank_progress/actions", {
+        type: "read_progress",
+        progress: 0.5
+      });
+      const readLater = await postJson(app, "/api/articles/article_rank_later/actions", {
+        type: "read_later"
+      });
+      const favorite = await postJson(app, "/api/articles/article_rank_favorite/actions", {
+        type: "favorite"
+      });
+
+      expect(progress.statusCode, progress.body).toBe(200);
+      expect(readLater.statusCode, readLater.body).toBe(200);
+      expect(favorite.statusCode, favorite.body).toBe(200);
+
+      expect(getRankScore(db, "article_rank_favorite")).toBeGreaterThan(
+        getRankScore(db, "article_rank_later")
+      );
+      expect(getRankScore(db, "article_rank_later")).toBeGreaterThan(
+        getRankScore(db, "article_rank_progress")
+      );
+
+      const recommended = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended"
+      });
+
+      expect(recommended.statusCode, recommended.body).toBe(200);
+      expect(recommended.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_rank_favorite",
+        "article_rank_later",
+        "article_rank_progress",
+        "article_rank_neutral"
+      ]);
+
+      const notInterested = await postJson(
+        app,
+        "/api/articles/article_rank_favorite/actions",
+        {
+          type: "not_interested"
+        }
+      );
+      const hide = await postJson(app, "/api/articles/article_rank_later/actions", {
+        type: "hide"
+      });
+
+      expect(notInterested.statusCode, notInterested.body).toBe(200);
+      expect(hide.statusCode, hide.body).toBe(200);
+      expect(getRankScore(db, "article_rank_favorite")).toBeLessThan(
+        getRankScore(db, "article_rank_progress")
+      );
+      expect(getRankScore(db, "article_rank_later")).toBeLessThan(
+        getRankScore(db, "article_rank_progress")
+      );
+
+      const filtered = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended"
+      });
+
+      expect(filtered.statusCode, filtered.body).toBe(200);
+      expect(filtered.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_rank_progress",
+        "article_rank_neutral"
       ]);
     } finally {
       await app.close();
@@ -890,6 +973,41 @@ function createFixtureDatabase(): DibaoDatabase {
   return db;
 }
 
+function createRankingFixtureDatabase(): DibaoDatabase {
+  const db = createEmptyDatabase();
+  const feeds = new SqliteFeedRepository(db);
+  const articles = new SqliteArticleRepository(db);
+
+  feeds.upsert({
+    id: "feed_ranking",
+    title: "Ranking Feed",
+    feedUrl: "https://example.com/ranking.xml",
+    now: 1000
+  });
+
+  for (const id of [
+    "article_rank_favorite",
+    "article_rank_later",
+    "article_rank_progress",
+    "article_rank_neutral"
+  ]) {
+    articles.upsert({
+      id,
+      feedId: "feed_ranking",
+      url: `https://example.com/${id}`,
+      canonicalUrl: `https://example.com/${id}`,
+      title: id,
+      summary: "Ranking fixture article.",
+      publishedAt: 1000,
+      discoveredAt: 1000,
+      dedupeKey: id,
+      now: 1000
+    });
+  }
+
+  return db;
+}
+
 function insertRank(db: DibaoDatabase, articleId: string, score: number, calculatedAt: number): void {
   db.prepare(
     `
@@ -909,6 +1027,25 @@ function insertRank(db: DibaoDatabase, articleId: string, score: number, calcula
       values (?, 'base', null, ?, 0, 0, 0, 0, 0, 0, ?)
     `
   ).run(articleId, score, calculatedAt);
+}
+
+function getRankScore(db: DibaoDatabase, articleId: string): number {
+  const row = db
+    .prepare(
+      `
+        select score
+        from article_rank_scores
+        where article_id = ?
+          and rank_context = 'base'
+      `
+    )
+    .get(articleId) as { score: number } | undefined;
+
+  if (!row) {
+    throw new Error(`Missing rank score for ${articleId}`);
+  }
+
+  return row.score;
 }
 
 function tempDatabasePath(): string {

@@ -3,6 +3,7 @@ import type {
   ArticleActionType,
   RecordArticleActionResult
 } from "@dibao/db";
+import type { ArticleRankingRecalculator } from "./ranking-service.js";
 
 export class ArticleActionServiceError extends Error {
   constructor(
@@ -25,6 +26,7 @@ export type RecordArticleActionServiceInput = {
 
 export type ArticleActionServiceOptions = {
   actions: ArticleActionRepository;
+  ranking?: ArticleRankingRecalculator;
   now?: () => number;
 };
 
@@ -44,6 +46,8 @@ export class ArticleActionService {
     if (!result) {
       throw new ArticleActionServiceError(404, "NOT_FOUND", "Article not found");
     }
+
+    this.options.ranking?.recalculateArticle(input.articleId);
 
     return result;
   }

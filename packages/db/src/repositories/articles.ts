@@ -9,8 +9,7 @@ import type {
   UpsertArticleContentInput,
   UpsertArticleInput
 } from "../types.js";
-
-const BASE_RANK_CONTEXT = "base";
+import { BASE_RANK_CONTEXT } from "./ranking.js";
 
 type ArticleDbRow = {
   id: string;

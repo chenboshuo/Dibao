@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SqliteArticleFtsIndex,
+  SqliteArticleActionRepository,
   SqliteArticleRepository,
   SqliteAppSettingsRepository,
   SqliteEmbeddingRepository,
   SqliteFeedRepository,
+  SqliteRankingRepository,
   SqliteVecVectorStore,
   checksumSql,
   float32VectorToBuffer,
@@ -249,6 +251,72 @@ describe("db package", () => {
         limit: 2
       });
       expect(rebuilt[0]?.articleId).toBe("article_ai_local");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reads ranking candidates and writes base rank scores", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      feeds.upsert({
+        id: "feed_rank",
+        title: "Ranking Feed",
+        feedUrl: "https://example.com/ranking.xml",
+        sourceWeight: 0.5,
+        now: 1000
+      });
+
+      const articles = new SqliteArticleRepository(db);
+      articles.upsert({
+        id: "article_rank",
+        feedId: "feed_rank",
+        url: "https://example.com/rank",
+        title: "Rank candidate",
+        publishedAt: 1000,
+        discoveredAt: 1000,
+        dedupeKey: "rank",
+        now: 1000
+      });
+
+      const actions = new SqliteArticleActionRepository(db);
+      actions.record({
+        articleId: "article_rank",
+        type: "favorite",
+        now: 2000
+      });
+
+      const rankings = new SqliteRankingRepository(db);
+      const candidate = rankings.listBaseCandidates({ articleIds: ["article_rank"] })[0];
+
+      expect(candidate).toMatchObject({
+        articleId: "article_rank",
+        feedId: "feed_rank",
+        sourceWeight: 0.5,
+        state: {
+          favorited: true
+        },
+        behaviorEventWeightSum: 1,
+        behaviorEventCount: 1
+      });
+
+      rankings.upsertBaseScore({
+        articleId: "article_rank",
+        score: 0.75,
+        interestScore: 0.1,
+        sourceScore: 0.2,
+        freshnessScore: 0.3,
+        stateScore: 0.15,
+        diversityScore: 0,
+        penaltyScore: 0,
+        calculatedAt: 3000
+      });
+
+      expect(articles.list({ view: "recommended" }).items[0]?.rank).toEqual({
+        score: 0.75,
+        calculatedAt: 3000
+      });
     } finally {
       db.close();
     }

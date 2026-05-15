@@ -120,6 +120,35 @@ export type ArticleRankSnapshot = {
   calculatedAt: number;
 };
 
+export type ArticleRankingCandidateRow = {
+  articleId: string;
+  feedId: string;
+  publishedAt: number | null;
+  discoveredAt: number;
+  sourceWeight: number;
+  feedPositiveScore: number;
+  feedNegativeScore: number;
+  feedOpenRate: number;
+  feedFavoriteRate: number;
+  feedNotInterestedRate: number;
+  state: ArticleStateSnapshot;
+  behaviorEventWeightSum: number;
+  behaviorEventCount: number;
+};
+
+export type UpsertArticleRankScoreInput = {
+  articleId: string;
+  rankContext?: string;
+  score: number;
+  interestScore: number;
+  sourceScore: number;
+  freshnessScore: number;
+  stateScore: number;
+  diversityScore: number;
+  penaltyScore: number;
+  calculatedAt: number;
+};
+
 export type ArticleListItemRow = {
   id: string;
   feedId: string;

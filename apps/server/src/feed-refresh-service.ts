@@ -12,6 +12,7 @@ import type {
   FeedRepository,
   FeedRow
 } from "@dibao/db";
+import type { ArticleRankingRecalculator } from "./ranking-service.js";
 
 export type FeedFetchResponse = {
   ok: boolean;
@@ -39,6 +40,7 @@ export class FeedIngestionError extends Error {
 export type FeedRefreshResult = {
   jobId: string;
   feed: FeedRow;
+  articleIds: string[];
   articlesSeen: number;
   articlesCreated: number;
   articlesUpdated: number;
@@ -48,6 +50,7 @@ export type FeedRefreshServiceOptions = {
   db: DibaoDatabase;
   feeds: FeedRepository;
   articles: ArticleRepository;
+  ranking?: ArticleRankingRecalculator;
   fetcher?: FeedFetcher;
   now?: () => number;
 };
@@ -129,9 +132,8 @@ export class FeedRefreshService {
     parsed: ParsedFeed;
   }): FeedRefreshResult {
     const fetchedAt = this.now();
-    let result: FeedRefreshResult | null = null;
 
-    this.options.db.transaction(() => {
+    const result = this.options.db.transaction((): FeedRefreshResult => {
       const feed = this.options.feeds.upsert({
         id: input.feedId,
         folderId: input.folderId,
@@ -145,10 +147,12 @@ export class FeedRefreshService {
 
       let articlesCreated = 0;
       let articlesUpdated = 0;
+      const articleIds: string[] = [];
 
       for (const item of input.parsed.items) {
         const articleInput = articleInputForFeedItem(feed, item, fetchedAt);
         const existing = this.options.articles.findById(articleInput.id);
+        articleIds.push(articleInput.id);
         this.options.articles.upsert(articleInput);
         this.options.articles.upsertContent({
           articleId: articleInput.id,
@@ -172,18 +176,17 @@ export class FeedRefreshService {
         throw new Error(`Failed to load refreshed feed: ${feed.id}`);
       }
 
-      result = {
+      return {
         jobId: syncJobId(feed.id, fetchedAt),
         feed: updatedFeed,
+        articleIds,
         articlesSeen: input.parsed.items.length,
         articlesCreated,
         articlesUpdated
       };
     })();
 
-    if (!result) {
-      throw new Error("Feed refresh did not produce a result");
-    }
+    this.options.ranking?.recalculateArticles(result.articleIds);
 
     return result;
   }

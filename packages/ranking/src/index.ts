@@ -8,6 +8,55 @@ export const profileAlgorithmDefaults = {
   freshnessHalfLifeHours: 36
 } as const;
 
+export const BASE_RANK_CONTEXT = "base";
+
+export const baselineRankingDefaults = {
+  freshnessMaxScore: 0.35,
+  sourceWeightMaxScore: 0.18,
+  feedStatMaxScore: 0.12,
+  favoriteScore: 0.5,
+  readLaterScore: 0.24,
+  readProgressMaxScore: 0.22,
+  readPenalty: -0.06,
+  behaviorWeightScore: 0.08,
+  behaviorCountScore: 0.002,
+  hiddenPenalty: -3,
+  notInterestedPenalty: -4,
+  scoreMin: -10,
+  scoreMax: 10
+} as const;
+
+export type BaselineRankInput = {
+  now: number;
+  publishedAt: number | null;
+  discoveredAt: number;
+  sourceWeight: number;
+  feedPositiveScore: number;
+  feedNegativeScore: number;
+  feedOpenRate: number;
+  feedFavoriteRate: number;
+  feedNotInterestedRate: number;
+  read: boolean;
+  favorited: boolean;
+  readLater: boolean;
+  hidden: boolean;
+  notInterested: boolean;
+  readingProgress: number;
+  behaviorEventWeightSum: number;
+  behaviorEventCount: number;
+};
+
+export type BaselineRankScore = {
+  score: number;
+  interestScore: number;
+  sourceScore: number;
+  freshnessScore: number;
+  stateScore: number;
+  diversityScore: number;
+  penaltyScore: number;
+  calculatedAt: number;
+};
+
 export function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -20,3 +69,73 @@ export function freshnessScore(
   return Math.exp(-ageHours / halfLifeHours) * maxScore;
 }
 
+export function calculateBaselineRankScore(input: BaselineRankInput): BaselineRankScore {
+  const ageHours = Math.max(
+    0,
+    (input.now - (input.publishedAt ?? input.discoveredAt)) / 3_600_000
+  );
+  const freshness = freshnessScore(
+    ageHours,
+    baselineRankingDefaults.freshnessMaxScore,
+    profileAlgorithmDefaults.freshnessHalfLifeHours
+  );
+  const source = calculateSourceScore(input);
+  const state = calculateStateScore(input);
+  const interest = calculateBehaviorInterestScore(input);
+  const penalty = calculatePenaltyScore(input);
+  const score = freshness + source + state + interest + penalty;
+
+  return {
+    score: roundScore(
+      clamp(score, baselineRankingDefaults.scoreMin, baselineRankingDefaults.scoreMax)
+    ),
+    interestScore: roundScore(interest),
+    sourceScore: roundScore(source),
+    freshnessScore: roundScore(freshness),
+    stateScore: roundScore(state),
+    diversityScore: 0,
+    penaltyScore: roundScore(penalty),
+    calculatedAt: input.now
+  };
+}
+
+function calculateSourceScore(input: BaselineRankInput): number {
+  const explicitSourceWeight =
+    clamp(input.sourceWeight, -1, 1) * baselineRankingDefaults.sourceWeightMaxScore;
+  const feedScore =
+    clamp(input.feedPositiveScore - input.feedNegativeScore, -5, 5) *
+    (baselineRankingDefaults.feedStatMaxScore / 5);
+  const feedRateScore =
+    clamp(input.feedFavoriteRate - input.feedNotInterestedRate, -1, 1) * 0.06 +
+    clamp(input.feedOpenRate, 0, 1) * 0.03;
+
+  return explicitSourceWeight + feedScore + feedRateScore;
+}
+
+function calculateStateScore(input: BaselineRankInput): number {
+  return (
+    (input.favorited ? baselineRankingDefaults.favoriteScore : 0) +
+    (input.readLater ? baselineRankingDefaults.readLaterScore : 0) +
+    clamp(input.readingProgress, 0, 1) * baselineRankingDefaults.readProgressMaxScore +
+    (input.read ? baselineRankingDefaults.readPenalty : 0)
+  );
+}
+
+function calculateBehaviorInterestScore(input: BaselineRankInput): number {
+  return (
+    clamp(input.behaviorEventWeightSum, -3, 3) *
+      baselineRankingDefaults.behaviorWeightScore +
+    clamp(input.behaviorEventCount, 0, 20) * baselineRankingDefaults.behaviorCountScore
+  );
+}
+
+function calculatePenaltyScore(input: BaselineRankInput): number {
+  return (
+    (input.hidden ? baselineRankingDefaults.hiddenPenalty : 0) +
+    (input.notInterested ? baselineRankingDefaults.notInterestedPenalty : 0)
+  );
+}
+
+function roundScore(value: number): number {
+  return Number(value.toFixed(6));
+}

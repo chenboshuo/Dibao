@@ -432,6 +432,8 @@ final_score =
   freshness_score
 + source_score
 + state_score
++ behavior_event_score
+- state_penalty
 ```
 
 解释中显示：
@@ -439,6 +441,23 @@ final_score =
 ```text
 当前使用基础排序，embedding 尚未配置。
 ```
+
+当前 MVP 的 `rank_context=base` 实现不读取 embedding，直接写入 `article_rank_scores`：
+
+```text
+freshness_score_max: 0.35
+source_weight_max_score: 0.18
+feed_stat_max_score: 0.12
+favorite: +0.50
+read_later: +0.24
+reading_progress: progress * 0.22
+read: -0.06
+behavior_event_score: clamp(sum(event_weight), -3, 3) * 0.08
+hidden: -3.00
+not_interested: -4.00
+```
+
+`latest` 仍按发布时间/发现时间排序；`recommended` 使用 `article_rank_scores(base)` 排序，并继续排除 hidden 与 not_interested 文章。
 
 ### 有 provider 但文章未 embedding
 

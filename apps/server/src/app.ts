@@ -8,6 +8,7 @@ import {
   SqliteArticleActionRepository,
   SqliteArticleRepository,
   SqliteFeedRepository,
+  SqliteRankingRepository,
   type ArticleActionType,
   type ArticleDetailRow,
   type ArticleListInput,
@@ -28,6 +29,7 @@ import {
   FeedRefreshService,
   type FeedFetcher
 } from "./feed-refresh-service.js";
+import { BaselineRankingService } from "./ranking-service.js";
 
 type HealthStatus = "ok" | "error";
 
@@ -93,15 +95,22 @@ export function buildServer(options: BuildServerOptions = {}) {
   const feeds = new SqliteFeedRepository(db);
   const articles = new SqliteArticleRepository(db);
   const articleActions = new SqliteArticleActionRepository(db);
+  const rankings = new SqliteRankingRepository(db);
+  const rankingService = new BaselineRankingService({
+    rankings,
+    now: options.now
+  });
   const feedRefreshService = new FeedRefreshService({
     db,
     feeds,
     articles,
+    ranking: rankingService,
     fetcher: options.feedFetcher,
     now: options.now
   });
   const articleActionService = new ArticleActionService({
     actions: articleActions,
+    ranking: rankingService,
     now: options.now
   });
 
