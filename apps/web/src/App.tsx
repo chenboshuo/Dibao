@@ -9,10 +9,24 @@ import {
   type Feed
 } from "./api.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
+import { useI18n, type NavigationItemKey } from "./i18n.js";
 
-const navigationItems = ["最新", "推荐", "收藏", "稍后读", "搜索", "订阅源", "设置"];
+const navigationItems: NavigationItemKey[] = [
+  "latest",
+  "recommended",
+  "saved",
+  "readLater",
+  "search",
+  "feeds",
+  "settings"
+];
+
+type Notice =
+  | { type: "feedAddedAndRefreshed"; feedTitle: string }
+  | { type: "feedRefreshed"; feedTitle: string };
 
 export function App() {
+  const { t } = useI18n();
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
@@ -27,7 +41,7 @@ export function App() {
   const [feedError, setFeedError] = useState<string | null>(null);
   const [articleError, setArticleError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
   const selectedFeed = useMemo(
     () => feeds.find((feed) => feed.id === selectedFeedId) ?? null,
@@ -45,11 +59,11 @@ export function App() {
         current && nextFeeds.some((feed) => feed.id === current) ? current : null
       );
     } catch (error) {
-      setFeedError(userMessageForError(error));
+      setFeedError(userMessageForError(error, t.errors.api));
     } finally {
       setIsFeedsLoading(false);
     }
-  }, []);
+  }, [t.errors.api]);
 
   const loadArticles = useCallback(async (feedId: string | null) => {
     setIsArticlesLoading(true);
@@ -64,13 +78,13 @@ export function App() {
           : response.data[0]?.id ?? null
       );
     } catch (error) {
-      setArticleError(userMessageForError(error));
+      setArticleError(userMessageForError(error, t.errors.api));
       setArticles([]);
       setSelectedArticleId(null);
     } finally {
       setIsArticlesLoading(false);
     }
-  }, []);
+  }, [t.errors.api]);
 
   useEffect(() => {
     void loadFeeds();
@@ -95,7 +109,7 @@ export function App() {
       } catch (error) {
         if (!cancelled) {
           setArticleDetail(null);
-          setDetailError(userMessageForError(error));
+          setDetailError(userMessageForError(error, t.errors.api));
         }
       } finally {
         if (!cancelled) {
@@ -116,14 +130,14 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedArticleId]);
+  }, [selectedArticleId, t.errors.api]);
 
   async function handleAddFeed(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextFeedUrl = feedUrl.trim();
 
     if (!nextFeedUrl) {
-      setFeedError("请输入 RSS / Atom 地址。");
+      setFeedError(t.feeds.feedUrlRequired);
       return;
     }
 
@@ -134,11 +148,11 @@ export function App() {
     try {
       const result = await dibaoApi.createFeed(nextFeedUrl);
       setFeedUrl("");
-      setNotice(`已添加并刷新：${result.feed.title}`);
+      setNotice({ type: "feedAddedAndRefreshed", feedTitle: result.feed.title });
       await loadFeeds();
       setSelectedFeedId(result.feed.id);
     } catch (error) {
-      setFeedError(userMessageForError(error));
+      setFeedError(userMessageForError(error, t.errors.api));
     } finally {
       setIsAddingFeed(false);
     }
@@ -152,33 +166,35 @@ export function App() {
 
     try {
       await dibaoApi.refreshFeed(feed.id);
-      setNotice(`已刷新：${feed.title}`);
+      setNotice({ type: "feedRefreshed", feedTitle: feed.title });
       await Promise.all([loadFeeds(), loadArticles(selectedFeedId)]);
     } catch (error) {
-      setFeedError(userMessageForError(error));
+      setFeedError(userMessageForError(error, t.errors.api));
     } finally {
       setRefreshingFeedId(null);
     }
   }
 
+  const noticeText = notice ? t.notices[notice.type](notice.feedTitle) : null;
+
   return (
     <main className={styles.shell}>
-      <aside className={styles.sidebar} aria-label="主导航">
+      <aside className={styles.sidebar} aria-label={t.navigation.ariaLabel}>
         <div className={styles.brand}>
-          <span className={styles.brandMark}>邸</span>
+          <span className={styles.brandMark}>{t.common.brandMark}</span>
           <span>
-            <strong>邸报</strong>
-            <small>Dibao</small>
+            <strong>{t.common.brandName}</strong>
+            <small>{t.common.brandSubtitle}</small>
           </span>
         </div>
         <nav className={styles.nav}>
           {navigationItems.map((item) => (
             <a
-              className={item === "最新" ? styles.navItemActive : styles.navItem}
+              className={item === "latest" ? styles.navItemActive : styles.navItem}
               href="#"
               key={item}
             >
-              {item}
+              {t.navigation.items[item]}
             </a>
           ))}
         </nav>
@@ -187,14 +203,14 @@ export function App() {
       <section className={styles.content} aria-labelledby="page-title">
         <header className={styles.topbar}>
           <div>
-            <p className={styles.kicker}>RSS Ingestion</p>
-            <h1 id="page-title">最新文章</h1>
+            <p className={styles.kicker}>{t.shell.kicker}</p>
+            <h1 id="page-title">{t.shell.pageTitle}</h1>
           </div>
           <div className={styles.topbarMeta}>
             <span className={styles.statusText} aria-live="polite">
-              {notice ?? (isArticlesLoading ? "正在加载文章" : "最新视图")}
+              {noticeText ?? (isArticlesLoading ? t.shell.loadingArticles : t.shell.latestView)}
             </span>
-            <span className={styles.version}>v{dibaoVersion}</span>
+            <span className={styles.version}>{t.common.version(dibaoVersion)}</span>
           </div>
         </header>
 
@@ -247,29 +263,31 @@ function FeedPanel(props: {
   refreshingFeedId: string | null;
   selectedFeedId: string | null;
 }) {
+  const { t, formatDate } = useI18n();
+
   return (
     <section className={styles.feedPanel} aria-labelledby="feeds-title">
       <div className={styles.panelHeader}>
         <div>
-          <p className={styles.kicker}>订阅源</p>
-          <h2 id="feeds-title">Feeds</h2>
+          <p className={styles.kicker}>{t.feeds.kicker}</p>
+          <h2 id="feeds-title">{t.feeds.title}</h2>
         </div>
         <span className={styles.count}>{props.feeds.length}</span>
       </div>
 
       <form className={styles.addFeedForm} onSubmit={props.onAddFeed}>
-        <label htmlFor="feed-url">RSS / Atom URL</label>
+        <label htmlFor="feed-url">{t.feeds.inputLabel}</label>
         <div className={styles.addFeedRow}>
           <input
             id="feed-url"
             inputMode="url"
             onChange={(event) => props.onUpdateFeedUrl(event.target.value)}
-            placeholder="https://example.com/feed.xml"
+            placeholder={t.feeds.inputPlaceholder}
             type="url"
             value={props.feedUrl}
           />
           <button className={styles.primaryButton} disabled={props.isAddingFeed} type="submit">
-            {props.isAddingFeed ? "添加中" : "添加"}
+            {props.isAddingFeed ? t.feeds.adding : t.feeds.add}
           </button>
         </div>
       </form>
@@ -282,8 +300,8 @@ function FeedPanel(props: {
           onClick={() => props.onSelectFeed(null)}
           type="button"
         >
-          <span>全部订阅源</span>
-          <small>{props.feeds.length} 个来源</small>
+          <span>{t.feeds.allFeeds}</span>
+          <small>{t.feeds.sourceCount(props.feeds.length)}</small>
         </button>
 
         {props.isFeedsLoading ? <SkeletonRows count={5} /> : null}
@@ -292,21 +310,27 @@ function FeedPanel(props: {
           props.feeds.map((feed) => (
             <div className={styles.feedRow} key={feed.id}>
               <button
-                className={props.selectedFeedId === feed.id ? styles.feedItemActive : styles.feedItem}
+                className={
+                  props.selectedFeedId === feed.id ? styles.feedItemActive : styles.feedItem
+                }
                 onClick={() => props.onSelectFeed(feed.id)}
                 type="button"
               >
                 <span>{feed.title}</span>
-                <small>{feed.lastSuccessAt ? `成功：${formatDate(feed.lastSuccessAt)}` : feed.feedUrl}</small>
+                <small>
+                  {feed.lastSuccessAt
+                    ? t.feeds.successAt(formatDate(feed.lastSuccessAt))
+                    : feed.feedUrl}
+                </small>
               </button>
               <button
                 className={styles.iconButton}
                 disabled={props.refreshingFeedId === feed.id}
                 onClick={() => props.onRefreshFeed(feed)}
-                title={`刷新 ${feed.title}`}
+                title={t.feeds.refreshTitle(feed.title)}
                 type="button"
               >
-                {props.refreshingFeedId === feed.id ? "…" : "刷新"}
+                {props.refreshingFeedId === feed.id ? t.feeds.refreshing : t.feeds.refresh}
               </button>
             </div>
           ))}
@@ -324,12 +348,14 @@ function ArticleListPanel(props: {
   selectedArticleId: string | null;
   selectedFeed: Feed | null;
 }) {
+  const { t, formatDate } = useI18n();
+
   return (
     <section className={styles.articlePanel} aria-labelledby="articles-title">
       <div className={styles.panelHeader}>
         <div>
-          <p className={styles.kicker}>{props.selectedFeed?.title ?? "全部来源"}</p>
-          <h2 id="articles-title">Latest</h2>
+          <p className={styles.kicker}>{props.selectedFeed?.title ?? t.articles.allSources}</p>
+          <h2 id="articles-title">{t.articles.title}</h2>
         </div>
         <span className={styles.count}>{props.articles.length}</span>
       </div>
@@ -341,11 +367,15 @@ function ArticleListPanel(props: {
 
         {!props.isArticlesLoading && props.articles.length === 0 ? (
           <EmptyState
-            title={props.feedCount === 0 ? "还没有订阅源" : "暂时没有文章"}
+            title={
+              props.feedCount === 0
+                ? t.articles.emptyNoFeedsTitle
+                : t.articles.emptyNoArticlesTitle
+            }
             body={
               props.feedCount === 0
-                ? "添加一个 RSS / Atom 源后，文章会出现在这里。"
-                : "可以刷新订阅源，或切换到全部来源查看。"
+                ? t.articles.emptyNoFeedsBody
+                : t.articles.emptyNoArticlesBody
             }
           />
         ) : null}
@@ -365,7 +395,10 @@ function ArticleListPanel(props: {
               type="button"
             >
               <span className={styles.meta}>
-                {formatDate(article.publishedAt ?? article.discoveredAt)} · {article.feedTitle}
+                {t.articles.itemMeta(
+                  formatDate(article.publishedAt ?? article.discoveredAt),
+                  article.feedTitle
+                )}
               </span>
               <strong>{article.title}</strong>
               {article.summary ? <span className={styles.summary}>{article.summary}</span> : null}
@@ -381,6 +414,7 @@ function ArticleDetailPanel(props: {
   detailError: string | null;
   isDetailLoading: boolean;
 }) {
+  const { t, formatDate } = useI18n();
   const safeHtml = useMemo(
     () => (props.article?.contentHtml ? sanitizeArticleHtml(props.article.contentHtml) : null),
     [props.article?.contentHtml]
@@ -395,23 +429,25 @@ function ArticleDetailPanel(props: {
       ) : null}
 
       {!props.isDetailLoading && !props.detailError && !props.article ? (
-        <EmptyState title="选择一篇文章" body="文章详情会在这里打开。" />
+        <EmptyState title={t.reader.selectArticleTitle} body={t.reader.selectArticleBody} />
       ) : null}
 
       {!props.isDetailLoading && !props.detailError && props.article ? (
         <article className={styles.reader} data-reader-theme="paper">
           <header className={styles.readerHeader}>
             <a href={props.article.url} rel="noreferrer" target="_blank">
-              原文
+              {t.reader.originalLink}
             </a>
             <h2 id="reader-title">{props.article.title}</h2>
             <p>
-              {props.article.feedTitle}
-              {props.article.publishedAt ? ` · ${formatDate(props.article.publishedAt)}` : ""}
-              {props.article.author ? ` · ${props.article.author}` : ""}
+              {t.reader.meta(
+                props.article.feedTitle,
+                props.article.publishedAt ? formatDate(props.article.publishedAt) : undefined,
+                props.article.author
+              )}
             </p>
             {props.article.extractionStatus === "feed_only" ? (
-              <span className={styles.inlineNotice}>当前仅有订阅源摘要。</span>
+              <span className={styles.inlineNotice}>{t.reader.feedOnlyNotice}</span>
             ) : null}
           </header>
 
@@ -422,7 +458,7 @@ function ArticleDetailPanel(props: {
             />
           ) : (
             <div className={styles.readerBody}>
-              <p>{props.article.contentText ?? props.article.summary ?? "这篇文章暂无正文内容。"}</p>
+              <p>{props.article.contentText ?? props.article.summary ?? t.reader.noContent}</p>
             </div>
           )}
         </article>
@@ -459,15 +495,6 @@ function ReaderSkeleton() {
       <span />
     </div>
   );
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
 }
 
 function sanitizeArticleHtml(html: string): string {

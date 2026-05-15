@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError, createDibaoApi, userMessageForError } from "./api.js";
+import { dictionaries } from "./i18n.js";
 
 describe("web API client", () => {
   it("parses contract-shaped errors", async () => {
@@ -28,9 +29,20 @@ describe("web API client", () => {
   });
 
   it("returns a stable user-facing error message", () => {
-    expect(userMessageForError(new ApiRequestError(400, "VALIDATION_ERROR", "Invalid URL"))).toBe(
-      "Invalid URL"
+    expect(
+      userMessageForError(
+        new ApiRequestError(400, "VALIDATION_ERROR", "Invalid URL"),
+        dictionaries["zh-CN"].errors.api
+      )
+    ).toBe("Invalid URL");
+    expect(userMessageForError("nope", dictionaries["zh-CN"].errors.api)).toBe(
+      dictionaries["zh-CN"].errors.api.requestFailed
     );
-    expect(userMessageForError("nope")).toBe("请求失败，请稍后重试。");
+    expect(
+      userMessageForError(
+        new ApiRequestError(500, "INTERNAL_ERROR", "", undefined, false),
+        dictionaries["en-US"].errors.api
+      )
+    ).toBe("Request failed (HTTP 500).");
   });
 });

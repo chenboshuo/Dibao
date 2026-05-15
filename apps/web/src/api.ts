@@ -66,12 +66,18 @@ export class ApiRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
-    readonly details?: unknown
+    readonly details?: unknown,
+    readonly hasUserMessage = true
   ) {
     super(message);
     this.name = "ApiRequestError";
   }
 }
+
+export type ApiErrorMessages = {
+  requestFailed: string;
+  httpError: (status: number) => string;
+};
 
 type ApiFetch = typeof fetch;
 
@@ -105,8 +111,9 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       throw new ApiRequestError(
         response.status,
         apiError?.code ?? "INTERNAL_ERROR",
-        apiError?.message ?? `Request failed with ${response.status}`,
-        apiError?.details
+        apiError?.message ?? "",
+        apiError?.details,
+        Boolean(apiError?.message)
       );
     }
 
@@ -139,7 +146,9 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
-    async listArticles(input: { feedId?: string | null; limit?: number } = {}): Promise<ArticleListResponse> {
+    async listArticles(
+      input: { feedId?: string | null; limit?: number } = {}
+    ): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
         view: "latest",
         limit: String(input.limit ?? 50)
@@ -165,16 +174,12 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
 export const dibaoApi = createDibaoApi();
 
-export function userMessageForError(error: unknown): string {
+export function userMessageForError(error: unknown, messages: ApiErrorMessages): string {
   if (error instanceof ApiRequestError) {
-    return error.message;
+    return error.hasUserMessage && error.message ? error.message : messages.httpError(error.status);
   }
 
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "请求失败，请稍后重试。";
+  return messages.requestFailed;
 }
 
 async function readJson(response: Response): Promise<unknown> {
