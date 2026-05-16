@@ -1393,7 +1393,7 @@ Planned / not implemented. 当前版本不提供 retry API。
 
 ```text
 baseline
-learning
+personalized
 embedding
 degraded
 ```
@@ -1403,7 +1403,8 @@ degraded
 - 无 active provider/index：`baseline`。
 - active provider/index 存在，且有 failed embedding jobs、provider test failed 或 index failed：`degraded`。
 - active provider/index 存在，且 pending jobs > 0 或 `coverageRatio < 1`：`embedding`。
-- active provider/index 存在，`coverageRatio > 0`，但 profile/behavior 信号仍少：`learning`。
+- active provider/index 存在，coverage 已完成且无 provider/index/job 异常：`personalized`。
+- profile/behavior 信号仍少时，`mode` 仍可为 `personalized`，并通过 `PROFILE_WARMUP` warning 表示画像仍处于冷启动。
 
 `warnings[].code` 至少可能包含：
 
@@ -1412,7 +1413,7 @@ NO_PROVIDER
 EMBEDDING_PENDING
 EMBEDDING_JOB_FAILED
 PROVIDER_TEST_FAILED
-PROFILE_LEARNING
+PROFILE_WARMUP
 ```
 
 脱敏约束：

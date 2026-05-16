@@ -316,7 +316,7 @@ describe("web i18n", () => {
     expect(articlePanel).toContain("设计");
   });
 
-  it("renders recommendation learning status with diagnostics metrics", () => {
+  it("renders recommendation status with diagnostics metrics", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <ArticleListPanel
@@ -376,7 +376,7 @@ describe("web i18n", () => {
       </DibaoI18nProvider>
     );
 
-    expect(html).toContain("学习状态");
+    expect(html).toContain("推荐状态");
     expect(html).toContain("Embedding 生成中");
     expect(html).toContain("行为 3");
     expect(html).toContain("Coverage 50%");

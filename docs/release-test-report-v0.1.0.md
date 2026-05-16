@@ -112,7 +112,7 @@ Authenticated API check against the same RC server:
     "enqueuedArticleCount": 0,
     "dedupedArticleCount": 0
   },
-  "recommendationMode": "learning",
+  "recommendationMode": "personalized",
   "coverage": {
     "candidateCount": 8,
     "eligibleArticleCount": 8,
@@ -132,7 +132,7 @@ The backfill response has no jobs because provider enablement had already embedd
 
 - Recommended view loaded.
 - Recommendation status bar showed:
-  - mode: `正在学习`
+  - mode: `个性化推荐中`
   - behavior count: `6`
   - coverage: `100%`
   - interest clusters: `+1 / -1`

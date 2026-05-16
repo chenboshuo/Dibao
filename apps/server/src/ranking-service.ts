@@ -393,8 +393,8 @@ function fallbackLabelFor(source: ArticleRankExplanationSourceRow): string {
   if (source.rankingStatus === "embedding_pending") {
     return "Using baseline signals while embedding is pending";
   }
-  if (source.rankingStatus === "learning") {
-    return "Profile is still learning";
+  if (source.rankingStatus === "rank_pending") {
+    return "Ranking signals are still being prepared";
   }
   return "Ranking has not been calculated yet";
 }

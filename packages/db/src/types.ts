@@ -304,7 +304,7 @@ export type ArticleRankExplanationSourceRow = {
   discoveredAt: number;
   state: ArticleStateSnapshot;
   rank: ArticleRankScoreComponentsRow | null;
-  rankingStatus: ArticleRankingEmbeddingStatus | "learning";
+  rankingStatus: ArticleRankingEmbeddingStatus | "rank_pending";
 };
 
 export type InterestClusterPolarity = "positive" | "negative";

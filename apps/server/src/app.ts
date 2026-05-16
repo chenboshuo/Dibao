@@ -1233,7 +1233,7 @@ type RecommendationCoverage = {
   lastError: string | null;
 };
 
-type RecommendationMode = "baseline" | "learning" | "embedding" | "degraded";
+type RecommendationMode = "baseline" | "personalized" | "embedding" | "degraded";
 
 function activeDiagnosticIndexFor(
   providerId: string,
@@ -1297,7 +1297,7 @@ function recommendationMode(input: {
     return "embedding";
   }
 
-  return "learning";
+  return "personalized";
 }
 
 function recommendationWarnings(input: {
@@ -1339,8 +1339,8 @@ function recommendationWarnings(input: {
 
   if (input.profileLearning) {
     warnings.push({
-      code: "PROFILE_LEARNING",
-      message: "The recommendation profile is still learning from behavior and interest signals."
+      code: "PROFILE_WARMUP",
+      message: "The recommendation profile still has limited behavior and interest signals."
     });
   }
 

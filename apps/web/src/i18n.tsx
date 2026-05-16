@@ -331,12 +331,12 @@ export const zhCN = {
     }
   },
   recommendationStatus: {
-    title: "学习状态",
-    loading: "正在读取学习状态",
+    title: "推荐状态",
+    loading: "正在读取推荐状态",
     fallback: "推荐状态暂不可用，当前列表仍可阅读。",
     modes: {
       baseline: "基础排序中",
-      learning: "正在学习",
+      personalized: "个性化推荐中",
       embedding: "Embedding 生成中",
       degraded: "Provider 异常，已 fallback"
     },
@@ -766,12 +766,12 @@ export const enUS = {
     }
   },
   recommendationStatus: {
-    title: "Learning status",
-    loading: "Loading learning status",
+    title: "Recommendation status",
+    loading: "Loading recommendation status",
     fallback: "Recommendation status is unavailable; the list is still readable.",
     modes: {
       baseline: "Baseline ranking",
-      learning: "Learning",
+      personalized: "Personalized recommendations enabled",
       embedding: "Generating embeddings",
       degraded: "Provider issue, fallback active"
     },

@@ -586,7 +586,7 @@ API page size 50
 3. source score
 4. freshness score
 5. duplicate penalty
-6. fallback / learning state
+6. fallback / rank readiness state
 ```
 
 示例：

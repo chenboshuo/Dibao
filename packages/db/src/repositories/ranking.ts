@@ -153,7 +153,7 @@ export class SqliteRankingRepository implements RankingRepository {
             case
               when ? is null then 'no_provider'
               when ae.vector_blob is null then 'embedding_pending'
-              when coalesce(rs.score, base_rs.score) is null then 'learning'
+              when coalesce(rs.score, base_rs.score) is null then 'rank_pending'
               else 'ready'
             end as rankingStatus
           from articles a

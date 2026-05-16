@@ -262,7 +262,7 @@ export type RebuildEmbeddingIndexResponse = {
   jobId: string;
 };
 
-export type RecommendationMode = "baseline" | "learning" | "embedding" | "degraded";
+export type RecommendationMode = "baseline" | "personalized" | "embedding" | "degraded";
 
 export type RecommendationStatus = {
   mode: RecommendationMode;
