@@ -1404,7 +1404,7 @@ PROFILE_LEARNING
     "database": "ok",
     "fts": "ok",
     "vectorStore": "ok",
-    "version": "0.0.0"
+    "version": "0.1.0"
   }
 }
 ```
@@ -1418,7 +1418,7 @@ PROFILE_LEARNING
 ```json
 {
   "data": {
-    "version": "0.0.0",
+    "version": "0.1.0",
     "dataDir": "/data",
     "databasePath": "/data/dibao.sqlite",
     "activeEmbeddingProvider": "provider_01",

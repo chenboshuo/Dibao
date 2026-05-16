@@ -2,35 +2,35 @@
 
 Dibao v0.1.0 is the first MVP release candidate for a single-user, self-hosted, personalized RSS reader.
 
-It is designed for users who want a local and controllable alternative to algorithmic feeds: all ranking happens inside the user's own subscribed RSS / Atom sources, with data stored in a self-hosted SQLite database.
+It is designed for people who want a local and controllable alternative to algorithmic feeds: recommendations happen only inside the user's own RSS/Atom subscriptions, with data stored in a self-hosted SQLite database.
 
 ## Highlights
 
-- Self-hosted single-user RSS reader.
+- Single-user self-hosted RSS reader.
 - Docker / Docker Compose deployment path.
-- First-run setup with password-based single-user auth.
+- First-run setup with password-based auth.
 - OPML import/export.
 - Feed and folder management.
-- Article actions: favorite, read later, read/unread, not interested.
-- Background feed refresh jobs.
-- Article retention cleanup.
-- Settings page for language, reader typography, retention, and embedding provider.
-- OpenAI-compatible and Ollama embedding provider pipeline.
-- sqlite-vec vector storage and rebuild support.
+- Article actions: favorite, read later, read/unread, not interested, and read progress.
+- Background feed refresh, retention cleanup, embedding, ranking, and profile jobs.
+- Settings for language, reader typography, retention, and embedding providers.
+- OpenAI-compatible and Ollama embedding provider support.
+- sqlite-vec vector storage, rebuild, and active-index backfill.
 - Profile Algorithm v0 and Ranking v1 fusion.
-- Recommendation explanation UI.
+- Recommendation diagnostics, safe jobs list, and explanation UI.
 - Desktop and mobile E2E smoke coverage.
 
 ## What's Included
 
 ### Reader
 
-- Add RSS / Atom feeds manually.
+- Add RSS/Atom feeds manually.
 - Refresh a single feed or enqueue refresh for all enabled feeds.
 - Browse latest and recommended article lists.
 - Open article detail.
-- Use article actions to shape future recommendations.
+- Use article actions and reader scroll progress to shape future recommendations.
 - Load more article list pages through cursor pagination.
+- Desktop feed/list/reader columns scroll independently.
 
 ### Subscriptions
 
@@ -45,10 +45,12 @@ It is designed for users who want a local and controllable alternative to algori
 - Baseline ranking works without any embedding provider.
 - OpenAI-compatible and Ollama embedding providers can be configured and tested.
 - New articles can be embedded through background jobs.
-- Article vectors are stored in SQLite authority tables and sqlite-vec indexes.
-- User behavior can update positive and negative interest clusters.
-- Recommended ranking can combine interest match, source preference, freshness, state, and penalties.
+- Active embedding indexes can be backfilled for missing/stale vectors.
+- sqlite-vec indexes can be rebuilt from the SQLite authority table without calling the provider.
+- User behavior updates positive and negative interest clusters.
+- Recommended ranking combines interest match, source preference, freshness, state, and penalties.
 - The system falls back gracefully when provider, embedding, or profile data is unavailable.
+- Diagnostics show mode, coverage, behavior counts, clusters, rank context, pending/failed jobs, and warnings without exposing API keys or vectors.
 
 ### Operations
 
@@ -56,27 +58,27 @@ It is designed for users who want a local and controllable alternative to algori
 - `compose.yaml` with persistent `/data/dibao.sqlite` volume.
 - Anonymous health check endpoint at `/api/system/health`.
 - Server can serve the built Web app and API from one Fastify process.
-- README documents deployment, setup, backup, restore, upgrade, provider configuration, and common troubleshooting.
+- Docker recommendation smoke covers setup, provider, backfill, diagnostics, and recommended articles.
+- Performance script generates a 20k-article local benchmark and updates `docs/recommendation-performance.md`.
+- README documents deployment, setup, backup, restore, upgrade, provider configuration, and troubleshooting.
 
 ## Validation Status
 
-Validated in the local development environment:
+The v0.1.0 RC gate is expected to pass:
 
 - `npm run typecheck`
 - `npm test`
 - `npm run build`
 - `npm run spike:sqlite-vec`
 - `npm run e2e`
-
-The E2E smoke suite uses local RSS and OpenAI-compatible embedding fixtures and does not call real external services.
-
-Not yet validated in the current local environment:
-
-- `docker build -t dibao:0.1.0 .`
+- `docker build -t dibao:local .`
 - `docker compose config`
-- `docker compose up --build -d`
+- `npm run smoke:docker-recommendation`
+- `npm run perf:recommendation`
+- `DIBAO_RUN_OLLAMA_TESTS=true npm run test:ollama:optional`
+- `git diff --check`
 
-Reason: Docker CLI is not available in the current environment.
+The E2E and Docker smoke suites use local RSS and embedding fixtures and do not call real external services. The optional Ollama probe is intended for a local Ollama service; for this RC the expected local model is `bge-m3` with dimension `1024`.
 
 ## Known Limitations
 
@@ -88,10 +90,11 @@ Reason: Docker CLI is not available in the current environment.
 - No native iOS / Android / desktop app packaging yet.
 - No Search UI yet, although SQLite FTS infrastructure exists.
 - No full mobile layout hardening beyond MVP smoke coverage.
-- No custom HTTP/embedded local provider adapter yet.
+- No custom HTTP or embedded-local provider adapter yet.
 - No provider API key encryption beyond current MVP local SQLite storage.
 - No advanced diversity reranking or duplicate penalties yet.
 - No full model migration UX for changing embedding dimensions/models.
+- Recommendation quality is still early and benefits from explicit user behavior and complete embedding coverage.
 
 ## Upgrade Notes
 
@@ -104,11 +107,6 @@ For future upgrades:
 3. Keep the same `/data` volume.
 4. Start the container and check `/api/system/health`.
 
-## Recommended Before Tagging
+## Tagging Note
 
-Before creating `v0.1.0`, complete:
-
-- Version bump from `0.0.0` to `0.1.0`.
-- Docker build and Compose smoke on a machine with Docker.
-
-See `docs/release-checklist-v0.1.0.md`.
+Do not create `v0.1.0` until the final RC checklist and browser smoke are complete. See `docs/release-checklist-v0.1.0.md`.

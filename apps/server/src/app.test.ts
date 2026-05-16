@@ -58,7 +58,7 @@ describe("server API vertical slice", () => {
           database: "ok",
           fts: "ok",
           vectorStore: "ok",
-          version: "0.0.0"
+          version: "0.1.0"
         }
       });
     } finally {

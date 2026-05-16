@@ -1,4 +1,4 @@
-export const dibaoVersion = "0.0.0";
+export const dibaoVersion = "0.1.0";
 
 export type ApiSuccess<T> = {
   data: T;
@@ -35,4 +35,3 @@ export type RankReason = {
   label: string;
   impact: RankReasonImpact;
 };
-

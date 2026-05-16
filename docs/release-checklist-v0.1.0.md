@@ -1,32 +1,25 @@
 # Dibao v0.1.0 Release Checklist
 
-Last updated: 2026-05-15
+Last updated: 2026-05-16
 
 Target tag: `v0.1.0`
 
-Current candidate commit:
-
-```text
-8b82238 Harden MVP release path
-```
+Candidate branch: `main`
 
 ## Release Decision
 
-Current `main` is functionally suitable as the v0.1.0 MVP release candidate, but it should not be tagged yet.
-
-Two items should be completed before creating the tag:
-
-1. Bump project-visible version metadata from `0.0.0` to `0.1.0`.
-2. Run Docker build / Compose smoke in an environment with Docker CLI.
+`main` is a v0.1.0 release candidate after the RC closure commit is merged. Do not tag until all pre-tag gates below are green on the exact commit that will be tagged.
 
 ## Blocking Pre-Tag Items
 
 | Status | Item | Acceptance |
 | --- | --- | --- |
-| Todo | Version bump | `package.json`, workspace package versions, `package-lock.json`, `packages/shared/src/index.ts`, version tests, and API/docs examples are aligned to `0.1.0`. |
-| Todo | Docker build verification | `docker build -t dibao:0.1.0 .` succeeds on a machine with Docker. |
-| Todo | Compose verification | `docker compose config` succeeds; `docker compose up --build -d` starts the app; `GET /api/system/health` returns 200. |
-| Todo | Docker Web entry verification | `http://localhost:8080` serves the Web app before login; protected `/api/*` routes still require auth except allowlisted endpoints. |
+| Done | Version bump | Root/workspace package versions, internal workspace deps, `package-lock.json`, shared `dibaoVersion`, version tests, and API/docs examples are aligned to `0.1.0`. |
+| Done | Docker build verification | `docker build -t dibao:local .` succeeds. If the shell lacks `docker`, use Docker Desktop bundled CLI with `/Applications/Docker.app/Contents/Resources/bin` on `PATH`. |
+| Done | Compose verification | `docker compose config` succeeds. |
+| Done | Docker recommendation smoke | `npm run smoke:docker-recommendation` reaches full embedding coverage and returns recommended articles. |
+| Done | Browser RC smoke | First-run setup, RSS, Ollama/bge-m3 provider, backfill, recommended, explanation, actions, and settings diagnostics pass in a real browser session. |
+| Done | Release gates | Every command in the pre-tag validation section passes on the RC closure working tree. |
 
 ## Pre-Tag Validation
 
@@ -41,22 +34,24 @@ npm test
 npm run build
 npm run spike:sqlite-vec
 npm run e2e
-docker build -t dibao:0.1.0 .
+docker build -t dibao:local .
 docker compose config
-docker compose up --build -d
-curl -fsS http://localhost:8080/api/system/health
-docker compose down
+npm run smoke:docker-recommendation
+npm run perf:recommendation
+DIBAO_RUN_OLLAMA_TESTS=true npm run test:ollama:optional
 git diff --check
 ```
 
 Expected result:
 
-- Git worktree is clean.
+- Git worktree is clean except for intentional release artifacts before the RC commit.
 - All npm validation commands pass.
 - E2E passes on desktop and mobile Chromium projects.
 - Docker image builds.
-- Compose starts one `dibao` service with persistent `dibao-data` volume.
-- Health endpoint returns 200 with `data.ok = true`.
+- Compose config is valid.
+- Docker recommendation smoke completes provider setup, backfill, diagnostics, and recommended list checks.
+- Performance report is regenerated or confirmed in `docs/recommendation-performance.md`.
+- Real Ollama probe passes with the user's local provider, currently `bge-m3` with dimension `1024`.
 
 ## Functional MVP Acceptance
 
@@ -66,17 +61,19 @@ Expected result:
 | RSS reader | Done | User can add RSS/Atom feeds, refresh, list articles, and open article detail. |
 | OPML | Done | User can import/export OPML through Web UI. |
 | Feed management | Done | User can create/rename/delete folders, edit feeds, disable feeds, and soft-delete feeds. |
-| Article actions | Done | Favorite, read later, read/unread, and not interested actions persist and update UI. |
+| Article actions | Done | Favorite, read later, read/unread, not interested, and read progress actions persist and update behavior data. |
 | Background refresh | Done | Enabled feeds can be refreshed through jobs; failures are isolated and recorded. |
 | Retention | Done | Article retention cleanup preserves behavior/profile data and clears serving indexes. |
-| Settings | Done | Language, reader settings, retention days, and OpenAI-compatible/Ollama provider settings persist. |
-| Embedding provider | Done | OpenAI-compatible and Ollama providers can be saved, enabled, tested, and used for embedding jobs. |
+| Settings | Done | Language, reader settings, retention days, and embedding provider settings persist. |
+| Embedding providers | Done | OpenAI-compatible and Ollama providers can be saved, enabled, tested, and used for embedding jobs. |
+| Embedding backfill | Done | Active indexes can enqueue missing/stale article embeddings without conflating with sqlite-vec rebuild. |
 | sqlite-vec | Done | Vectors can be stored, rebuilt, and queried through sqlite-vec. |
-| Profile/ranking | Done | Behavior events update profile clusters; recommended ranking uses active context with fallback. |
+| Profile/ranking | Done | Behavior events update profile clusters; recommended ranking uses active context with baseline and pending fallbacks. |
+| Diagnostics | Done | Recommendation status, embedding index coverage, and safe jobs list APIs expose useful state without secrets or raw payloads. |
 | Explanation | Done | Recommendation explanation displays baseline and interest-related reasons. |
-| Docker self-host path | Release candidate | Dockerfile and Compose exist; still needs external Docker CLI verification. |
-| E2E smoke | Done | Local no-network desktop/mobile Playwright smoke passes in this repo environment. |
-| User docs | Done | README covers deployment, setup, OPML, provider, data persistence, backup, upgrade, FAQ, and dev commands. |
+| Docker self-host path | Done | Dockerfile, Compose config, static Web serving, health check, and recommendation smoke are in place. |
+| E2E smoke | Done | Local no-network desktop/mobile Playwright smoke passes. |
+| User docs | Done | README and release docs cover deployment, setup, provider configuration, backfill/rebuild concepts, data persistence, backup, upgrade, FAQ, and dev commands. |
 
 ## Known v0.1.0 Boundaries
 
@@ -84,12 +81,13 @@ Expected result:
 - Self-hosted local SQLite only. No cloud sync.
 - MVP supports OpenAI-compatible and Ollama embedding endpoints. Custom HTTP and embedded local models are future adapters.
 - Provider API keys are stored in local SQLite using the current MVP local-storage strategy, not a full secret-management system.
-- Search UI, PWA installability, native mobile packaging, full mobile polish, diversity reranking, duplicate penalties, and reindex migration UX are post-MVP work.
-- Docker build has not been verified in the current local environment because Docker CLI is unavailable.
+- Search UI, PWA installability, native mobile packaging, full mobile polish, diversity reranking, duplicate penalties, and full model migration UX are post-MVP work.
+- Recommendation quality is usable for trial but should keep improving through more behavior signals, diversity, duplicate handling, and better profile rebuild tooling.
+- Performance benchmark is a manual release gate; it records local evidence but does not enforce hard pass/fail latency thresholds yet.
 
 ## Tagging Commands
 
-Do not run these until all blocking pre-tag items are done.
+Do not run these until all blocking pre-tag items are done and the user explicitly approves tagging.
 
 ```bash
 git checkout main
@@ -102,6 +100,6 @@ git push origin v0.1.0
 
 - Release title: `Dibao v0.1.0`
 - Mark as latest release: yes.
-- Mark as prerelease: optional. Recommended `yes` if Docker build has not been independently verified; otherwise `no`.
+- Mark as prerelease: recommended `yes`, because this is the first public MVP.
 - Attachments: none required for source release.
 - Body: use `docs/release-notes-v0.1.0.md`.
