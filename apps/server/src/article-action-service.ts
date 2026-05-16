@@ -50,7 +50,10 @@ export class ArticleActionService {
     }
 
     const profileResult = this.options.profile?.processEvent(result.eventId);
-    if (profileResult?.profileChanged || profileResult?.feedStatsChanged) {
+    if (
+      profileResult?.profileChanged ||
+      (profileResult?.feedStatsChanged && !isHighVolumeArticleOnlyAction(input.type))
+    ) {
       this.options.rankingJobs?.enqueueAll();
     } else {
       this.options.rankingJobs?.enqueueArticles([input.articleId]);
@@ -58,4 +61,8 @@ export class ArticleActionService {
 
     return result;
   }
+}
+
+function isHighVolumeArticleOnlyAction(type: ArticleActionType): boolean {
+  return type === "impression" || type === "open" || type === "read_progress";
 }

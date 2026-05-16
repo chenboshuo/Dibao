@@ -68,6 +68,7 @@ export class JobRunner {
     try {
       while (await this.runDueOnce()) {
         completed += 1;
+        await yieldToEventLoop();
       }
     } finally {
       this.isDraining = false;
@@ -106,4 +107,10 @@ export class JobRunner {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
