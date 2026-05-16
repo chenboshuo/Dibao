@@ -13,6 +13,7 @@ export type Feed = {
   sourceWeight: number;
   lastFetchedAt: string | null;
   lastSuccessAt: string | null;
+  nextRefreshAt: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -153,6 +154,9 @@ export type AppSettings = {
     locale: SettingsLocale;
   };
   reader: ReaderSettings;
+  behavior: {
+    markScrolledArticlesIgnored: boolean;
+  };
   retention: {
     retentionDays: number;
     keepFavorites: true;
@@ -172,6 +176,9 @@ export type UpdateSettingsInput = {
   reader?: Partial<
     Pick<ReaderSettings, "fontSize" | "lineHeight" | "paragraphGap" | "readerWidth">
   >;
+  behavior?: {
+    markScrolledArticlesIgnored?: boolean;
+  };
   retention?: {
     retentionDays?: number;
   };
@@ -329,6 +336,9 @@ export const defaultAppSettings: AppSettings = {
     paragraphGap: 1.1,
     readerWidth: 720,
     theme: "paper"
+  },
+  behavior: {
+    markScrolledArticlesIgnored: true
   },
   retention: {
     retentionDays: 60,
@@ -643,6 +653,7 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
         folderId?: string | null;
         limit?: number;
         cursor?: string | null;
+        unreadOnly?: boolean;
       } = {}
     ): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
@@ -658,6 +669,9 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       }
       if (input.cursor) {
         params.set("cursor", input.cursor);
+      }
+      if (input.unreadOnly) {
+        params.set("unreadOnly", "true");
       }
 
       const response = await request<ArticleListItem[]>(`/api/articles?${params.toString()}`);

@@ -600,6 +600,30 @@
   background: inherit;
 }
 
+.panelHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.unreadOnlyToggle {
+  min-height: var(--target-min);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.unreadOnlyToggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .addFeedForm {
   display: grid;
   gap: var(--space-2);

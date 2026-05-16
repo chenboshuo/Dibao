@@ -16,7 +16,11 @@ import {
   stageForAuthSession,
   stageForSetupStatus
 } from "./App.js";
-import { defaultAppSettings } from "./api.js";
+import {
+  articleListAfterStateUpdate,
+  articlesVisibleForUnreadFilter
+} from "./articleListState.js";
+import { defaultAppSettings, type ArticleListItem } from "./api.js";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
 import {
   DibaoI18nProvider,
@@ -111,6 +115,41 @@ describe("web i18n", () => {
     ).toEqual({ type: "feed", feedId: "feed_design" });
   });
 
+  it("keeps unread-only article lists to unseen items and removes ignored impressions", () => {
+    const unreadArticle = articleListItem("article_unread", "unseen");
+    const ignoredArticle = articleListItem("article_ignored", "ignored");
+
+    expect(
+      articlesVisibleForUnreadFilter([unreadArticle, ignoredArticle], true).map(
+        (article) => article.id
+      )
+    ).toEqual(["article_unread"]);
+    expect(
+      articleListAfterStateUpdate(
+        [unreadArticle],
+        "article_unread",
+        {
+          ...unreadArticle.state,
+          interactionStatus: "ignored",
+          ignoredAt: Date.parse("2026-05-14T08:30:00.000Z")
+        },
+        true
+      )
+    ).toEqual([]);
+    expect(
+      articleListAfterStateUpdate(
+        [unreadArticle],
+        "article_unread",
+        {
+          ...unreadArticle.state,
+          interactionStatus: "ignored",
+          ignoredAt: Date.parse("2026-05-14T08:30:00.000Z")
+        },
+        false
+      )[0].state.interactionStatus
+    ).toBe("ignored");
+  });
+
   it("renders setup and login auth gate copy from the dictionary", () => {
     const setupHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
@@ -198,6 +237,7 @@ describe("web i18n", () => {
               sourceWeight: 0,
               lastFetchedAt: null,
               lastSuccessAt: null,
+              nextRefreshAt: "2026-05-14T09:00:00.000Z",
               lastError: null,
               createdAt: "2026-05-14T08:00:00.000Z",
               updatedAt: "2026-05-14T08:00:00.000Z"
@@ -229,6 +269,7 @@ describe("web i18n", () => {
           articleView="latest"
           articles={[]}
           feedCount={1}
+          isIgnoreTelemetryEnabled={true}
           isArticlesLoading={false}
           isLoadingMore={false}
           isRecommendationStatusLoading={false}
@@ -237,6 +278,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onSelectArticle={() => undefined}
+          onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
           recommendationStatusError={null}
           selectedArticleId={null}
@@ -247,6 +289,7 @@ describe("web i18n", () => {
             sortOrder: 0
           }}
           showRecommendationStatus={false}
+          unreadOnly={false}
         />
       </DibaoI18nProvider>
     );
@@ -254,7 +297,9 @@ describe("web i18n", () => {
     expect(feedPanel).toContain("导入 OPML");
     expect(feedPanel).toContain("导出 OPML");
     expect(feedPanel).toContain("刷新全部");
+    expect(feedPanel).toContain("下次抓取");
     expect(feedPanel).toContain("分组");
+    expect(articlePanel).toContain("只看未读");
     expect(articlePanel).toContain("加载更多");
     expect(articlePanel).toContain("设计");
   });
@@ -267,6 +312,7 @@ describe("web i18n", () => {
           articleView="recommended"
           articles={[]}
           feedCount={1}
+          isIgnoreTelemetryEnabled={true}
           isArticlesLoading={false}
           isLoadingMore={false}
           isRecommendationStatusLoading={false}
@@ -275,6 +321,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onSelectArticle={() => undefined}
+          onUnreadOnlyChange={() => undefined}
           recommendationStatus={{
             mode: "embedding",
             activeProvider: null,
@@ -310,6 +357,7 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus
+          unreadOnly={false}
         />
       </DibaoI18nProvider>
     );
@@ -344,6 +392,7 @@ describe("web i18n", () => {
               sourceWeight: 0.2,
               lastFetchedAt: "2026-05-14T08:00:00.000Z",
               lastSuccessAt: "2026-05-14T08:10:00.000Z",
+              nextRefreshAt: "2026-05-14T09:00:00.000Z",
               lastError: "403 Forbidden",
               createdAt: "2026-05-14T08:00:00.000Z",
               updatedAt: "2026-05-14T08:00:00.000Z"
@@ -366,8 +415,10 @@ describe("web i18n", () => {
     expect(html).toContain("https://example.com/feed.xml");
     expect(html).toContain("启用订阅源");
     expect(html).toContain("来源权重");
+    expect(html).toContain("下次抓取");
     expect(html).toContain("最近错误");
     expect(html).toContain("403 Forbidden");
+    expect(html).not.toContain("AutoTTL");
     expect(html).not.toContain("Provider URL");
     expect(html).not.toContain("API Key");
     expect(html).not.toContain("Embedding");
@@ -578,4 +629,30 @@ function dictionaryShape(value: unknown, path = "$"): string[] {
   }
 
   return Object.entries(value).flatMap(([key, child]) => dictionaryShape(child, `${path}.${key}`));
+}
+
+function articleListItem(
+  id: string,
+  interactionStatus: ArticleListItem["state"]["interactionStatus"]
+): ArticleListItem {
+  return {
+    id,
+    feedId: "feed_fixture",
+    feedTitle: "Fixture Feed",
+    title: id,
+    url: `https://example.com/${id}`,
+    author: null,
+    summary: null,
+    publishedAt: "2026-05-14T08:00:00.000Z",
+    discoveredAt: "2026-05-14T08:00:00.000Z",
+    state: {
+      read: false,
+      favorited: false,
+      readLater: false,
+      hidden: false,
+      notInterested: false,
+      readingProgress: 0,
+      interactionStatus
+    }
+  };
 }

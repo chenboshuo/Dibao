@@ -338,6 +338,11 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                       feed.lastSuccessAt ? formatDate(feed.lastSuccessAt) : t.feedManagement.na
                     )}
                   </span>
+                  <span className={styles.managementFeedMeta}>
+                    {t.feedManagement.feeds.nextRefresh(
+                      feed.nextRefreshAt ? formatDate(feed.nextRefreshAt) : t.feedManagement.na
+                    )}
+                  </span>
                   {feed.lastError ? (
                     <span className={styles.managementFeedError}>{feed.lastError}</span>
                   ) : null}
@@ -444,6 +449,14 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                       <dd>
                         {selectedFeed.lastSuccessAt
                           ? formatDate(selectedFeed.lastSuccessAt)
+                          : t.feedManagement.na}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>{t.feedManagement.editor.nextRefreshAt}</dt>
+                      <dd>
+                        {selectedFeed.nextRefreshAt
+                          ? formatDate(selectedFeed.nextRefreshAt)
                           : t.feedManagement.na}
                       </dd>
                     </div>

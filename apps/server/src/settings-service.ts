@@ -9,6 +9,7 @@ import {
 
 export const UI_LOCALE_SETTING_KEY = "ui.locale";
 export const READER_SETTINGS_KEY = "reader.settings";
+export const BEHAVIOR_SETTINGS_KEY = "behavior.settings";
 
 export const supportedSettingsLocales = ["zh-CN", "en-US"] as const;
 export type SettingsLocale = (typeof supportedSettingsLocales)[number];
@@ -26,6 +27,9 @@ export type AppSettings = {
     locale: SettingsLocale;
   };
   reader: ReaderSettings;
+  behavior: {
+    markScrolledArticlesIgnored: boolean;
+  };
   retention: {
     retentionDays: number;
     keepFavorites: true;
@@ -52,6 +56,9 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
 };
 
 const DEFAULT_LOCALE: SettingsLocale = "zh-CN";
+const DEFAULT_BEHAVIOR_SETTINGS = {
+  markScrolledArticlesIgnored: true
+} as const;
 const DEFAULT_RANKING_SETTINGS = {
   preferFreshness: 0.5,
   preferSource: 0.5,
@@ -76,6 +83,9 @@ type SettingsPatch = {
   reader?: ReaderSettingsPatch;
   retention?: {
     retentionDays?: number;
+  };
+  behavior?: {
+    markScrolledArticlesIgnored?: boolean;
   };
 };
 
@@ -112,6 +122,7 @@ export class SettingsService {
         locale: this.readLocale()
       },
       reader: this.readReaderSettings(),
+      behavior: this.readBehaviorSettings(),
       retention: {
         retentionDays: this.readRetentionDays(),
         keepFavorites: true,
@@ -146,6 +157,17 @@ export class SettingsService {
       this.options.settings.setJson(
         RETENTION_ARTICLE_DAYS_SETTING_KEY,
         patch.retention.retentionDays,
+        now
+      );
+    }
+
+    if (patch.behavior?.markScrolledArticlesIgnored !== undefined) {
+      this.options.settings.setJson(
+        BEHAVIOR_SETTINGS_KEY,
+        {
+          ...this.readBehaviorSettings(),
+          markScrolledArticlesIgnored: patch.behavior.markScrolledArticlesIgnored
+        },
         now
       );
     }
@@ -199,13 +221,25 @@ export class SettingsService {
 
     return DEFAULT_ARTICLE_RETENTION_DAYS;
   }
+
+  private readBehaviorSettings(): AppSettings["behavior"] {
+    const stored = this.options.settings.getJson<unknown>(BEHAVIOR_SETTINGS_KEY);
+    const input = isPlainObject(stored) ? stored : {};
+
+    return {
+      markScrolledArticlesIgnored:
+        typeof input.markScrolledArticlesIgnored === "boolean"
+          ? input.markScrolledArticlesIgnored
+          : DEFAULT_BEHAVIOR_SETTINGS.markScrolledArticlesIgnored
+    };
+  }
 }
 
 function parseSettingsPatch(body: unknown): SettingsPatch {
   const input = readBodyObject(body);
   const patch: SettingsPatch = {};
 
-  rejectUnknownKeys(input, ["ui", "reader", "retention"]);
+  rejectUnknownKeys(input, ["ui", "reader", "retention", "behavior"]);
 
   if (Object.hasOwn(input, "ui")) {
     patch.ui = parseUiPatch(input.ui);
@@ -219,7 +253,30 @@ function parseSettingsPatch(body: unknown): SettingsPatch {
     patch.retention = parseRetentionPatch(input.retention);
   }
 
+  if (Object.hasOwn(input, "behavior")) {
+    patch.behavior = parseBehaviorPatch(input.behavior);
+  }
+
   return patch;
+}
+
+function parseBehaviorPatch(value: unknown): SettingsPatch["behavior"] {
+  const input = readSectionObject(value, "behavior");
+  rejectUnknownKeys(input, ["markScrolledArticlesIgnored"], "behavior");
+
+  if (!Object.hasOwn(input, "markScrolledArticlesIgnored")) {
+    return {};
+  }
+
+  if (typeof input.markScrolledArticlesIgnored !== "boolean") {
+    throw validationError("behavior.markScrolledArticlesIgnored must be a boolean", {
+      field: "behavior.markScrolledArticlesIgnored"
+    });
+  }
+
+  return {
+    markScrolledArticlesIgnored: input.markScrolledArticlesIgnored
+  };
 }
 
 function parseUiPatch(value: unknown): SettingsPatch["ui"] {

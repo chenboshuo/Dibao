@@ -267,26 +267,11 @@ export class SqliteArticleRepository implements ArticleRepository {
     if (input.status === "read") {
       conditions.push("(s.read_at is not null or coalesce(s.reading_progress, 0) >= 0.9)");
     } else if (input.status === "unread") {
-      conditions.push("s.read_at is null");
-      conditions.push("coalesce(s.reading_progress, 0) = 0");
-      conditions.push("s.last_opened_at is null");
-      conditions.push(`
-        not exists (
-          select 1
-          from behavior_events unread_be
-          where unread_be.article_id = a.id
-            and unread_be.event_type in (
-              'impression',
-              'open',
-              'read_progress',
-              'favorite',
-              'read_later',
-              'hide',
-              'not_interested',
-              'mark_read'
-            )
-        )
-      `);
+      conditions.push(unreadArticleCondition());
+    }
+
+    if (input.unreadOnly && input.status !== "unread") {
+      conditions.push(unreadArticleCondition());
     }
 
     if (input.view === "favorites") {
@@ -477,6 +462,19 @@ function baseArticleSelect(): string {
       updated_at as updatedAt,
       deleted_at as deletedAt
     from articles
+  `;
+}
+
+function unreadArticleCondition(): string {
+  return `
+    s.read_at is null
+    and coalesce(s.reading_progress, 0) = 0
+    and s.last_opened_at is null
+    and not exists (
+      select 1
+      from behavior_events unread_be
+      where unread_be.article_id = a.id
+    )
   `;
 }
 

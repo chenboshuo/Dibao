@@ -7,7 +7,6 @@ import {
   userMessageForError,
   type ArticleActionRequest,
   type ArticleDetail,
-  type ArticleInteractionStatus,
   type ArticleListItem,
   type ArticleState,
   type ArticleView,
@@ -30,6 +29,11 @@ import {
   type UpdateEmbeddingProviderInput,
   type UpdateSettingsInput
 } from "./api.js";
+import {
+  articleInteractionStatusForState,
+  articleListAfterStateUpdate,
+  articlesVisibleForUnreadFilter
+} from "./articleListState.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
 import { defaultLocale, useI18n, type Dictionary, type NavigationItemKey } from "./i18n.js";
@@ -155,6 +159,7 @@ export function App() {
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [sourceSelection, setSourceSelection] = useState<SourceSelection>({ type: "all" });
   const [appPage, setAppPage] = useState<AppPage>({ type: "reader", view: "latest" });
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(null);
   const [rankExplanation, setRankExplanation] = useState<RankExplanation | null>(null);
@@ -209,13 +214,7 @@ export function App() {
   const currentArticleView = appPage.type === "reader" ? appPage.view : "latest";
 
   function applyArticleState(articleId: string, state: ArticleState) {
-    setArticles((current) =>
-      current
-        .map((article) => (article.id === articleId ? { ...article, state } : article))
-        .filter((article) =>
-          article.id === articleId ? !state.hidden && !state.notInterested : true
-        )
-    );
+    setArticles((current) => articleListAfterStateUpdate(current, articleId, state, unreadOnly));
     setArticleDetail((current) =>
       current?.id === articleId
         ? {
@@ -254,12 +253,20 @@ export function App() {
     setAppPage({ type: "reader", view });
   }
 
+  function handleUnreadOnlyChange(nextUnreadOnly: boolean) {
+    if (unreadOnly !== nextUnreadOnly) {
+      resetArticleListForPendingQuery();
+    }
+    setUnreadOnly(nextUnreadOnly);
+  }
+
   const resetReaderState = useCallback(() => {
     setFeedFolders([]);
     setFeeds([]);
     setArticles([]);
     setSourceSelection({ type: "all" });
     setAppPage({ type: "reader", view: "latest" });
+    setUnreadOnly(false);
     setSelectedArticleId(null);
     setArticleDetail(null);
     setRankExplanation(null);
@@ -508,7 +515,11 @@ export function App() {
     }
   }, [t.errors.api]);
 
-  const loadArticles = useCallback(async (selection: SourceSelection, view: ArticleView) => {
+  const loadArticles = useCallback(async (
+    selection: SourceSelection,
+    view: ArticleView,
+    onlyUnread: boolean
+  ) => {
     const requestVersion = articleRequestVersion.current + 1;
     articleRequestVersion.current = requestVersion;
     setIsArticlesLoading(true);
@@ -529,12 +540,13 @@ export function App() {
       const response = await dibaoApi.listArticles({
         ...articleQueryFor(selection),
         view,
-        limit: 50
+        limit: 50,
+        unreadOnly: onlyUnread
       });
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
-      setArticles(response.data);
+      setArticles(articlesVisibleForUnreadFilter(response.data, onlyUnread));
       setNextArticleCursor(response.page.nextCursor);
       setSelectedArticleId(null);
     } catch (error) {
@@ -565,8 +577,8 @@ export function App() {
       return;
     }
 
-    void loadArticles(sourceSelection, appPage.view);
-  }, [appPage, appStage.type, loadArticles, sourceSelection]);
+    void loadArticles(sourceSelection, appPage.view, unreadOnly);
+  }, [appPage, appStage.type, loadArticles, sourceSelection, unreadOnly]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || appPage.type !== "reader" || appPage.view !== "recommended") {
@@ -783,7 +795,7 @@ export function App() {
       await Promise.all([
         loadFeeds(),
         appPage.type === "reader"
-          ? loadArticles(sourceSelection, appPage.view)
+          ? loadArticles(sourceSelection, appPage.view, unreadOnly)
           : Promise.resolve()
       ]);
     } catch (error) {
@@ -830,7 +842,7 @@ export function App() {
         loadFeedFolders(),
         loadFeeds(),
         appPage.type === "reader"
-          ? loadArticles(sourceSelection, appPage.view)
+          ? loadArticles(sourceSelection, appPage.view, unreadOnly)
           : Promise.resolve()
       ]);
     } catch (error) {
@@ -880,7 +892,7 @@ export function App() {
     }
 
     if (appPage.type === "reader") {
-      await loadArticles(nextSourceSelection, appPage.view);
+      await loadArticles(nextSourceSelection, appPage.view, unreadOnly);
     }
   }
 
@@ -1016,12 +1028,15 @@ export function App() {
         ...articleQueryFor(sourceSelection),
         view: currentArticleView,
         limit: 50,
-        cursor: nextArticleCursor
+        cursor: nextArticleCursor,
+        unreadOnly
       });
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
-      setArticles((current) => appendUniqueArticles(current, response.data));
+      setArticles((current) =>
+        appendUniqueArticles(current, articlesVisibleForUnreadFilter(response.data, unreadOnly))
+      );
       setNextArticleCursor(response.page.nextCursor);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
@@ -1307,6 +1322,10 @@ export function App() {
               articleView={currentArticleView}
               articles={articles}
               feedCount={feeds.length}
+              isIgnoreTelemetryEnabled={
+                appSettings.behavior.markScrolledArticlesIgnored &&
+                (currentArticleView === "latest" || currentArticleView === "recommended")
+              }
               isArticlesLoading={isArticlesLoading}
               isLoadingMore={isLoadingMoreArticles}
               loadMoreError={loadMoreError}
@@ -1314,6 +1333,7 @@ export function App() {
               onIgnoreArticle={handleIgnoreArticle}
               onLoadMore={handleLoadMoreArticles}
               onSelectArticle={setSelectedArticleId}
+              onUnreadOnlyChange={handleUnreadOnlyChange}
               recommendationStatus={
                 currentArticleView === "recommended" ? recommendationStatus : null
               }
@@ -1325,6 +1345,7 @@ export function App() {
               selectedFolder={selectedFolder}
               showRecommendationStatus={currentArticleView === "recommended"}
               isRecommendationStatusLoading={isRecommendationStatusLoading}
+              unreadOnly={unreadOnly}
             />
 
             <ArticleDetailPanel
@@ -1569,6 +1590,7 @@ export function SetupProviderPlaceholderPanel(props: { onContinue: () => void })
 
 type SettingsDraft = {
   locale: AppSettings["ui"]["locale"];
+  markScrolledArticlesIgnored: boolean;
   fontSize: string;
   lineHeight: string;
   paragraphGap: string;
@@ -1730,6 +1752,27 @@ export function SettingsWorkspace(props: {
               <option value="zh-CN">{t.settings.sections.language.zhCN}</option>
               <option value="en-US">{t.settings.sections.language.enUS}</option>
             </select>
+          </label>
+        </section>
+
+        <section className={styles.settingsSection} aria-labelledby="settings-behavior-title">
+          <div>
+            <h3 id="settings-behavior-title">{t.settings.sections.behavior.title}</h3>
+            <p>{t.settings.sections.behavior.body}</p>
+          </div>
+          <label className={styles.managementCheckbox} htmlFor="settings-ignore-scrolled">
+            <input
+              checked={draft.markScrolledArticlesIgnored}
+              id="settings-ignore-scrolled"
+              onChange={(event) =>
+                applyDraft({
+                  ...draft,
+                  markScrolledArticlesIgnored: event.target.checked
+                })
+              }
+              type="checkbox"
+            />
+            <span>{t.settings.sections.behavior.markScrolledArticlesIgnored}</span>
           </label>
         </section>
 
@@ -2306,6 +2349,11 @@ export function FeedPanel(props: {
                     ? t.feeds.successAt(formatDate(feed.lastSuccessAt))
                     : feed.feedUrl}
                 </small>
+                <small>
+                  {t.feeds.nextRefreshAt(
+                    feed.nextRefreshAt ? formatDate(feed.nextRefreshAt) : t.feedManagement.na
+                  )}
+                </small>
               </button>
               <button
                 className={styles.iconButton}
@@ -2328,6 +2376,7 @@ export function ArticleListPanel(props: {
   articleView: ArticleView;
   articles: ArticleListItem[];
   feedCount: number;
+  isIgnoreTelemetryEnabled: boolean;
   isArticlesLoading: boolean;
   isLoadingMore: boolean;
   isRecommendationStatusLoading: boolean;
@@ -2336,12 +2385,14 @@ export function ArticleListPanel(props: {
   onIgnoreArticle: (articleId: string) => void;
   onLoadMore: () => void;
   onSelectArticle: (articleId: string) => void;
+  onUnreadOnlyChange: (unreadOnly: boolean) => void;
   recommendationStatus: RecommendationStatus | null;
   recommendationStatusError: string | null;
   selectedArticleId: string | null;
   selectedFeed: Feed | null;
   selectedFolder: FeedFolder | null;
   showRecommendationStatus: boolean;
+  unreadOnly: boolean;
 }) {
   const { t, formatDate } = useI18n();
   const listRef = useRef<HTMLDivElement>(null);
@@ -2350,6 +2401,7 @@ export function ArticleListPanel(props: {
 
   useArticleListIgnoreTelemetry({
     articles: props.articles,
+    enabled: props.isIgnoreTelemetryEnabled,
     onIgnoreArticle: props.onIgnoreArticle,
     rootRef: listRef,
     selectedArticleId: props.selectedArticleId
@@ -2366,7 +2418,18 @@ export function ArticleListPanel(props: {
           <p className={styles.kicker}>{sourceTitle}</p>
           <h2 id="articles-title">{t.articles.views[props.articleView]}</h2>
         </div>
-        <span className={styles.count}>{props.articles.length}</span>
+        <div className={styles.panelHeaderActions}>
+          <label className={styles.unreadOnlyToggle} htmlFor="article-unread-only">
+            <input
+              checked={props.unreadOnly}
+              id="article-unread-only"
+              onChange={(event) => props.onUnreadOnlyChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>{t.articles.unreadOnly}</span>
+          </label>
+          <span className={styles.count}>{props.articles.length}</span>
+        </div>
       </div>
 
       {props.showRecommendationStatus ? (
@@ -2387,11 +2450,15 @@ export function ArticleListPanel(props: {
             title={
               props.feedCount === 0
                 ? t.articles.emptyNoFeedsTitle
+                : props.unreadOnly
+                  ? t.articles.emptyNoUnreadTitle
                 : t.articles.emptyNoArticlesTitle
             }
             body={
               props.feedCount === 0
                 ? t.articles.emptyNoFeedsBody
+                : props.unreadOnly
+                  ? t.articles.emptyNoUnreadBody
                 : t.articles.emptyNoArticlesBody
             }
           />
@@ -2475,6 +2542,7 @@ function RecommendationStatusBar(props: {
 
 function useArticleListIgnoreTelemetry(props: {
   articles: ArticleListItem[];
+  enabled: boolean;
   onIgnoreArticle: (articleId: string) => void;
   rootRef: RefObject<HTMLDivElement | null>;
   selectedArticleId: string | null;
@@ -2494,7 +2562,7 @@ function useArticleListIgnoreTelemetry(props: {
 
   useEffect(() => {
     const root = props.rootRef.current;
-    if (!root || typeof IntersectionObserver === "undefined") {
+    if (!props.enabled || !root || typeof IntersectionObserver === "undefined") {
       return;
     }
 
@@ -2554,7 +2622,7 @@ function useArticleListIgnoreTelemetry(props: {
     return () => {
       observer.disconnect();
     };
-  }, [props.articles, props.rootRef]);
+  }, [props.articles, props.enabled, props.rootRef]);
 }
 
 function cssEscape(value: string): string {
@@ -3129,6 +3197,7 @@ function clearReadProgressTimer(session: ReadProgressSession): void {
 function draftForSettings(settings: AppSettings): SettingsDraft {
   return {
     locale: settings.ui.locale,
+    markScrolledArticlesIgnored: settings.behavior.markScrolledArticlesIgnored,
     fontSize: String(settings.reader.fontSize),
     lineHeight: String(settings.reader.lineHeight),
     paragraphGap: String(settings.reader.paragraphGap),
@@ -3251,6 +3320,10 @@ function parseSettingsDraft(
       paragraphGap,
       readerWidth
     },
+    behavior: {
+      ...current.behavior,
+      markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored
+    },
     retention: {
       ...current.retention,
       retentionDays
@@ -3269,6 +3342,9 @@ function parseSettingsDraft(
         lineHeight,
         paragraphGap,
         readerWidth
+      },
+      behavior: {
+        markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored
       },
       retention: {
         retentionDays
@@ -3530,19 +3606,6 @@ function downloadTextFile(filename: string, content: string, type: string): void
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-}
-
-function articleInteractionStatusForState(state: ArticleState): ArticleInteractionStatus {
-  if (state.interactionStatus) {
-    return state.interactionStatus;
-  }
-  if (state.read || state.readingProgress >= 0.9) {
-    return "read";
-  }
-  if (state.readingProgress >= 0.25) {
-    return "reading";
-  }
-  return "unseen";
 }
 
 function requestForArticleAction(

@@ -241,6 +241,13 @@ idx_feeds_last_fetched_at(last_fetched_at)
 idx_feeds_deleted_at(deleted_at)
 ```
 
+刷新调度约定：
+
+- 不新增调度字段；`nextRefreshAt` 由 repository/API 从现有 `feeds.last_fetched_at`、`feeds.fetch_interval_minutes` 与该 feed 的 `articles.published_at/discovered_at` 推导。
+- `fetch_interval_minutes = 60` 的默认 TTL feed 使用 AutoTTL：取最近文章出现间隔的平均值，并夹在默认 TTL 60 分钟与最大 TTL 24 小时之间。
+- 非默认 `fetch_interval_minutes` 保持固定间隔，避免对已有显式 TTL 源自动调整。
+- `refresh-all` 与后台 scheduler 只为到期 feed enqueue `feed_refresh` job；单 feed 手动刷新不受该推导限制。
+
 说明：
 
 - `source_weight` 是用户或系统沉淀出的来源权重。

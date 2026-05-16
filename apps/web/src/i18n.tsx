@@ -92,6 +92,7 @@ export const zhCN = {
     sourceCount: (count: number) => `${count} 个来源`,
     feedUrlRequired: "请输入 RSS / Atom 地址。",
     successAt: (date: string) => `成功：${date}`,
+    nextRefreshAt: (date: string) => `下次抓取：${date}`,
     refresh: "刷新",
     refreshing: "…",
     refreshAll: "刷新全部",
@@ -130,6 +131,7 @@ export const zhCN = {
       disabled: "已禁用",
       weight: (value: number) => `权重 ${value}`,
       lastSuccess: (value: string) => `最近成功：${value}`,
+      nextRefresh: (value: string) => `下次抓取：${value}`,
       confirmDelete: "确认删除",
       deleteHint: "删除订阅源不会物理删除历史文章，但它们不会继续出现在文章列表中。"
     },
@@ -142,6 +144,7 @@ export const zhCN = {
       sourceWeightLabel: "来源权重",
       lastFetchedAt: "最近抓取",
       lastSuccessAt: "最近成功",
+      nextRefreshAt: "下次抓取",
       lastError: "最近错误",
       emptyTitle: "选择一个订阅源",
       emptyBody: "选择后可以编辑标题、分组、启用状态和来源权重。"
@@ -170,6 +173,11 @@ export const zhCN = {
         localeLabel: "界面语言",
         zhCN: "简体中文",
         enUS: "English"
+      },
+      behavior: {
+        title: "行为记录",
+        body: "控制列表浏览时如何记录轻量行为。该设置只影响最新和推荐列表。",
+        markScrolledArticlesIgnored: "滚过未打开文章后，将其标记为已忽略并移出未读"
       },
       reader: {
         title: "阅读",
@@ -304,6 +312,9 @@ export const zhCN = {
     emptyNoFeedsBody: "添加一个 RSS / Atom 源后，文章会出现在这里。",
     emptyNoArticlesTitle: "暂时没有文章",
     emptyNoArticlesBody: "可以刷新订阅源，或切换到全部来源查看。",
+    emptyNoUnreadTitle: "暂时没有未读文章",
+    emptyNoUnreadBody: "关闭只看未读，可以查看已读或已忽略文章。",
+    unreadOnly: "只看未读",
     itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
     state: {
       unseen: "新文章",
@@ -512,6 +523,7 @@ export const enUS = {
     sourceCount: (count: number) => `${count} ${count === 1 ? "source" : "sources"}`,
     feedUrlRequired: "Enter an RSS / Atom URL.",
     successAt: (date: string) => `Success: ${date}`,
+    nextRefreshAt: (date: string) => `Next fetch: ${date}`,
     refresh: "Refresh",
     refreshing: "…",
     refreshAll: "Refresh all",
@@ -550,6 +562,7 @@ export const enUS = {
       disabled: "Disabled",
       weight: (value: number) => `Weight ${value}`,
       lastSuccess: (value: string) => `Last success: ${value}`,
+      nextRefresh: (value: string) => `Next fetch: ${value}`,
       confirmDelete: "Confirm delete",
       deleteHint: "Deleting a feed does not physically delete historical articles, but they stop appearing in article lists."
     },
@@ -562,6 +575,7 @@ export const enUS = {
       sourceWeightLabel: "Source weight",
       lastFetchedAt: "Last fetched",
       lastSuccessAt: "Last success",
+      nextRefreshAt: "Next fetch",
       lastError: "Last error",
       emptyTitle: "Select a feed",
       emptyBody: "Select a feed to edit its title, folder, enabled state, and source weight."
@@ -590,6 +604,11 @@ export const enUS = {
         localeLabel: "Interface language",
         zhCN: "简体中文",
         enUS: "English"
+      },
+      behavior: {
+        title: "Behavior tracking",
+        body: "Control lightweight behavior capture while browsing lists. This only applies to Latest and Recommended.",
+        markScrolledArticlesIgnored: "Mark unopened scrolled-past articles as ignored and remove them from unread"
       },
       reader: {
         title: "Reading",
@@ -724,6 +743,9 @@ export const enUS = {
     emptyNoFeedsBody: "Add an RSS / Atom feed and articles will appear here.",
     emptyNoArticlesTitle: "No articles yet",
     emptyNoArticlesBody: "Refresh a feed or switch back to all sources.",
+    emptyNoUnreadTitle: "No unread articles",
+    emptyNoUnreadBody: "Turn off Only unread to see read or ignored articles.",
+    unreadOnly: "Only unread",
     itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
     state: {
       unseen: "New",

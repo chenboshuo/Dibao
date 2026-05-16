@@ -192,6 +192,64 @@ describe("db package", () => {
     }
   });
 
+  it("derives feed next refresh times from recent article frequency", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      const articles = new SqliteArticleRepository(db);
+      const hour = 60 * 60 * 1000;
+
+      feeds.upsert({
+        id: "feed_hourly",
+        title: "Hourly Feed",
+        feedUrl: "https://example.com/hourly.xml",
+        now: 1000
+      });
+      feeds.upsert({
+        id: "feed_slow",
+        title: "Slow Feed",
+        feedUrl: "https://example.com/slow.xml",
+        now: 1000
+      });
+
+      for (const [feedId, timestamps] of [
+        ["feed_hourly", [10 * hour, 8 * hour, 6 * hour]],
+        ["feed_slow", [10 * hour, 10 * hour - 48 * hour]]
+      ] as const) {
+        for (const timestamp of timestamps) {
+          articles.upsert({
+            id: `${feedId}_${timestamp}`,
+            feedId,
+            url: `https://example.com/${feedId}/${timestamp}`,
+            title: `${feedId} ${timestamp}`,
+            publishedAt: timestamp,
+            discoveredAt: timestamp,
+            dedupeKey: `${feedId}_${timestamp}`,
+            now: timestamp
+          });
+        }
+      }
+
+      feeds.recordFetchSuccess("feed_hourly", 20 * hour);
+      feeds.recordFetchSuccess("feed_slow", 20 * hour);
+
+      expect(feeds.findById("feed_hourly")).toMatchObject({
+        nextRefreshAt: 22 * hour
+      });
+      expect(feeds.findById("feed_slow")).toMatchObject({
+        nextRefreshAt: 44 * hour
+      });
+      expect(feeds.listActiveDue(22 * hour - 1).map((feed) => feed.id)).toEqual([]);
+      expect(feeds.listActiveDue(22 * hour).map((feed) => feed.id)).toEqual(["feed_hourly"]);
+      expect(feeds.listActiveDue(44 * hour).map((feed) => feed.id)).toEqual([
+        "feed_hourly",
+        "feed_slow"
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("resets stale running jobs on runner startup", () => {
     const db = openDatabase(tempDatabasePath(), { migrate: true });
     try {

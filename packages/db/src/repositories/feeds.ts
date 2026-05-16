@@ -17,10 +17,16 @@ type FeedDbRow = {
   sourceWeight: number;
   lastFetchedAt: number | null;
   lastSuccessAt: number | null;
+  fetchIntervalMinutes: number;
   lastError: string | null;
   createdAt: number;
   updatedAt: number;
 };
+
+export const DEFAULT_FEED_REFRESH_TTL_MINUTES = 60;
+export const DEFAULT_FEED_REFRESH_TTL_MS = DEFAULT_FEED_REFRESH_TTL_MINUTES * 60 * 1000;
+export const MAX_FEED_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
+const AUTO_TTL_SAMPLE_SIZE = 20;
 
 export interface FeedRepository {
   clearFolder(folderId: string, now: number): void;
@@ -28,6 +34,7 @@ export interface FeedRepository {
   findByFeedUrl(feedUrl: string): FeedRow | null;
   list(input?: FeedListInput): FeedRow[];
   listActive(): FeedRow[];
+  listActiveDue(now: number): FeedRow[];
   recordFetchFailure(id: string, error: string, fetchedAt: number): void;
   recordFetchSuccess(id: string, fetchedAt: number): void;
   softDelete(id: string, now: number): boolean;
@@ -54,14 +61,14 @@ export class SqliteFeedRepository implements FeedRepository {
 
   findById(id: string): FeedRow | null {
     const row = this.selectBase().get(id) as FeedDbRow | undefined;
-    return row ? mapFeed(row) : null;
+    return row ? this.mapFeed(row) : null;
   }
 
   findByFeedUrl(feedUrl: string): FeedRow | null {
     const row = this.db
       .prepare(`${baseFeedSelect()} where feed_url = ? and deleted_at is null`)
       .get(feedUrl) as FeedDbRow | undefined;
-    return row ? mapFeed(row) : null;
+    return row ? this.mapFeed(row) : null;
   }
 
   list(input: FeedListInput = {}): FeedRow[] {
@@ -92,11 +99,17 @@ export class SqliteFeedRepository implements FeedRepository {
           `
         )
         .all(...params) as FeedDbRow[]
-    ).map(mapFeed);
+    ).map((row) => this.mapFeed(row));
   }
 
   listActive(): FeedRow[] {
     return this.list({ enabled: true });
+  }
+
+  listActiveDue(now: number): FeedRow[] {
+    return this.listActive().filter(
+      (feed) => feed.nextRefreshAt === null || feed.nextRefreshAt <= now
+    );
   }
 
   recordFetchFailure(id: string, error: string, fetchedAt: number): void {
@@ -230,6 +243,81 @@ export class SqliteFeedRepository implements FeedRepository {
   private selectBase() {
     return this.db.prepare(`${baseFeedSelect()} where id = ? and deleted_at is null`);
   }
+
+  private mapFeed(row: FeedDbRow): FeedRow {
+    return {
+      id: row.id,
+      folderId: row.folderId,
+      title: row.title,
+      siteUrl: row.siteUrl,
+      feedUrl: row.feedUrl,
+      description: row.description,
+      enabled: row.enabled === 1,
+      sourceWeight: row.sourceWeight,
+      lastFetchedAt: row.lastFetchedAt,
+      lastSuccessAt: row.lastSuccessAt,
+      lastError: row.lastError,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      nextRefreshAt: this.nextRefreshAtForFeed(row)
+    };
+  }
+
+  private nextRefreshAtForFeed(feed: FeedDbRow): number | null {
+    const baseline = feed.lastFetchedAt ?? feed.lastSuccessAt;
+    if (baseline === null) {
+      return null;
+    }
+
+    return baseline + this.refreshIntervalForFeed(feed);
+  }
+
+  private refreshIntervalForFeed(feed: FeedDbRow): number {
+    if (feed.fetchIntervalMinutes !== DEFAULT_FEED_REFRESH_TTL_MINUTES) {
+      return Math.max(1, Math.trunc(feed.fetchIntervalMinutes)) * 60 * 1000;
+    }
+
+    const rows = this.db
+      .prepare(
+        `
+          select coalesce(published_at, discovered_at) as timestamp
+          from articles
+          where feed_id = ?
+            and deleted_at is null
+            and status != 'deleted'
+          order by timestamp desc
+          limit ?
+        `
+      )
+      .all(feed.id, AUTO_TTL_SAMPLE_SIZE) as Array<{ timestamp: number | null }>;
+    const timestamps = rows
+      .map((row) => row.timestamp)
+      .filter((timestamp): timestamp is number => typeof timestamp === "number");
+
+    if (timestamps.length < 2) {
+      return DEFAULT_FEED_REFRESH_TTL_MS;
+    }
+
+    let totalInterval = 0;
+    let intervalCount = 0;
+    for (let index = 0; index < timestamps.length - 1; index += 1) {
+      const interval = timestamps[index] - timestamps[index + 1];
+      if (interval > 0) {
+        totalInterval += interval;
+        intervalCount += 1;
+      }
+    }
+
+    if (intervalCount === 0) {
+      return DEFAULT_FEED_REFRESH_TTL_MS;
+    }
+
+    const averageInterval = totalInterval / intervalCount;
+    return Math.min(
+      Math.max(Math.round(averageInterval), DEFAULT_FEED_REFRESH_TTL_MS),
+      MAX_FEED_REFRESH_TTL_MS
+    );
+  }
 }
 
 function baseFeedSelect(): string {
@@ -245,16 +333,10 @@ function baseFeedSelect(): string {
       source_weight as sourceWeight,
       last_fetched_at as lastFetchedAt,
       last_success_at as lastSuccessAt,
+      fetch_interval_minutes as fetchIntervalMinutes,
       last_error as lastError,
       created_at as createdAt,
       updated_at as updatedAt
     from feeds
   `;
-}
-
-function mapFeed(row: FeedDbRow): FeedRow {
-  return {
-    ...row,
-    enabled: row.enabled === 1
-  };
 }

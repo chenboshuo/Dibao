@@ -491,6 +491,7 @@ describe("web API client", () => {
                 sourceWeight: 0,
                 lastFetchedAt: null,
                 lastSuccessAt: null,
+                nextRefreshAt: "2026-05-14T09:00:00.000Z",
                 lastError: null,
                 createdAt: "2026-05-14T08:00:00.000Z",
                 updatedAt: "2026-05-14T08:00:00.000Z"
@@ -511,6 +512,7 @@ describe("web API client", () => {
                   sourceWeight: 0.2,
                   lastFetchedAt: null,
                   lastSuccessAt: null,
+                  nextRefreshAt: "2026-05-14T09:00:00.000Z",
                   lastError: null,
                   createdAt: "2026-05-14T08:00:00.000Z",
                   updatedAt: "2026-05-14T08:00:00.000Z"
@@ -589,7 +591,7 @@ describe("web API client", () => {
     ]);
   });
 
-  it("lists articles with view, folder, and cursor query", async () => {
+  it("lists articles with view, folder, cursor, and unread filter query", async () => {
     const calls: string[] = [];
     const api = createDibaoApi(async (input) => {
       calls.push(String(input));
@@ -614,11 +616,17 @@ describe("web API client", () => {
       view: "recommended",
       folderId: "folder_design",
       limit: 20,
-      cursor: "cursor_1"
+      cursor: "cursor_1",
+      unreadOnly: true
+    });
+    await api.listArticles({
+      view: "latest",
+      unreadOnly: true
     });
 
     expect(calls).toEqual([
-      "/api/articles?view=recommended&limit=20&folderId=folder_design&cursor=cursor_1"
+      "/api/articles?view=recommended&limit=20&folderId=folder_design&cursor=cursor_1&unreadOnly=true",
+      "/api/articles?view=latest&limit=50&unreadOnly=true"
     ]);
   });
 

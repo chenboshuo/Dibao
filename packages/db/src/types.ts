@@ -27,6 +27,7 @@ export type FeedRow = {
   sourceWeight: number;
   lastFetchedAt: number | null;
   lastSuccessAt: number | null;
+  nextRefreshAt: number | null;
   lastError: string | null;
   createdAt: number;
   updatedAt: number;
@@ -198,6 +199,7 @@ export type ArticleListInput = {
   feedId?: string;
   folderId?: string;
   status?: ArticleReadStatus;
+  unreadOnly?: boolean;
   limit?: number;
   offset?: number;
   rankContext?: string;

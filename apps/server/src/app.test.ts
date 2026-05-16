@@ -1603,6 +1603,9 @@ describe("server API vertical slice", () => {
             readerWidth: 720,
             theme: "paper"
           },
+          behavior: {
+            markScrolledArticlesIgnored: true
+          },
           retention: {
             retentionDays: 60,
             keepFavorites: true,
@@ -1626,6 +1629,9 @@ describe("server API vertical slice", () => {
         },
         retention: {
           retentionDays: 45
+        },
+        behavior: {
+          markScrolledArticlesIgnored: false
         }
       });
       expect(updated.statusCode, updated.body).toBe(200);
@@ -1644,6 +1650,9 @@ describe("server API vertical slice", () => {
             },
             retention: {
               retentionDays: 45
+            },
+            behavior: {
+              markScrolledArticlesIgnored: false
             }
           }
         }
@@ -1673,6 +1682,9 @@ describe("server API vertical slice", () => {
             },
             retention: {
               retentionDays: 45
+            },
+            behavior: {
+              markScrolledArticlesIgnored: false
             }
           }
         }
@@ -1697,6 +1709,11 @@ describe("server API vertical slice", () => {
         {
           retention: {
             retentionDays: "30"
+          }
+        },
+        {
+          behavior: {
+            markScrolledArticlesIgnored: "yes"
           }
         },
         {
@@ -1743,6 +1760,7 @@ describe("server API vertical slice", () => {
             sourceWeight: 0,
             lastFetchedAt: null,
             lastSuccessAt: null,
+            nextRefreshAt: null,
             lastError: null,
             createdAt: "1970-01-01T00:00:01.000Z",
             updatedAt: "1970-01-01T00:00:01.000Z"
@@ -2192,6 +2210,14 @@ describe("server API vertical slice", () => {
       enabled: false,
       now: 1000
     });
+    feeds.upsert({
+      id: "feed_not_due",
+      title: "Not Due Feed",
+      feedUrl: "https://example.com/not-due.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.recordFetchSuccess("feed_not_due", 1500);
     const app = buildServer({ db, logger: false, now: () => 2000 });
 
     try {
@@ -2209,6 +2235,90 @@ describe("server API vertical slice", () => {
       expect(first.json().data.jobIds).toHaveLength(1);
       expect(second.json().data.jobIds).toEqual(first.json().data.jobIds);
       expect(new SqliteJobRepository(db).listOpenByType("feed_refresh")).toHaveLength(1);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("queues refresh-all jobs only for feeds whose AutoTTL is due", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    feeds.upsert({
+      id: "feed_due",
+      title: "Due Feed",
+      feedUrl: "https://example.com/due.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_fresh",
+      title: "Fresh Feed",
+      feedUrl: "https://example.com/fresh.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_never",
+      title: "Never Fetched Feed",
+      feedUrl: "https://example.com/never.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.recordFetchSuccess("feed_due", 2_000);
+    feeds.recordFetchSuccess("feed_fresh", 3_700_000);
+    const app = buildServer({ db, logger: false, now: () => 3_800_000 });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/feeds/refresh"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.jobIds).toHaveLength(2);
+      expect(
+        new SqliteJobRepository(db)
+          .listOpenByType("feed_refresh")
+          .map((job) => job.payloadJson)
+          .sort()
+      ).toEqual([
+        JSON.stringify({ feedId: "feed_due" }),
+        JSON.stringify({ feedId: "feed_never" })
+      ].sort());
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("returns nextRefreshAt on feed API responses", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    feeds.upsert({
+      id: "feed_due",
+      title: "Due Feed",
+      feedUrl: "https://example.com/due.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.recordFetchSuccess("feed_due", 2_000);
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/feeds"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toEqual([
+        expect.objectContaining({
+          id: "feed_due",
+          lastFetchedAt: "1970-01-01T00:00:02.000Z",
+          nextRefreshAt: "1970-01-01T01:00:02.000Z"
+        })
+      ]);
     } finally {
       await app.close();
       db.close();
@@ -2607,6 +2717,46 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("filters latest and recommended lists to unseen articles with unreadOnly", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 5000 });
+
+    try {
+      const latest = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&unreadOnly=true"
+      });
+      const recommended = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended&unreadOnly=true"
+      });
+
+      expect(latest.statusCode, latest.body).toBe(200);
+      expect(recommended.statusCode, recommended.body).toBe(200);
+      expect(latest.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recommended"
+      ]);
+      expect(recommended.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recommended"
+      ]);
+
+      const impression = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "impression"
+      });
+      expect(impression.statusCode, impression.body).toBe(200);
+
+      const afterImpression = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&unreadOnly=true"
+      });
+      expect(afterImpression.statusCode, afterImpression.body).toBe(200);
+      expect(afterImpression.json().data).toEqual([]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("returns baseline rank explanation reasons", async () => {
     const db = createFixtureDatabase();
     insertRank(db, "article_recommended", 1.2, 7000, {
@@ -2908,23 +3058,46 @@ describe("server API vertical slice", () => {
     const app = buildServer({ db, logger: false, now: () => now });
 
     try {
+      const unreadBefore = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&unreadOnly=true"
+      });
       const impression = await postJson(app, "/api/articles/article_recommended/actions", {
         type: "impression",
         metadata: {
           reason: "scrolled_past_unopened"
         }
       });
+      const unreadLatestAfterImpression = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&unreadOnly=true"
+      });
+      const unreadRecommendedAfterImpression = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended&unreadOnly=true"
+      });
       now = 5500;
       const open = await postJson(app, "/api/articles/article_recommended/actions", {
         type: "open"
       });
 
+      expect(unreadBefore.statusCode, unreadBefore.body).toBe(200);
+      expect(unreadBefore.json().data.map((article: { id: string }) => article.id)).toContain(
+        "article_recommended"
+      );
       expect(impression.statusCode, impression.body).toBe(200);
       expect(impression.json().data.state).toMatchObject({
         interactionStatus: "ignored",
         ignoredAt: 5400,
         openedAt: null
       });
+      expect(unreadLatestAfterImpression.statusCode, unreadLatestAfterImpression.body).toBe(200);
+      expect(
+        unreadLatestAfterImpression.json().data.map((article: { id: string }) => article.id)
+      ).not.toContain("article_recommended");
+      expect(
+        unreadRecommendedAfterImpression.json().data.map((article: { id: string }) => article.id)
+      ).not.toContain("article_recommended");
       expect(open.statusCode, open.body).toBe(200);
       expect(open.json().data.state).toMatchObject({
         interactionStatus: "opened",

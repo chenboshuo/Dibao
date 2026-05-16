@@ -36,7 +36,7 @@ export class FeedRefreshCoordinator {
 }
 
 export type FeedRefreshJobServiceOptions = {
-  feeds: FeedRepository;
+  feeds: Pick<FeedRepository, "findById" | "listActiveDue">;
   jobs: JobRepository;
   refresher: Pick<FeedRefreshCoordinator, "refreshFeed">;
   now?: () => number;
@@ -56,8 +56,12 @@ export class FeedRefreshJobService {
   }
 
   enqueueAllEnabledFeeds(): JobRow[] {
+    return this.enqueueDueFeeds();
+  }
+
+  enqueueDueFeeds(): JobRow[] {
     return this.options.feeds
-      .listActive()
+      .listActiveDue(this.now())
       .map((feed) => this.enqueueFeed(feed.id));
   }
 
@@ -106,7 +110,7 @@ export class FeedRefreshJobService {
 }
 
 export type FeedRefreshSchedulerOptions = {
-  refreshJobs: Pick<FeedRefreshJobService, "enqueueAllEnabledFeeds">;
+  refreshJobs: Pick<FeedRefreshJobService, "enqueueDueFeeds">;
   runner?: Pick<JobRunner, "drainDue">;
   intervalMs?: number;
   onError?: (error: unknown) => void;
@@ -141,7 +145,7 @@ export class FeedRefreshScheduler {
   }
 
   async tick(): Promise<string[]> {
-    const jobs = this.options.refreshJobs.enqueueAllEnabledFeeds();
+    const jobs = this.options.refreshJobs.enqueueDueFeeds();
     if (this.options.runner) {
       await this.options.runner.drainDue();
     }

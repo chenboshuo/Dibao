@@ -163,6 +163,7 @@ type Feed = {
   sourceWeight: number;
   lastFetchedAt: string | null;
   lastSuccessAt: string | null;
+  nextRefreshAt: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -463,6 +464,7 @@ enabled=true|false
       "sourceWeight": 0,
       "lastFetchedAt": null,
       "lastSuccessAt": null,
+      "nextRefreshAt": null,
       "lastError": null,
       "createdAt": "2026-05-14T12:00:00.000Z",
       "updatedAt": "2026-05-14T12:00:00.000Z"
@@ -529,6 +531,7 @@ enabled=true|false
     "sourceWeight": 0.2,
     "lastFetchedAt": null,
     "lastSuccessAt": null,
+    "nextRefreshAt": null,
     "lastError": null,
     "createdAt": "2026-05-14T12:00:00.000Z",
     "updatedAt": "2026-05-14T12:05:00.000Z"
@@ -571,16 +574,18 @@ enabled=true|false
 
 ### POST /api/feeds/refresh
 
-手动刷新所有启用订阅源。
+刷新所有已到期的启用订阅源。
 
 说明：
 
-- 只为未删除且 `enabled = true` 的 feeds 创建 `feed_refresh` jobs。
+- 只为未删除、`enabled = true` 且 `nextRefreshAt <= now` 的 feeds 创建 `feed_refresh` jobs；从未成功抓取的 feed 视为到期。
 - 已有 queued/running `feed_refresh` job 的 feed 不重复创建 job，返回既有 `jobId`。
+- 单个 feed 的 `POST /api/feeds/:id/refresh` 不受 `nextRefreshAt` 限制，仍可手动立即刷新。
 - 接口返回表示已加入刷新队列，不表示所有抓取已经完成。
 - 单个 feed 抓取失败不会阻塞其他 feeds；失败记录在 `jobs.error` 和 feed 的 `lastError`。
 - 抓取成功会更新 feed 的 `lastFetchedAt`、`lastSuccessAt`，并清空 `lastError`。
 - 抓取失败会更新 feed 的 `lastFetchedAt`、`lastError`，保留 `lastSuccessAt`。
+- `nextRefreshAt` 由后端根据 feed 的历史文章出现频率自动推导：默认 TTL 为 60 分钟，自动 TTL 只作用于仍使用默认 TTL 的 feed，并夹在 60 分钟到 24 小时之间。
 
 响应：
 
@@ -658,9 +663,12 @@ view=recommended|latest|favorites|read_later
 feedId
 folderId
 status=unread|read|all
+unreadOnly=true|false
 limit
 cursor
 ```
+
+`unreadOnly=true` 可用于 `latest` 与 `recommended`，只返回当前派生 `interactionStatus = "unseen"` 的文章；列表滚过产生 `impression` 后文章不再属于该过滤结果。
 
 响应：
 
@@ -912,6 +920,9 @@ cursor
       "readerWidth": 720,
       "theme": "paper"
     },
+    "behavior": {
+      "markScrolledArticlesIgnored": true
+    },
     "retention": {
       "retentionDays": 60,
       "keepFavorites": true,
@@ -936,6 +947,7 @@ cursor
 - 未出现字段保持原值；如果原值缺失或非法，使用默认值。
 - 任意未知字段、不可写字段、类型错误或越界值返回 `VALIDATION_ERROR`。
 - API 字段 `retention.retentionDays` 持久化到 storage key `retention.articleDays`。
+- `behavior.markScrolledArticlesIgnored` 控制最新 / 推荐列表中“滚过未打开文章 -> 已忽略”的自动行为记录。
 
 请求：
 
@@ -947,6 +959,9 @@ cursor
   "reader": {
     "fontSize": 19,
     "lineHeight": 1.8
+  },
+  "behavior": {
+    "markScrolledArticlesIgnored": true
   },
   "retention": {
     "retentionDays": 90
@@ -970,6 +985,9 @@ cursor
         "paragraphGap": 1.1,
         "readerWidth": 720,
         "theme": "paper"
+      },
+      "behavior": {
+        "markScrolledArticlesIgnored": true
       },
       "retention": {
         "retentionDays": 90,

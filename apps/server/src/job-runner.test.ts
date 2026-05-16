@@ -391,6 +391,14 @@ describe("job runner foundation", () => {
         enabled: false,
         now: 1000
       });
+      feeds.upsert({
+        id: "feed_not_due",
+        title: "Not Due Feed",
+        feedUrl: "https://example.com/not-due.xml",
+        enabled: true,
+        now: 1000
+      });
+      feeds.recordFetchSuccess("feed_not_due", 1500);
 
       const refreshService = new FeedRefreshService({
         db,
@@ -445,6 +453,11 @@ describe("job runner foundation", () => {
       expect(feeds.findById("feed_disabled")).toMatchObject({
         lastFetchedAt: null,
         lastSuccessAt: null,
+        lastError: null
+      });
+      expect(feeds.findById("feed_not_due")).toMatchObject({
+        lastFetchedAt: 1500,
+        lastSuccessAt: 1500,
         lastError: null
       });
       expect(jobs.findById("job_1")).toMatchObject({
@@ -671,7 +684,7 @@ describe("job runner foundation", () => {
     let drained = false;
     const scheduler = new FeedRefreshScheduler({
       refreshJobs: {
-        enqueueAllEnabledFeeds: () => [minimalJob("job_1")]
+        enqueueDueFeeds: () => [minimalJob("job_1")]
       },
       runner: {
         async drainDue() {
@@ -684,6 +697,47 @@ describe("job runner foundation", () => {
 
     await expect(scheduler.tick()).resolves.toEqual(["job_1"]);
     expect(drained).toBe(true);
+  });
+
+  it("feed refresh jobs enqueue only feeds due for refresh", () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const jobs = new SqliteJobRepository(db);
+
+    try {
+      feeds.upsert({
+        id: "feed_due",
+        title: "Due Feed",
+        feedUrl: "https://example.com/due.xml",
+        now: 1000
+      });
+      feeds.upsert({
+        id: "feed_fresh",
+        title: "Fresh Feed",
+        feedUrl: "https://example.com/fresh.xml",
+        now: 1000
+      });
+      feeds.recordFetchSuccess("feed_due", 1_000);
+      feeds.recordFetchSuccess("feed_fresh", 3_500_000);
+
+      const refreshJobs = new FeedRefreshJobService({
+        feeds,
+        jobs,
+        refresher: {
+          async refreshFeed() {
+            throw new Error("not used");
+          }
+        },
+        jobIdFactory: () => "job_due",
+        now: () => 3_700_000
+      });
+
+      expect(refreshJobs.enqueueAllEnabledFeeds().map((job) => job.payloadJson)).toEqual([
+        JSON.stringify({ feedId: "feed_due" })
+      ]);
+    } finally {
+      db.close();
+    }
   });
 
   it("retention scheduler enqueues one cleanup job and wakes the runner", async () => {

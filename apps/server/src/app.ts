@@ -144,6 +144,7 @@ type ArticleQuery = {
   feedId?: string;
   folderId?: string;
   status?: string;
+  unreadOnly?: string;
   limit?: string;
   cursor?: string;
 };
@@ -785,7 +786,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.post("/api/feeds/refresh", async () => {
-    const jobs = feedRefreshJobService.enqueueAllEnabledFeeds();
+    const jobs = feedRefreshJobService.enqueueDueFeeds();
     if (backgroundJobs) {
       drainBackgroundJobs();
     }
@@ -1454,6 +1455,14 @@ function parseArticleQuery(query: ArticleQuery):
     };
   }
 
+  const unreadOnly = parseBooleanParam(query.unreadOnly);
+  if (unreadOnly === null) {
+    return {
+      ok: false,
+      message: "unreadOnly must be true or false"
+    };
+  }
+
   const limit = parseLimit(query.limit);
   if (limit === null) {
     return {
@@ -1484,6 +1493,9 @@ function parseArticleQuery(query: ArticleQuery):
   }
   if (status !== undefined) {
     input.status = status;
+  }
+  if (unreadOnly !== undefined) {
+    input.unreadOnly = unreadOnly;
   }
 
   return { ok: true, input };
@@ -1847,6 +1859,7 @@ function mapFeed(feed: FeedRow) {
     ...feed,
     lastFetchedAt: timestampToIso(feed.lastFetchedAt),
     lastSuccessAt: timestampToIso(feed.lastSuccessAt),
+    nextRefreshAt: timestampToIso(feed.nextRefreshAt),
     createdAt: timestampToIsoValue(feed.createdAt),
     updatedAt: timestampToIsoValue(feed.updatedAt)
   };
