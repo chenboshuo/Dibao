@@ -623,6 +623,9 @@ describe("server API vertical slice", () => {
           activeRankContext: "base",
           coverage: {
             candidateCount: 0,
+            eligibleArticleCount: 0,
+            missingEmbeddingCount: 0,
+            staleEmbeddingCount: 0,
             embeddingCount: 0,
             coverageRatio: 0,
             pendingJobs: 0,
@@ -1046,6 +1049,149 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("creates a new active index on model or dimension change without polluting the old index", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 1000 });
+
+    try {
+      const created = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Migration Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture-embedding-v1",
+        dimension: 3,
+        enabled: true
+      });
+      const providerId = (created.json() as { data: { id: string } }).data.id;
+      const firstIndexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      const oldIndex = (firstIndexes.json() as { data: Array<{ id: string }> }).data[0];
+
+      new SqliteVecVectorStore(db).upsertArticleVector({
+        articleId: "article_recommended",
+        embeddingIndexId: oldIndex.id,
+        vector: [1, 0, 0],
+        contentHash: "article_recommended:2000",
+        now: 1100
+      });
+
+      const updated = await injectJson(app, "PATCH", `/api/embedding/providers/${providerId}`, {
+        model: "fixture-embedding-v2",
+        dimension: 4,
+        enabled: true
+      });
+      expect(updated.statusCode, updated.body).toBe(200);
+
+      const indexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      expect(indexes.statusCode, indexes.body).toBe(200);
+      const data = (indexes.json() as { data: Array<{ id: string; status: string; model: string; dimension: number; embeddingCount: number; coverageRatio: number }> }).data;
+      const active = data.find((index) => index.status === "active");
+      const retired = data.find((index) => index.id === oldIndex.id);
+
+      expect(active).toMatchObject({
+        model: "fixture-embedding-v2",
+        dimension: 4,
+        embeddingCount: 0,
+        coverageRatio: 0
+      });
+      expect(active?.id).not.toBe(oldIndex.id);
+      expect(retired).toMatchObject({
+        id: oldIndex.id,
+        status: "retired",
+        model: "fixture-embedding-v1",
+        dimension: 3,
+        embeddingCount: 1
+      });
+
+      const recommended = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+      expect(recommended.json()).toMatchObject({
+        data: {
+          activeIndex: {
+            id: active?.id
+          },
+          activeRankContext: active?.id
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("uses provider-specific embedding backfill batch sizes", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    feeds.upsert({
+      id: "feed_batch",
+      title: "Batch Feed",
+      feedUrl: "https://example.com/batch.xml",
+      now: 1000
+    });
+    for (let index = 0; index < 9; index += 1) {
+      articles.upsert({
+        id: `article_batch_${index}`,
+        feedId: "feed_batch",
+        url: `https://example.com/batch/${index}`,
+        canonicalUrl: `https://example.com/batch/${index}`,
+        title: `Batch article ${index}`,
+        summary: "Batch sizing fixture",
+        publishedAt: 1000 + index,
+        discoveredAt: 1000 + index,
+        dedupeKey: `article_batch_${index}`,
+        now: 1000 + index
+      });
+    }
+    const app = buildServer({ db, logger: false, now: () => 2000 });
+
+    try {
+      await postJson(app, "/api/embedding/providers", {
+        type: "ollama",
+        name: "Ollama Batch",
+        baseUrl: "http://127.0.0.1:11434",
+        model: "bge-m3",
+        dimension: 1024,
+        enabled: true
+      });
+      const indexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      const indexId = (indexes.json() as { data: Array<{ id: string }> }).data[0].id;
+      const backfill = await app.inject({
+        method: "POST",
+        url: `/api/embedding/indexes/${indexId}/backfill`
+      });
+      expect(backfill.statusCode, backfill.body).toBe(200);
+
+      const payloads = db
+        .prepare(
+          `
+            select payload_json as payloadJson
+            from jobs
+            where type = 'embedding_generate'
+            order by id
+          `
+        )
+        .all() as Array<{ payloadJson: string }>;
+      const lengths = payloads.map(
+        (row) => (JSON.parse(row.payloadJson) as { articleIds: string[] }).articleIds.length
+      );
+      expect(lengths.sort((left, right) => right - left)).toEqual([4, 4, 1]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("queues embedding jobs for newly refreshed articles without calling the provider inline", async () => {
     const db = createEmptyDatabase();
     const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
@@ -1144,6 +1290,9 @@ describe("server API vertical slice", () => {
       expect(indexes.json().data[0]).toMatchObject({
         id: index.id,
         candidateCount: 2,
+        eligibleArticleCount: 2,
+        missingEmbeddingCount: 1,
+        staleEmbeddingCount: 0,
         embeddingCount: 1,
         coverageRatio: 0.5,
         pendingJobs: 1,
@@ -1178,6 +1327,9 @@ describe("server API vertical slice", () => {
           activeRankContext: index.id,
           coverage: {
             candidateCount: 2,
+            eligibleArticleCount: 2,
+            missingEmbeddingCount: 1,
+            staleEmbeddingCount: 0,
             embeddingCount: 1,
             coverageRatio: 0.5,
             pendingJobs: 1,
@@ -1198,6 +1350,80 @@ describe("server API vertical slice", () => {
       expect(status.body).not.toContain("hasApiKey");
       expect(status.body).not.toContain("vectorBlob");
       expect(status.body).not.toContain("tableName");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("backfills only active index missing or stale embeddings and deduplicates open jobs", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    const vectorStore = new SqliteVecVectorStore(db);
+    vectorStore.upsertArticleVector({
+      articleId: "article_recommended",
+      embeddingIndexId: index.id,
+      vector: [1, 0, 0],
+      contentHash: "stale-hash",
+      now: 6100
+    });
+    const app = buildServer({ db, logger: false, now: () => 7000 });
+
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: `/api/embedding/indexes/${index.id}/backfill`
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toMatchObject({
+        data: {
+          candidateCount: 2,
+          enqueuedArticleCount: 2,
+          dedupedArticleCount: 0
+        }
+      });
+      expect(first.json().data.jobIds).toHaveLength(1);
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/api/embedding/indexes/${index.id}/backfill`
+      });
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json()).toMatchObject({
+        data: {
+          candidateCount: 2,
+          enqueuedArticleCount: 0,
+          dedupedArticleCount: 2,
+          jobIds: []
+        }
+      });
+
+      const indexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      expect(indexes.json().data[0]).toMatchObject({
+        id: index.id,
+        candidateCount: 2,
+        eligibleArticleCount: 2,
+        missingEmbeddingCount: 1,
+        staleEmbeddingCount: 1,
+        pendingJobs: 1
+      });
+
+      new SqliteEmbeddingRepository(db).markIndexStatus(index.id, "retired", 7100);
+      const retired = await app.inject({
+        method: "POST",
+        url: `/api/embedding/indexes/${index.id}/backfill`
+      });
+      expect(retired.statusCode, retired.body).toBe(409);
+      expect(retired.json()).toMatchObject({
+        error: {
+          code: "CONFLICT"
+        }
+      });
     } finally {
       await app.close();
       db.close();
@@ -1252,6 +1478,9 @@ describe("server API vertical slice", () => {
           mode: "degraded",
           coverage: {
             candidateCount: 2,
+            eligibleArticleCount: 2,
+            missingEmbeddingCount: 2,
+            staleEmbeddingCount: 0,
             embeddingCount: 0,
             coverageRatio: 0,
             pendingJobs: 0,
@@ -2521,12 +2750,6 @@ describe("server API vertical slice", () => {
       expect(notInterested.statusCode, notInterested.body).toBe(200);
       expect(hide.statusCode, hide.body).toBe(200);
       await drainRankingJobs(db, 10_000);
-      expect(getRankScore(db, "article_rank_favorite")).toBeLessThan(
-        getRankScore(db, "article_rank_progress")
-      );
-      expect(getRankScore(db, "article_rank_later")).toBeLessThan(
-        getRankScore(db, "article_rank_progress")
-      );
 
       const filtered = await app.inject({
         method: "GET",

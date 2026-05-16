@@ -81,6 +81,11 @@ ollama pull nomic-embed-text
 
 配置后可以点击“测试连接”。未配置、停用或测试失败时，阅读和基础推荐仍然可用。
 
+Backfill 和 rebuild 是两个不同操作：
+
+- Backfill 会为 active embedding index 中缺失或内容 hash 变旧的文章重新加入 `embedding_generate` 队列，可能调用 provider。
+- Rebuild 只从本地 `article_embeddings` authority table 重建 sqlite-vec index，不重新请求 provider。
+
 安全说明：当前 MVP 会把 provider 配置和 API key 存在本地 SQLite 中。请只在你信任的机器或受控自托管环境运行；如果通过公网访问，建议放在 HTTPS 反向代理之后，并设置 `DIBAO_COOKIE_SECURE=true`。
 
 ## 数据持久化
@@ -169,6 +174,23 @@ npm run e2e
 ```
 
 `npm run e2e` 会先构建生产产物，再使用独立临时数据库启动 server。E2E 内部使用本地 fixture RSS 和本地 OpenAI-compatible mock，不访问真实外网。
+
+推荐链发布门禁：
+
+```bash
+npm run perf:recommendation
+docker build -t dibao:local .
+docker compose config
+npm run smoke:docker-recommendation
+```
+
+真实 Ollama 为可选测试，默认不会在 CI 或 `npm test` 中运行：
+
+```bash
+DIBAO_RUN_OLLAMA_TESTS=true npm run test:ollama:optional
+```
+
+本机推荐优先测试 `bge-m3`，脚本会先 probe `/api/embed` 并打印实际 dimension。详见 [Ollama 测试指南](./docs/user-testing-ollama.md)。
 
 ## 参考文档
 

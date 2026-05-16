@@ -14,13 +14,22 @@ import type { ProfileService } from "./profile-service.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
 export const EMBEDDING_GENERATE_JOB_TYPE = "embedding_generate" as const;
-export const EMBEDDING_JOB_ARTICLE_LIMIT = 16;
+export const OPENAI_COMPATIBLE_EMBEDDING_BATCH_SIZE = 16;
+export const OLLAMA_EMBEDDING_BATCH_SIZE = 4;
+export const EMBEDDING_JOB_ARTICLE_LIMIT = OPENAI_COMPATIBLE_EMBEDDING_BATCH_SIZE;
 export const EMBEDDING_TEXT_MAX_CHARS = 8_000;
 export const EMBEDDING_BACKFILL_LIMIT = 1_000;
 
 export type EmbeddingGenerateJobPayload = {
   embeddingIndexId: string;
   articleIds: string[];
+};
+
+export type EmbeddingBackfillEnqueueResult = {
+  jobIds: string[];
+  candidateCount: number;
+  enqueuedArticleCount: number;
+  dedupedArticleCount: number;
 };
 
 export type EmbeddingJobServiceOptions = {
@@ -56,7 +65,7 @@ export class EmbeddingJobService {
       limit: EMBEDDING_BACKFILL_LIMIT
     });
 
-    return this.enqueueCandidates(active.index.id, candidates);
+    return this.enqueueCandidates(active.index.id, candidates, embeddingBatchSizeFor(active.provider.type)).jobs;
   }
 
   enqueueBackfillForActiveIndex(): JobRow[] {
@@ -70,7 +79,36 @@ export class EmbeddingJobService {
       limit: EMBEDDING_BACKFILL_LIMIT
     });
 
-    return this.enqueueCandidates(active.index.id, candidates);
+    return this.enqueueCandidates(active.index.id, candidates, embeddingBatchSizeFor(active.provider.type)).jobs;
+  }
+
+  enqueueBackfillForIndex(embeddingIndexId: string): EmbeddingBackfillEnqueueResult {
+    const active = this.options.providerService.activeProviderConfig();
+    if (!active || active.index.id !== embeddingIndexId) {
+      return {
+        jobIds: [],
+        candidateCount: 0,
+        enqueuedArticleCount: 0,
+        dedupedArticleCount: 0
+      };
+    }
+
+    const candidates = this.options.articles.listEmbeddingCandidates({
+      embeddingIndexId,
+      limit: EMBEDDING_BACKFILL_LIMIT
+    });
+    const result = this.enqueueCandidates(
+      embeddingIndexId,
+      candidates,
+      embeddingBatchSizeFor(active.provider.type)
+    );
+
+    return {
+      jobIds: result.jobs.map((job) => job.id),
+      candidateCount: result.candidateCount,
+      enqueuedArticleCount: result.enqueuedArticleCount,
+      dedupedArticleCount: result.dedupedArticleCount
+    };
   }
 
   async handleEmbeddingGenerateJob(job: JobRow): Promise<void> {
@@ -108,13 +146,19 @@ export class EmbeddingJobService {
     }
 
     try {
-      const vectors = await active.adapter.embedBatch({
-        provider: active.provider,
-        items: candidates.map((candidate) => ({
-          id: candidate.articleId,
-          text: textForEmbedding(candidate)
-        }))
-      });
+      const vectors = (
+        await Promise.all(
+          chunks(candidates, embeddingBatchSizeFor(provider.type)).map((chunk) =>
+            active.adapter.embedBatch({
+              provider: active.provider,
+              items: chunk.map((candidate) => ({
+                id: candidate.articleId,
+                text: textForEmbedding(candidate)
+              }))
+            })
+          )
+        )
+      ).flat();
       const vectorByArticleId = new Map(vectors.map((vector) => [vector.id, vector.vector]));
       const now = this.now();
       const writtenArticleIds: string[] = [];
@@ -160,16 +204,22 @@ export class EmbeddingJobService {
 
   private enqueueCandidates(
     embeddingIndexId: string,
-    candidates: ArticleEmbeddingCandidateRow[]
-  ): JobRow[] {
+    candidates: ArticleEmbeddingCandidateRow[],
+    batchSize: number
+  ): {
+    jobs: JobRow[];
+    candidateCount: number;
+    enqueuedArticleCount: number;
+    dedupedArticleCount: number;
+  } {
     const openArticleIds = this.openArticleIdsForIndex(embeddingIndexId);
-    const articleIds = candidates
-      .map((candidate) => candidate.articleId)
+    const candidateArticleIds = uniqueStrings(candidates.map((candidate) => candidate.articleId));
+    const articleIds = candidateArticleIds
       .filter((articleId) => !openArticleIds.has(articleId));
     const jobs: JobRow[] = [];
     const now = this.now();
 
-    for (const chunk of chunks(uniqueStrings(articleIds), EMBEDDING_JOB_ARTICLE_LIMIT)) {
+    for (const chunk of chunks(articleIds, batchSize)) {
       if (chunk.length === 0) {
         continue;
       }
@@ -189,7 +239,12 @@ export class EmbeddingJobService {
       );
     }
 
-    return jobs;
+    return {
+      jobs,
+      candidateCount: candidateArticleIds.length,
+      enqueuedArticleCount: articleIds.length,
+      dedupedArticleCount: candidateArticleIds.length - articleIds.length
+    };
   }
 
   private openArticleIdsForIndex(embeddingIndexId: string): Set<string> {
@@ -262,6 +317,12 @@ function chunks<T>(values: T[], size: number): T[][] {
     result.push(values.slice(index, index + size));
   }
   return result;
+}
+
+function embeddingBatchSizeFor(type: string): number {
+  return type === "ollama"
+    ? OLLAMA_EMBEDDING_BATCH_SIZE
+    : OPENAI_COMPATIBLE_EMBEDDING_BATCH_SIZE;
 }
 
 function randomJobId(): string {

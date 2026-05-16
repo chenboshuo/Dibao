@@ -359,6 +359,37 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
               ei.created_at as createdAt,
               ei.updated_at as updatedAt,
               ea.candidateCount as candidateCount,
+              ea.candidateCount as eligibleArticleCount,
+              (
+                select count(*)
+                from articles a
+                join feeds f on f.id = a.feed_id
+                left join article_contents ac on ac.article_id = a.id
+                left join article_embeddings ae
+                  on ae.article_id = a.id
+                 and ae.embedding_index_id = ei.id
+                where a.deleted_at is null
+                  and a.status != 'deleted'
+                  and f.deleted_at is null
+                  and f.enabled = 1
+                  and trim(coalesce(a.title, '') || ' ' || coalesce(a.summary, '') || ' ' || coalesce(ac.content_text, '')) != ''
+                  and ae.article_id is null
+              ) as missingEmbeddingCount,
+              (
+                select count(*)
+                from articles a
+                join feeds f on f.id = a.feed_id
+                left join article_contents ac on ac.article_id = a.id
+                join article_embeddings ae
+                  on ae.article_id = a.id
+                 and ae.embedding_index_id = ei.id
+                where a.deleted_at is null
+                  and a.status != 'deleted'
+                  and f.deleted_at is null
+                  and f.enabled = 1
+                  and trim(coalesce(a.title, '') || ' ' || coalesce(a.summary, '') || ' ' || coalesce(ac.content_text, '')) != ''
+                  and ae.content_hash != coalesce(a.content_hash, a.id || ':' || a.updated_at)
+              ) as staleEmbeddingCount,
               (
                 select count(*)
                 from article_embeddings ae

@@ -21,6 +21,10 @@ export interface ArticleRankingRecalculator {
   recalculateArticle(articleId: string): number;
   recalculateArticles(articleIds: string[]): number;
   recalculateAll(): number;
+  recalculateChunk?(input: {
+    cursor?: string | null;
+    limit: number;
+  }): { processed: number; nextCursor: string | null };
 }
 
 export type RankExplanationReasonType =
@@ -78,11 +82,25 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     if (articleIds.length === 0) {
       return 0;
     }
-    return this.writeScores(uniqueStrings(articleIds));
+    return this.writeScores(uniqueStrings(articleIds)).processed;
   }
 
   recalculateAll(): number {
-    return this.writeScores();
+    return this.writeScores().processed;
+  }
+
+  recalculateChunk(input: {
+    cursor?: string | null;
+    limit: number;
+  }): { processed: number; nextCursor: string | null } {
+    const result = this.writeScores(undefined, {
+      afterArticleId: input.cursor ?? null,
+      limit: input.limit
+    });
+    return {
+      processed: result.processed,
+      nextCursor: result.nextCursor
+    };
   }
 
   explainArticle(articleId: string): RankExplanationResult | null {
@@ -102,10 +120,15 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     };
   }
 
-  private writeScores(articleIds?: string[]): number {
+  private writeScores(
+    articleIds?: string[],
+    page?: { afterArticleId?: string | null; limit?: number }
+  ): { processed: number; nextCursor: string | null } {
     const activeIndexId = this.activeEmbeddingIndexId();
     const candidates = this.options.rankings.listCandidates({
       articleIds,
+      afterArticleId: page?.afterArticleId,
+      limit: page?.limit,
       embeddingIndexId: activeIndexId
     });
     const now = this.now();
@@ -174,7 +197,13 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       }
     }
 
-    return candidates.length;
+    return {
+      processed: candidates.length,
+      nextCursor:
+        page?.limit !== undefined && candidates.length >= page.limit
+          ? candidates[candidates.length - 1]?.articleId ?? null
+          : null
+    };
   }
 
   private activeEmbeddingIndexId(): string | null {

@@ -15,6 +15,9 @@
     "dev:web": "npm run dev -w @dibao/web",
     "e2e": "npm run build && node scripts/e2e/prepare.mjs && playwright test",
     "e2e:install": "playwright install chromium",
+    "perf:recommendation": "tsx scripts/perf/recommendation-performance.ts",
+    "smoke:docker-recommendation": "node scripts/smoke/docker-recommendation-smoke.mjs",
+    "test:ollama:optional": "node scripts/smoke/ollama-probe.mjs",
     "spike:sqlite-vec": "node scripts/spikes/sqlite-vec-node.mjs"
   },
   "devDependencies": {

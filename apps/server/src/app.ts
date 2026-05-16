@@ -659,6 +659,24 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   );
 
+  app.post<{ Params: EmbeddingIndexParams }>(
+    "/api/embedding/indexes/:id/backfill",
+    async (request, reply) => {
+      try {
+        embeddingProviderService.assertBackfillableIndex(request.params.id);
+        const result = embeddingJobService.enqueueBackfillForIndex(request.params.id);
+        if (result.jobIds.length > 0) {
+          drainBackgroundJobs();
+        }
+        return {
+          data: result
+        };
+      } catch (error) {
+        return sendEmbeddingProviderError(reply, error);
+      }
+    }
+  );
+
   app.get("/api/system/health", async (_request, reply) => {
     const data = getHealth(db);
     const statusCode = data.ok ? 200 : 503;
@@ -1200,6 +1218,9 @@ function getRecommendationStatus(options: {
 
 type RecommendationCoverage = {
   candidateCount: number;
+  eligibleArticleCount: number;
+  missingEmbeddingCount: number;
+  staleEmbeddingCount: number;
   embeddingCount: number;
   coverageRatio: number;
   pendingJobs: number;
@@ -1225,6 +1246,9 @@ function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverag
   if (!index) {
     return {
       candidateCount: 0,
+      eligibleArticleCount: 0,
+      missingEmbeddingCount: 0,
+      staleEmbeddingCount: 0,
       embeddingCount: 0,
       coverageRatio: 0,
       pendingJobs: 0,
@@ -1236,6 +1260,9 @@ function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverag
 
   return {
     candidateCount: index.candidateCount,
+    eligibleArticleCount: index.eligibleArticleCount,
+    missingEmbeddingCount: index.missingEmbeddingCount,
+    staleEmbeddingCount: index.staleEmbeddingCount,
     embeddingCount: index.embeddingCount,
     coverageRatio: index.coverageRatio,
     pendingJobs: index.pendingJobs,
@@ -1348,6 +1375,9 @@ function mapRecommendationIndex(index: EmbeddingIndexListRow) {
 function mapCoverage(coverage: RecommendationCoverage) {
   return {
     candidateCount: coverage.candidateCount,
+    eligibleArticleCount: coverage.eligibleArticleCount,
+    missingEmbeddingCount: coverage.missingEmbeddingCount,
+    staleEmbeddingCount: coverage.staleEmbeddingCount,
     embeddingCount: coverage.embeddingCount,
     coverageRatio: coverage.coverageRatio,
     pendingJobs: coverage.pendingJobs,

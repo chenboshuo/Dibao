@@ -25,7 +25,7 @@ import {
   EMBEDDING_GENERATE_JOB_TYPE
 } from "./embedding-job-service.js";
 import { EmbeddingProviderService } from "./embedding-provider-service.js";
-import type { EmbeddingProviderAdapter } from "./embedding/types.js";
+import { EmbeddingProviderError, type EmbeddingProviderAdapter } from "./embedding/types.js";
 import {
   FeedRefreshCoordinator,
   FeedRefreshJobService,
@@ -588,6 +588,85 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("retries retryable provider failures and permanently fails malformed provider responses", async () => {
+    const retryable = createEmbeddingPipelineFixture();
+
+    try {
+      insertEmbeddingArticleFixture(
+        retryable.db,
+        retryable.articles,
+        "article_retryable_provider",
+        "Retryable provider article"
+      );
+      const [retryableJob] = retryable.embeddingJobs.enqueueArticlesForActiveIndex([
+        "article_retryable_provider"
+      ]);
+      retryable.adapter.embedBatch = async () => {
+        throw new EmbeddingProviderError("Provider request failed", true, {
+          status: 429,
+          authorization: "Bearer should-not-leak"
+        });
+      };
+      const retryRunner = new JobRunner({
+        jobs: retryable.jobs,
+        handlers: {
+          embedding_generate: (job) => retryable.embeddingJobs.handleEmbeddingGenerateJob(job)
+        },
+        now: () => 2000,
+        retryDelayMs: 5000
+      });
+
+      await expect(retryRunner.runDueOnce()).resolves.toMatchObject({
+        id: retryableJob.id
+      });
+      expect(retryable.jobs.findById(retryableJob.id)).toMatchObject({
+        status: "queued",
+        attempts: 1,
+        error: "Provider request failed",
+        runAfter: 7000
+      });
+    } finally {
+      retryable.db.close();
+    }
+
+    const permanent = createEmbeddingPipelineFixture();
+    try {
+      insertEmbeddingArticleFixture(
+        permanent.db,
+        permanent.articles,
+        "article_permanent_provider",
+        "Permanent provider article"
+      );
+      const [permanentJob] = permanent.embeddingJobs.enqueueArticlesForActiveIndex([
+        "article_permanent_provider"
+      ]);
+      permanent.adapter.embedBatch = async () => {
+        throw new EmbeddingProviderError("Provider response must include data array", false, {
+          apiKey: "should-not-leak"
+        });
+      };
+      const permanentRunner = new JobRunner({
+        jobs: permanent.jobs,
+        handlers: {
+          embedding_generate: (job) => permanent.embeddingJobs.handleEmbeddingGenerateJob(job)
+        },
+        now: () => 2000,
+        retryDelayMs: 5000
+      });
+
+      await expect(permanentRunner.runDueOnce()).resolves.toMatchObject({
+        id: permanentJob.id
+      });
+      expect(permanent.jobs.findById(permanentJob.id)).toMatchObject({
+        status: "failed",
+        attempts: 1,
+        error: "Provider response must include data array"
+      });
+    } finally {
+      permanent.db.close();
+    }
+  });
+
   it("scheduler tick enqueues refresh jobs and wakes the runner without using a real interval", async () => {
     let drained = false;
     const scheduler = new FeedRefreshScheduler({
@@ -713,6 +792,64 @@ describe("job runner foundation", () => {
         attempts: 1,
         error: "Invalid profile_decay job payload"
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("runs full ranking recalculation as resumable chunks", async () => {
+    const db = createEmptyDatabase();
+    try {
+      const jobs = new SqliteJobRepository(db);
+      const calls: Array<{ cursor: string | null; limit: number }> = [];
+      const rankingJobs = new RankingRecalculateJobService({
+        jobs,
+        ranking: {
+          recalculateArticle() {
+            return 1;
+          },
+          recalculateArticles(articleIds: string[]) {
+            return articleIds.length;
+          },
+          recalculateAll() {
+            return 0;
+          },
+          recalculateChunk(input: { cursor?: string | null; limit: number }) {
+            calls.push({
+              cursor: input.cursor ?? null,
+              limit: input.limit
+            });
+            return {
+              processed: input.cursor === "cursor_2" ? 100 : 500,
+              nextCursor:
+                input.cursor === null || input.cursor === undefined
+                  ? "cursor_1"
+                  : input.cursor === "cursor_1"
+                    ? "cursor_2"
+                    : null
+            };
+          }
+        },
+        jobIdFactory: () => `job_rank_${calls.length}_${randomFixtureId()}`,
+        now: () => 1000
+      });
+      rankingJobs.enqueueAll();
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
+            rankingJobs.handleRankingRecalculateJob(job)
+        },
+        now: () => 1000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(3);
+      expect(calls).toEqual([
+        { cursor: null, limit: 500 },
+        { cursor: "cursor_1", limit: 500 },
+        { cursor: "cursor_2", limit: 500 }
+      ]);
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "succeeded")).toBe(3);
     } finally {
       db.close();
     }

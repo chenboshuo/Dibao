@@ -622,6 +622,8 @@ packages/db/src/vector/sqlite-vec-vector-store.ts
 - title、summary、content_text 拼接后至少有一个非空文本。
 
 `candidateCount` 不排除 hidden/not_interested，因为它表示 embedding 生成候选，不是推荐列表候选。
+`eligibleArticleCount` 当前与 `candidateCount` 同义；`missingEmbeddingCount` 和
+`staleEmbeddingCount` 是 active/backfill 诊断用的只读投影。
 `coverageRatio = embeddingCount / candidateCount`；`candidateCount = 0` 时 API 返回 `0`。
 pending/failed/lastFailedAt/lastError 从当前 index 的 `embedding_generate` jobs 聚合。
 
@@ -810,8 +812,9 @@ MVP runner 约定：
 - runner 启动时会把崩溃遗留的 `running` jobs 重置，避免永久卡住。
 - `feed_refresh` payload 目前只接受 `{ "feedId": "string" }`。
 - `retention_cleanup` payload 目前只接受 `null` 或 `{}`。
-- `embedding_generate` payload 目前只接受 `{ "embeddingIndexId": "string", "articleIds": ["string"] }`，`articleIds` 长度限制 `1..16`。
+- `embedding_generate` payload 目前只接受 `{ "embeddingIndexId": "string", "articleIds": ["string"] }`，`articleIds` 长度限制 `1..16`；OpenAI-compatible 默认 16，Ollama 默认 4。
 - `embedding_generate` 只对 queued/running open jobs 去重，历史 succeeded job 不会阻止内容变更后的重新 embedding。
+- `ranking_recalculate` 全量重算通过 cursor chunk payload 续跑，默认 chunk size 为 500；指定 `articleIds` 重算仍应用可见性过滤。
 - `vector_index_rebuild` payload 目前只接受 `{ "embeddingIndexId": "string" }`。
 
 API 诊断约定：

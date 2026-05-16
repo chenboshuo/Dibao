@@ -37,6 +37,9 @@ export type EmbeddingIndexResponse = {
   distanceMetric: EmbeddingIndexRow["distanceMetric"];
   status: EmbeddingIndexRow["status"];
   candidateCount: number;
+  eligibleArticleCount: number;
+  missingEmbeddingCount: number;
+  staleEmbeddingCount: number;
   embeddingCount: number;
   coverageRatio: number;
   pendingJobs: number;
@@ -260,6 +263,21 @@ export class EmbeddingProviderService {
         embeddingIndexId: id
       }
     };
+  }
+
+  assertBackfillableIndex(id: string): EmbeddingIndexRow {
+    const index = this.options.embeddings.findIndexById(id);
+    if (!index) {
+      throw notFound("Embedding index not found");
+    }
+    if (index.status !== "active") {
+      throw new EmbeddingProviderServiceError(
+        409,
+        "CONFLICT",
+        "Backfill can only run for the active embedding index"
+      );
+    }
+    return index;
   }
 
   activeProviderConfig(): ActiveEmbeddingProviderConfig | null {
@@ -558,12 +576,15 @@ function mapIndex(index: EmbeddingIndexListRow): EmbeddingIndexResponse {
     distanceMetric: index.distanceMetric,
     status: index.status,
     candidateCount: index.candidateCount,
+    eligibleArticleCount: index.eligibleArticleCount,
+    missingEmbeddingCount: index.missingEmbeddingCount,
+    staleEmbeddingCount: index.staleEmbeddingCount,
     embeddingCount: index.embeddingCount,
     coverageRatio: index.coverageRatio,
     pendingJobs: index.pendingJobs,
     failedJobs: index.failedJobs,
     lastFailedAt: timestampToIso(index.lastFailedAt),
-    lastError: index.lastError,
+    lastError: sanitizePublicError(index.lastError),
     createdAt: timestampToIso(index.createdAt ?? null),
     updatedAt: timestampToIso(index.updatedAt ?? null)
   };
@@ -571,13 +592,22 @@ function mapIndex(index: EmbeddingIndexListRow): EmbeddingIndexResponse {
 
 function providerError(error: unknown, message: string): EmbeddingProviderServiceError {
   if (error instanceof EmbeddingProviderError) {
-    return new EmbeddingProviderServiceError(502, "PROVIDER_ERROR", message, error.details);
+    return new EmbeddingProviderServiceError(
+      502,
+      "PROVIDER_ERROR",
+      sanitizePublicError(message) ?? "Provider request failed",
+      sanitizePublicDetails(error.details)
+    );
   }
-  return new EmbeddingProviderServiceError(502, "PROVIDER_ERROR", message);
+  return new EmbeddingProviderServiceError(
+    502,
+    "PROVIDER_ERROR",
+    sanitizePublicError(message) ?? "Provider request failed"
+  );
 }
 
 function providerErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return sanitizePublicError(error instanceof Error ? error.message : String(error)) ?? "Provider request failed";
 }
 
 function validationError(message: string, details?: unknown): EmbeddingProviderServiceError {
@@ -594,4 +624,37 @@ function timestampToIso(value: number | null): string | null {
 
 function timestampToIsoValue(value: number): string {
   return new Date(value).toISOString();
+}
+
+function sanitizePublicError(message: string | null): string | null {
+  if (message === null) {
+    return null;
+  }
+
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
+    .replace(/(authorization["':\s]+)([^"',\s}]+)/giu, "$1[redacted]")
+    .replace(/(api[_-]?key["':\s]+)([^"',\s}]+)/giu, "$1[redacted]")
+    .replace(/(token["':\s]+)([^"',\s}]+)/giu, "$1[redacted]");
+}
+
+function sanitizePublicDetails(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizePublicError(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizePublicDetails);
+  }
+  if (typeof value === "object" && value !== null) {
+    const output: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      if (/authorization|api[_-]?key|token|secret/iu.test(key)) {
+        output[key] = "[redacted]";
+      } else {
+        output[key] = sanitizePublicDetails(nested);
+      }
+    }
+    return output;
+  }
+  return value;
 }

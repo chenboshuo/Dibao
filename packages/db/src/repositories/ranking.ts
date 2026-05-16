@@ -64,7 +64,9 @@ export interface RankingRepository {
   getLastRankingUpdate(input: { activeRankContext: string }): number | null;
   listCandidates(input?: {
     articleIds?: string[];
+    afterArticleId?: string | null;
     embeddingIndexId?: string | null;
+    limit?: number;
   }): ArticleRankingCandidateRow[];
   listBaseCandidates(input?: { articleIds?: string[] }): ArticleRankingCandidateRow[];
   upsertScore(input: UpsertArticleRankScoreInput): void;
@@ -172,7 +174,12 @@ export class SqliteRankingRepository implements RankingRepository {
   }
 
   listCandidates(
-    input: { articleIds?: string[]; embeddingIndexId?: string | null } = {}
+    input: {
+      articleIds?: string[];
+      afterArticleId?: string | null;
+      embeddingIndexId?: string | null;
+      limit?: number;
+    } = {}
   ): ArticleRankingCandidateRow[] {
     const articleIds = input.articleIds;
     if (articleIds !== undefined && articleIds.length === 0) {
@@ -181,9 +188,18 @@ export class SqliteRankingRepository implements RankingRepository {
 
     const articleFilter =
       articleIds === undefined ? "" : `and a.id in (${articleIds.map(() => "?").join(", ")})`;
+    const cursorFilter =
+      articleIds === undefined && input.afterArticleId ? "and a.id > ?" : "";
+    const limit = input.limit === undefined ? null : normalizeCandidateLimit(input.limit);
+    const limitClause = limit === null ? "" : "limit ?";
     const params: unknown[] = [input.embeddingIndexId ?? ""];
     if (articleIds) {
       params.push(...articleIds);
+    } else if (input.afterArticleId) {
+      params.push(input.afterArticleId);
+    }
+    if (limit !== null) {
+      params.push(limit);
     }
 
     return (
@@ -251,10 +267,14 @@ export class SqliteRankingRepository implements RankingRepository {
              and ae.embedding_index_id = ?
             where a.deleted_at is null
               and a.status != 'deleted'
+              and s.hidden_at is null
+              and s.not_interested_at is null
               and f.deleted_at is null
               and f.enabled = 1
               ${articleFilter}
+              ${cursorFilter}
             order by a.id
+            ${limitClause}
           `
         )
         .all(input.embeddingIndexId ?? "", ...params) as ArticleRankingCandidateDbRow[]
@@ -317,6 +337,13 @@ export class SqliteRankingRepository implements RankingRepository {
       embeddingIndexId: null
     });
   }
+}
+
+function normalizeCandidateLimit(limit: number): number {
+  if (!Number.isInteger(limit) || limit < 1) {
+    return 500;
+  }
+  return Math.min(limit, 1_000);
 }
 
 function mapExplanationSource(

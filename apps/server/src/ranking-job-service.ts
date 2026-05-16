@@ -5,9 +5,12 @@ import type { ArticleRankingRecalculator } from "./ranking-service.js";
 
 export const RANKING_RECALCULATE_JOB_TYPE = "ranking_recalculate" as const;
 export const RANKING_RECALCULATE_ARTICLE_LIMIT = 500;
+export const RANKING_RECALCULATE_CHUNK_SIZE = 500;
 
 export type RankingRecalculateJobPayload = {
   articleIds?: string[];
+  cursor?: string | null;
+  limit?: number;
 };
 
 export type RankingRecalculateJobServiceOptions = {
@@ -84,7 +87,29 @@ export class RankingRecalculateJobService {
     if (payload.articleIds) {
       this.options.ranking.recalculateArticles(payload.articleIds);
     } else {
-      this.options.ranking.recalculateAll();
+      const result = this.options.ranking.recalculateChunk
+        ? this.options.ranking.recalculateChunk({
+            cursor: payload.cursor ?? null,
+            limit: payload.limit ?? RANKING_RECALCULATE_CHUNK_SIZE
+          })
+        : {
+            processed: this.options.ranking.recalculateAll(),
+            nextCursor: null
+          };
+      if (result.nextCursor) {
+        const now = this.now();
+        this.options.jobs.enqueue({
+          id: this.jobIdFactory(),
+          type: RANKING_RECALCULATE_JOB_TYPE,
+          payloadJson: JSON.stringify({
+            cursor: result.nextCursor,
+            limit: payload.limit ?? RANKING_RECALCULATE_CHUNK_SIZE
+          } satisfies RankingRecalculateJobPayload),
+          maxAttempts: 2,
+          runAfter: now,
+          now
+        });
+      }
     }
   }
 }
@@ -105,6 +130,27 @@ export function parseRankingRecalculatePayload(
       Object.keys(payload).length === 0
     ) {
       return {};
+    }
+
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      !Array.isArray(payload) &&
+      Object.keys(payload).every((key) => key === "cursor" || key === "limit") &&
+      (payload as { cursor?: unknown }).cursor !== undefined &&
+      ((payload as { cursor?: unknown }).cursor === null ||
+        (typeof (payload as { cursor?: unknown }).cursor === "string" &&
+          (payload as { cursor: string }).cursor.trim() !== "")) &&
+      ((payload as { limit?: unknown }).limit === undefined ||
+        (typeof (payload as { limit?: unknown }).limit === "number" &&
+          Number.isInteger((payload as { limit: number }).limit) &&
+          (payload as { limit: number }).limit >= 1 &&
+          (payload as { limit: number }).limit <= RANKING_RECALCULATE_ARTICLE_LIMIT))
+    ) {
+      return {
+        cursor: (payload as { cursor: string | null }).cursor,
+        limit: (payload as { limit?: number }).limit
+      };
     }
 
     if (
