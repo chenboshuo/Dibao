@@ -481,16 +481,6 @@ export const zhCN = {
         }
       ]
     },
-    rankingFlow: [
-      "收集候选文章：按当前频道、来源、分组、未读开关和分页条件取候选。",
-      "过滤不可见项：隐藏、不感兴趣、已删除文章不会进入普通列表。",
-      "读取文章状态：收藏、点赞、稍后读、阅读进度、忽略、点进等状态进入 state score。",
-      "读取来源偏好：手动来源权重和 feed_stats 共同形成 source score。",
-      "计算新鲜度：按发布时间或发现时间计算 freshness score，半衰期约 36 小时。",
-      "如果有 active embedding index：把文章向量与正/负兴趣簇比较，得到 interest score 和 negative penalty。",
-      "合成总分：recommended/read_later 按 active rank context 排序；缺失时 fallback 到 base score。",
-      "按频道输出：最新按时间，推荐按个性化分，稍后读按个性化分，收藏默认按收藏时间。"
-    ],
     rankingFlowDiagram: [
       {
         phase: "候选",
@@ -1137,16 +1127,6 @@ export const enUS = {
         }
       ]
     },
-    rankingFlow: [
-      "Collect candidates by channel, source, folder, unread filter, and cursor.",
-      "Filter invisible items: hidden, not-interested, and deleted articles are removed from normal lists.",
-      "Read article state: favorite, like, read later, reading progress, ignored, and opened feed into state score.",
-      "Read source preference: manual source weight and feed_stats form source score.",
-      "Calculate freshness from published or discovered time, with an approximately 36-hour half-life.",
-      "If an active embedding index exists, compare article vectors with positive and negative interest clusters for interest score and negative penalty.",
-      "Blend the final score: recommended/read_later use the active rank context, falling back to base score when needed.",
-      "Return by channel: latest by time, recommended by personalized score, read later by personalized score, favorites by saved time by default."
-    ],
     rankingFlowDiagram: [
       {
         phase: "Candidates",
