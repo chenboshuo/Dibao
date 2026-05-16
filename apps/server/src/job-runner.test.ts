@@ -27,6 +27,7 @@ import {
 import { EmbeddingProviderService } from "./embedding-provider-service.js";
 import { EmbeddingProviderError, type EmbeddingProviderAdapter } from "./embedding/types.js";
 import {
+  DEFAULT_FEED_REFRESH_INTERVAL_MS,
   FeedRefreshCoordinator,
   FeedRefreshJobService,
   FeedRefreshScheduler
@@ -697,6 +698,35 @@ describe("job runner foundation", () => {
 
     await expect(scheduler.tick()).resolves.toEqual(["job_1"]);
     expect(drained).toBe(true);
+  });
+
+  it("feed refresh scheduler scans due feeds at startup and defaults to ten minutes", async () => {
+    expect(DEFAULT_FEED_REFRESH_INTERVAL_MS).toBe(10 * 60 * 1000);
+
+    let enqueued = 0;
+    let drained = 0;
+    const scheduler = new FeedRefreshScheduler({
+      refreshJobs: {
+        enqueueDueFeeds: () => {
+          enqueued += 1;
+          return [minimalJob("job_startup")];
+        }
+      },
+      runner: {
+        async drainDue() {
+          drained += 1;
+          return 0;
+        }
+      },
+      intervalMs: 60_000
+    });
+
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    scheduler.stop();
+
+    expect(enqueued).toBe(1);
+    expect(drained).toBe(1);
   });
 
   it("feed refresh jobs enqueue only feeds due for refresh", () => {

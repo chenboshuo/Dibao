@@ -5,7 +5,7 @@ import { JobRunner, PermanentJobFailure } from "./job-runner.js";
 
 export const FEED_REFRESH_JOB_TYPE = "feed_refresh" as const;
 export const DEFAULT_FEED_REFRESH_JOB_MAX_ATTEMPTS = 3;
-export const DEFAULT_FEED_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+export const DEFAULT_FEED_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 export type FeedRefreshCoordinatorOptions = {
   refreshService: FeedRefreshService;
@@ -129,6 +129,7 @@ export class FeedRefreshScheduler {
       return;
     }
 
+    void this.tick().catch((error) => this.options.onError?.(error));
     this.interval = setInterval(() => {
       void this.tick().catch((error) => this.options.onError?.(error));
     }, this.intervalMs);
