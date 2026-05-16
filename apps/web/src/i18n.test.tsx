@@ -115,7 +115,7 @@ describe("web i18n", () => {
     ).toEqual({ type: "feed", feedId: "feed_design" });
   });
 
-  it("keeps unread-only article lists to unseen items and removes ignored impressions", () => {
+  it("keeps unread-only initial loads strict while preserving the current queue after state updates", () => {
     const unreadArticle = articleListItem("article_unread", "unseen");
     const ignoredArticle = articleListItem("article_ignored", "ignored");
 
@@ -132,10 +132,9 @@ describe("web i18n", () => {
           ...unreadArticle.state,
           interactionStatus: "ignored",
           ignoredAt: Date.parse("2026-05-14T08:30:00.000Z")
-        },
-        true
-      )
-    ).toEqual([]);
+        }
+      )[0].state.interactionStatus
+    ).toBe("ignored");
     expect(
       articleListAfterStateUpdate(
         [unreadArticle],
@@ -144,8 +143,7 @@ describe("web i18n", () => {
           ...unreadArticle.state,
           interactionStatus: "ignored",
           ignoredAt: Date.parse("2026-05-14T08:30:00.000Z")
-        },
-        false
+        }
       )[0].state.interactionStatus
     ).toBe("ignored");
   });

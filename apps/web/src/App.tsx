@@ -214,7 +214,7 @@ export function App() {
   const currentArticleView = appPage.type === "reader" ? appPage.view : "latest";
 
   function applyArticleState(articleId: string, state: ArticleState) {
-    setArticles((current) => articleListAfterStateUpdate(current, articleId, state, unreadOnly));
+    setArticles((current) => articleListAfterStateUpdate(current, articleId, state));
     setArticleDetail((current) =>
       current?.id === articleId
         ? {
@@ -3014,7 +3014,7 @@ function useReaderReadProgress(props: {
       flushReadProgress(session, true, onReadProgressRef.current);
       clearReadProgressTimer(session);
     };
-  }, [props.article?.id, props.article?.state.readingProgress, props.scrollContainerRef]);
+  }, [props.article?.id, props.scrollContainerRef]);
 }
 
 function progressForScrollContainer(container: HTMLElement): number {

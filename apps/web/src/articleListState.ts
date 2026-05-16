@@ -31,15 +31,15 @@ export function articlesVisibleForUnreadFilter(
 export function articleListAfterStateUpdate(
   articles: ArticleListItem[],
   articleId: string,
-  state: ArticleState,
-  unreadOnly: boolean
+  state: ArticleState
 ): ArticleListItem[] {
+  // Keep the current queue stable while the user is moving through it. Re-fetching
+  // still applies strict filters, but passive state changes should not make a row
+  // disappear under the user's pointer.
   return articles
     .map((article) => (article.id === articleId ? { ...article, state } : article))
     .filter((article) =>
-      article.id === articleId
-        ? !state.hidden && !state.notInterested && isVisibleForUnreadFilter(state, unreadOnly)
-        : true
+      article.id === articleId ? !state.hidden && !state.notInterested : true
     );
 }
 
