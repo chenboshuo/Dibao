@@ -848,6 +848,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       data: result.items.map(mapArticleListItem),
       page: {
         nextCursor: encodeCursor(result.nextOffset)
+      },
+      meta: {
+        unreadCount: result.unreadCount
       }
     };
   });

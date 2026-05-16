@@ -97,6 +97,9 @@ export const zhCN = {
     refreshing: "…",
     refreshAll: "刷新全部",
     refreshingAll: "加入队列中",
+    openSources: "来源",
+    openSourcesLabel: "打开来源",
+    closeSources: "关闭来源",
     refreshTitle: (feedTitle: string) => `刷新 ${feedTitle}`
   },
   folders: {
@@ -347,6 +350,7 @@ export const zhCN = {
   },
   reader: {
     originalLink: "原文",
+    backToList: "返回列表",
     selectArticleTitle: "选择一篇文章",
     selectArticleBody: "文章详情会在这里打开。",
     feedOnlyNotice: "当前仅有订阅源摘要。",
@@ -528,6 +532,9 @@ export const enUS = {
     refreshing: "…",
     refreshAll: "Refresh all",
     refreshingAll: "Queueing",
+    openSources: "Sources",
+    openSourcesLabel: "Open sources",
+    closeSources: "Close sources",
     refreshTitle: (feedTitle: string) => `Refresh ${feedTitle}`
   },
   folders: {
@@ -778,6 +785,7 @@ export const enUS = {
   },
   reader: {
     originalLink: "Original",
+    backToList: "Back to list",
     selectArticleTitle: "Select an article",
     selectArticleBody: "Article details will open here.",
     feedOnlyNotice: "Only the feed summary is available.",

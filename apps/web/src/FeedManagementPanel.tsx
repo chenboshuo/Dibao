@@ -26,13 +26,18 @@ type FeedDraft = {
 };
 
 export type FeedManagementWorkspaceProps = {
+  feedError: string | null;
+  feedUrl: string;
   feedFolders: FeedFolder[];
   feeds: Feed[];
+  isAddingFeed: boolean;
   isLoading: boolean;
+  onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
   onCreateFolder: (title: string) => Promise<void>;
   onDeleteFeed: (feedId: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
   onUpdateFeed: (feedId: string, input: UpdateFeedInput) => Promise<void>;
+  onUpdateFeedUrl: (value: string) => void;
   onUpdateFolder: (folderId: string, input: UpdateFeedFolderInput) => Promise<void>;
 };
 
@@ -301,6 +306,28 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
           <span className={styles.count}>{props.feeds.length}</span>
         </div>
 
+        <form className={styles.managementForm} onSubmit={props.onAddFeed}>
+          <label htmlFor="managed-new-feed-url">{t.feeds.inputLabel}</label>
+          <div className={styles.managementInlineForm}>
+            <input
+              id="managed-new-feed-url"
+              inputMode="url"
+              onChange={(event) => props.onUpdateFeedUrl(event.target.value)}
+              placeholder={t.feeds.inputPlaceholder}
+              type="url"
+              value={props.feedUrl}
+            />
+            <button
+              className={styles.primaryButton}
+              disabled={props.isAddingFeed}
+              type="submit"
+            >
+              {props.isAddingFeed ? t.feeds.adding : t.setup.sources.addFeed}
+            </button>
+          </div>
+        </form>
+
+        {props.feedError ? <p className={styles.errorText}>{props.feedError}</p> : null}
         {error ? <p className={styles.errorText}>{error}</p> : null}
 
         <div className={styles.feedManagementGrid}>

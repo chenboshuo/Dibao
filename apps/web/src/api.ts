@@ -118,6 +118,9 @@ export type ArticleView = "latest" | "recommended";
 export type ArticleListResponse = {
   data: ArticleListItem[];
   page: ApiPage;
+  meta: {
+    unreadCount: number;
+  };
 };
 
 export type OpmlImportResponse = {
@@ -375,6 +378,9 @@ type ApiFetch = typeof fetch;
 type ApiSuccess<T> = {
   data: T;
   page?: ApiPage;
+  meta?: {
+    unreadCount?: number;
+  };
 };
 
 type ApiErrorPayload = {
@@ -678,7 +684,10 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
       return {
         data: response.data,
-        page: response.page ?? { nextCursor: null }
+        page: response.page ?? { nextCursor: null },
+        meta: {
+          unreadCount: response.meta?.unreadCount ?? response.data.length
+        }
       };
     },
 

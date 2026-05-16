@@ -668,7 +668,7 @@ limit
 cursor
 ```
 
-`unreadOnly=true` 可用于 `latest` 与 `recommended`，只返回当前派生 `interactionStatus = "unseen"` 的文章；列表滚过产生 `impression` 后文章不再属于该过滤结果。
+`unreadOnly=true` 可用于 `latest` 与 `recommended`，只返回当前派生 `interactionStatus = "unseen"` 的文章。响应中的 `meta.unreadCount` 始终表示当前 view/source 条件下的真实未读总数，而不是当前分页返回数量。客户端可以在列表滚过产生 `impression`、点进文章产生 `open`、阅读进度产生 `read_progress` 后乐观更新该数字，同时保留当前已加载队列，避免用户在未读模式中误划过或点进后丢失当前文章。
 
 响应：
 
@@ -701,6 +701,9 @@ cursor
   ],
   "page": {
     "nextCursor": null
+  },
+  "meta": {
+    "unreadCount": 42
   }
 }
 ```

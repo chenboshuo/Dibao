@@ -2736,9 +2736,11 @@ describe("server API vertical slice", () => {
       expect(latest.json().data.map((article: { id: string }) => article.id)).toEqual([
         "article_recommended"
       ]);
+      expect(latest.json().meta).toEqual({ unreadCount: 1 });
       expect(recommended.json().data.map((article: { id: string }) => article.id)).toEqual([
         "article_recommended"
       ]);
+      expect(recommended.json().meta).toEqual({ unreadCount: 1 });
 
       const impression = await postJson(app, "/api/articles/article_recommended/actions", {
         type: "impression"
@@ -2751,6 +2753,7 @@ describe("server API vertical slice", () => {
       });
       expect(afterImpression.statusCode, afterImpression.body).toBe(200);
       expect(afterImpression.json().data).toEqual([]);
+      expect(afterImpression.json().meta).toEqual({ unreadCount: 0 });
     } finally {
       await app.close();
       db.close();

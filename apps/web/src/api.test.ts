@@ -601,6 +601,9 @@ describe("web API client", () => {
           data: [],
           page: {
             nextCursor: null
+          },
+          meta: {
+            unreadCount: 17
           }
         }),
         {
@@ -612,7 +615,7 @@ describe("web API client", () => {
       );
     });
 
-    await api.listArticles({
+    const first = await api.listArticles({
       view: "recommended",
       folderId: "folder_design",
       limit: 20,
@@ -628,6 +631,7 @@ describe("web API client", () => {
       "/api/articles?view=recommended&limit=20&folderId=folder_design&cursor=cursor_1&unreadOnly=true",
       "/api/articles?view=latest&limit=50&unreadOnly=true"
     ]);
+    expect(first.meta.unreadCount).toBe(17);
   });
 
   it("imports OPML without forcing a JSON content type", async () => {

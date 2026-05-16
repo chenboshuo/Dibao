@@ -419,6 +419,7 @@ export type ArticleDetailRow = ArticleListItemRow & {
 export type ArticleListResult = {
   items: ArticleListItemRow[];
   nextOffset: number | null;
+  unreadCount: number;
 };
 
 export type UpsertArticleInput = {

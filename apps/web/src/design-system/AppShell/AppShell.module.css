@@ -225,6 +225,13 @@
   overflow: hidden;
 }
 
+.sourceBackdrop,
+.mobileSourceButton,
+.mobileSourceCloseButton,
+.mobileBackButton {
+  display: none;
+}
+
 .managementWorkspace {
   min-height: 0;
   display: grid;
@@ -657,7 +664,10 @@
 .primaryButton,
 .secondaryButton,
 .iconButton,
-.dangerButton {
+.dangerButton,
+.mobileSourceButton,
+.mobileSourceCloseButton,
+.mobileBackButton {
   min-height: var(--button-height-md);
   border: var(--border-default);
   border-radius: var(--button-radius);
@@ -1235,17 +1245,19 @@
 
 @media (max-width: 767px) {
   .shell {
-    height: auto;
+    height: 100dvh;
+    min-height: 0;
     display: block;
-    overflow: visible;
-    padding-bottom: var(--layout-bottom-nav-height);
+    overflow: hidden;
+    padding-bottom: 0;
   }
 
   .content {
-    height: auto;
-    min-height: 100vh;
-    display: block;
-    overflow: visible;
+    height: calc(100dvh - var(--layout-bottom-nav-height));
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
   }
 
   .sidebar {
@@ -1303,9 +1315,11 @@
   }
 
   .workspace {
+    position: relative;
     display: block;
-    height: auto;
-    overflow: visible;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .managementWorkspace,
@@ -1341,12 +1355,67 @@
     width: 100%;
   }
 
-  .feedPanel,
+  .sourceBackdrop {
+    position: fixed;
+    inset: 0 0 var(--layout-bottom-nav-height);
+    z-index: 3;
+    border: 0;
+    padding: 0;
+    background: rgb(20 24 28 / 0.26);
+  }
+
+  .workspaceSourcesOpen .sourceBackdrop {
+    display: block;
+  }
+
+  .feedPanel {
+    position: fixed;
+    inset: 0 auto var(--layout-bottom-nav-height) 0;
+    z-index: 4;
+    width: min(88vw, 340px);
+    overflow: auto;
+    border-right: var(--border-default);
+    border-bottom: 0;
+    box-shadow: var(--shadow-popover);
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+  }
+
+  .feedPanelOpen {
+    transform: translateX(0);
+  }
+
   .articlePanel,
   .readerPanel {
-    overflow: visible;
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
     border-right: 0;
     border-bottom: var(--border-default);
+  }
+
+  .workspace:not(.workspaceReading) .readerPanel {
+    display: none;
+  }
+
+  .workspaceReading .articlePanel {
+    display: none;
+  }
+
+  .workspaceReading .readerPanel {
+    display: block;
+  }
+
+  .mobileSourceButton,
+  .mobileSourceCloseButton,
+  .mobileBackButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobileBackButton {
+    margin-bottom: var(--space-4);
   }
 
   .settingsIndexStatus {

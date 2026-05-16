@@ -32,7 +32,8 @@ import {
 import {
   articleInteractionStatusForState,
   articleListAfterStateUpdate,
-  articlesVisibleForUnreadFilter
+  articlesVisibleForUnreadFilter,
+  unreadCountAfterStateChange
 } from "./articleListState.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
@@ -157,9 +158,11 @@ export function App() {
   const [feedFolders, setFeedFolders] = useState<FeedFolder[]>([]);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [sourceSelection, setSourceSelection] = useState<SourceSelection>({ type: "all" });
   const [appPage, setAppPage] = useState<AppPage>({ type: "reader", view: "latest" });
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [isSourceDrawerOpen, setIsSourceDrawerOpen] = useState(false);
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(null);
   const [rankExplanation, setRankExplanation] = useState<RankExplanation | null>(null);
@@ -193,6 +196,7 @@ export function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const openedArticleIds = useRef(new Set<string>());
   const ignoredArticleIds = useRef(new Set<string>());
+  const articleStateById = useRef(new Map<string, ArticleState>());
   const articleRequestVersion = useRef(0);
   const hasLoadedSettingsForSession = useRef(false);
 
@@ -214,6 +218,16 @@ export function App() {
   const currentArticleView = appPage.type === "reader" ? appPage.view : "latest";
 
   function applyArticleState(articleId: string, state: ArticleState) {
+    const previousState =
+      articleStateById.current.get(articleId) ??
+      (articleDetail?.id === articleId ? articleDetail.state : null);
+    articleStateById.current.set(articleId, state);
+    if (previousState) {
+      setUnreadCount((current) =>
+        unreadCountAfterStateChange(current, previousState, state)
+      );
+    }
+
     setArticles((current) => articleListAfterStateUpdate(current, articleId, state));
     setArticleDetail((current) =>
       current?.id === articleId
@@ -228,6 +242,8 @@ export function App() {
   function resetArticleListForPendingQuery() {
     articleRequestVersion.current += 1;
     setArticles([]);
+    setUnreadCount(0);
+    articleStateById.current.clear();
     setNextArticleCursor(null);
     setSelectedArticleId(null);
     setArticleDetail(null);
@@ -244,6 +260,7 @@ export function App() {
       resetArticleListForPendingQuery();
     }
     setSourceSelection(source);
+    setIsSourceDrawerOpen(false);
   }
 
   function handleArticleViewChange(view: ArticleView) {
@@ -264,6 +281,8 @@ export function App() {
     setFeedFolders([]);
     setFeeds([]);
     setArticles([]);
+    setUnreadCount(0);
+    articleStateById.current.clear();
     setSourceSelection({ type: "all" });
     setAppPage({ type: "reader", view: "latest" });
     setUnreadOnly(false);
@@ -546,7 +565,9 @@ export function App() {
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
+      rememberArticleStates(response.data, articleStateById.current);
       setArticles(articlesVisibleForUnreadFilter(response.data, onlyUnread));
+      setUnreadCount(response.meta.unreadCount);
       setNextArticleCursor(response.page.nextCursor);
       setSelectedArticleId(null);
     } catch (error) {
@@ -555,6 +576,8 @@ export function App() {
       }
       setArticleError(userMessageForError(error, t.errors.api));
       setArticles([]);
+      setUnreadCount(0);
+      articleStateById.current.clear();
       setSelectedArticleId(null);
       setNextArticleCursor(null);
     } finally {
@@ -603,6 +626,7 @@ export function App() {
       try {
         const detail = await dibaoApi.getArticle(articleId);
         if (!cancelled) {
+          articleStateById.current.set(articleId, detail.state);
           setArticleDetail(detail);
           setArticleActionError(null);
         }
@@ -1034,9 +1058,11 @@ export function App() {
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
+      rememberArticleStates(response.data, articleStateById.current);
       setArticles((current) =>
         appendUniqueArticles(current, articlesVisibleForUnreadFilter(response.data, unreadOnly))
       );
+      setUnreadCount(response.meta.unreadCount);
       setNextArticleCursor(response.page.nextCursor);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
@@ -1126,6 +1152,19 @@ export function App() {
     }
   }
 
+  function handleSelectArticle(articleId: string) {
+    setSelectedArticleId(articleId);
+    setIsSourceDrawerOpen(false);
+  }
+
+  function handleBackToArticleList() {
+    setSelectedArticleId(null);
+    setArticleDetail(null);
+    setRankExplanation(null);
+    setDetailError(null);
+    setExplanationError(null);
+  }
+
   function handleNavigationClick(event: MouseEvent<HTMLAnchorElement>, item: NavigationItemKey) {
     event.preventDefault();
     const page = pageForNavigationItem(item);
@@ -1133,6 +1172,7 @@ export function App() {
       return;
     }
 
+    setIsSourceDrawerOpen(false);
     if (page.type === "reader") {
       handleArticleViewChange(page.view);
     } else {
@@ -1263,12 +1303,17 @@ export function App() {
 
         {appPage.type === "feed-management" ? (
           <FeedManagementWorkspace
+            feedError={feedError}
+            feedUrl={feedUrl}
             feedFolders={feedFolders}
             feeds={feeds}
+            isAddingFeed={isAddingFeed}
             isLoading={isFeedsLoading}
+            onAddFeed={handleAddFeed}
             onCreateFolder={handleCreateManagedFolder}
             onDeleteFeed={handleDeleteManagedFeed}
             onDeleteFolder={handleDeleteManagedFolder}
+            onUpdateFeedUrl={setFeedUrl}
             onUpdateFeed={handleUpdateManagedFeed}
             onUpdateFolder={handleUpdateManagedFolder}
           />
@@ -1294,24 +1339,34 @@ export function App() {
             settings={appSettings}
           />
         ) : (
-          <div className={styles.workspace}>
+          <div
+            className={classNames(
+              styles.workspace,
+              selectedArticleId ? styles.workspaceReading : null,
+              isSourceDrawerOpen ? styles.workspaceSourcesOpen : null
+            )}
+          >
+            <button
+              aria-label={t.feeds.closeSources}
+              className={styles.sourceBackdrop}
+              onClick={() => setIsSourceDrawerOpen(false)}
+              type="button"
+            />
             <FeedPanel
               feedError={feedError}
               feedFolders={feedFolders}
               feeds={feeds}
-              feedUrl={feedUrl}
-              isAddingFeed={isAddingFeed}
+              isOpen={isSourceDrawerOpen}
               isFeedsLoading={isFeedsLoading}
               isExportingOpml={isExportingOpml}
               isImportingOpml={isImportingOpml}
               isRefreshingAllFeeds={isRefreshingAllFeeds}
-              onAddFeed={handleAddFeed}
               onExportOpml={handleExportOpml}
               onImportOpml={handleImportOpml}
               onRefreshAllFeeds={handleRefreshAllFeeds}
               onRefreshFeed={handleRefreshFeed}
+              onCloseSources={() => setIsSourceDrawerOpen(false)}
               onSelectSource={handleSelectSource}
-              onUpdateFeedUrl={setFeedUrl}
               opmlSummary={opmlSummary}
               refreshingFeedId={refreshingFeedId}
               sourceSelection={sourceSelection}
@@ -1332,7 +1387,8 @@ export function App() {
               nextCursor={nextArticleCursor}
               onIgnoreArticle={handleIgnoreArticle}
               onLoadMore={handleLoadMoreArticles}
-              onSelectArticle={setSelectedArticleId}
+              onOpenSources={() => setIsSourceDrawerOpen(true)}
+              onSelectArticle={handleSelectArticle}
               onUnreadOnlyChange={handleUnreadOnlyChange}
               recommendationStatus={
                 currentArticleView === "recommended" ? recommendationStatus : null
@@ -1345,6 +1401,7 @@ export function App() {
               selectedFolder={selectedFolder}
               showRecommendationStatus={currentArticleView === "recommended"}
               isRecommendationStatusLoading={isRecommendationStatusLoading}
+              unreadCount={unreadCount}
               unreadOnly={unreadOnly}
             />
 
@@ -1361,6 +1418,7 @@ export function App() {
               isDetailLoading={isDetailLoading}
               isExplanationLoading={isExplanationLoading}
               onArticleAction={handleArticleAction}
+              onBackToList={handleBackToArticleList}
               onReadProgress={handleReadProgress}
               pendingAction={
                 articleDetail && pendingArticleAction?.articleId === articleDetail.id
@@ -2184,19 +2242,17 @@ export function FeedPanel(props: {
   feedError: string | null;
   feedFolders: FeedFolder[];
   feeds: Feed[];
-  feedUrl: string;
-  isAddingFeed: boolean;
+  isOpen: boolean;
   isFeedsLoading: boolean;
   isExportingOpml: boolean;
   isImportingOpml: boolean;
   isRefreshingAllFeeds: boolean;
-  onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
   onExportOpml: () => void;
   onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
   onRefreshAllFeeds: () => void;
   onRefreshFeed: (feed: Feed) => void;
+  onCloseSources: () => void;
   onSelectSource: (source: SourceSelection) => void;
-  onUpdateFeedUrl: (value: string) => void;
   opmlSummary: OpmlImportResponse | null;
   refreshingFeedId: string | null;
   sourceSelection: SourceSelection;
@@ -2207,7 +2263,7 @@ export function FeedPanel(props: {
 
   return (
     <section
-      className={styles.feedPanel}
+      className={classNames(styles.feedPanel, props.isOpen ? styles.feedPanelOpen : null)}
       data-testid="feed-scroll-container"
       aria-labelledby="feeds-title"
     >
@@ -2216,25 +2272,17 @@ export function FeedPanel(props: {
           <p className={styles.kicker}>{t.feeds.kicker}</p>
           <h2 id="feeds-title">{t.feeds.title}</h2>
         </div>
-        <span className={styles.count}>{props.feeds.length}</span>
-      </div>
-
-      <form className={styles.addFeedForm} onSubmit={props.onAddFeed}>
-        <label htmlFor="feed-url">{t.feeds.inputLabel}</label>
-        <div className={styles.addFeedRow}>
-          <input
-            id="feed-url"
-            inputMode="url"
-            onChange={(event) => props.onUpdateFeedUrl(event.target.value)}
-            placeholder={t.feeds.inputPlaceholder}
-            type="url"
-            value={props.feedUrl}
-          />
-          <button className={styles.primaryButton} disabled={props.isAddingFeed} type="submit">
-            {props.isAddingFeed ? t.feeds.adding : t.feeds.add}
+        <div className={styles.panelHeaderActions}>
+          <button
+            className={styles.mobileSourceCloseButton}
+            onClick={props.onCloseSources}
+            type="button"
+          >
+            {t.feeds.closeSources}
           </button>
+          <span className={styles.count}>{props.feeds.length}</span>
         </div>
-      </form>
+      </div>
 
       <div className={styles.opmlActions}>
         <input
@@ -2384,6 +2432,7 @@ export function ArticleListPanel(props: {
   nextCursor: string | null;
   onIgnoreArticle: (articleId: string) => void;
   onLoadMore: () => void;
+  onOpenSources: () => void;
   onSelectArticle: (articleId: string) => void;
   onUnreadOnlyChange: (unreadOnly: boolean) => void;
   recommendationStatus: RecommendationStatus | null;
@@ -2392,6 +2441,7 @@ export function ArticleListPanel(props: {
   selectedFeed: Feed | null;
   selectedFolder: FeedFolder | null;
   showRecommendationStatus: boolean;
+  unreadCount: number;
   unreadOnly: boolean;
 }) {
   const { t, formatDate } = useI18n();
@@ -2420,6 +2470,14 @@ export function ArticleListPanel(props: {
           <h2 id="articles-title">{t.articles.views[props.articleView]}</h2>
         </div>
         <div className={styles.panelHeaderActions}>
+          <button
+            aria-label={t.feeds.openSourcesLabel}
+            className={styles.mobileSourceButton}
+            onClick={props.onOpenSources}
+            type="button"
+          >
+            {t.feeds.openSources}
+          </button>
           <label className={styles.unreadOnlyToggle} htmlFor="article-unread-only">
             <input
               checked={props.unreadOnly}
@@ -2429,7 +2487,7 @@ export function ArticleListPanel(props: {
             />
             <span>{t.articles.unreadOnly}</span>
           </label>
-          <span className={styles.count}>{props.articles.length}</span>
+          <span className={styles.count}>{props.unreadCount}</span>
         </div>
       </div>
 
@@ -2652,6 +2710,7 @@ function ArticleDetailPanel(props: {
   isDetailLoading: boolean;
   isExplanationLoading: boolean;
   onArticleAction: (article: ArticleDetail, intent: ArticleActionIntent) => void;
+  onBackToList: () => void;
   onReadProgress: (
     articleId: string,
     progress: number,
@@ -2694,6 +2753,13 @@ function ArticleDetailPanel(props: {
 
       {!props.isDetailLoading && !props.detailError && props.article ? (
         <article className={styles.reader} data-reader-theme={props.readerSettings.theme}>
+          <button
+            className={styles.mobileBackButton}
+            onClick={props.onBackToList}
+            type="button"
+          >
+            {t.reader.backToList}
+          </button>
           <header className={styles.readerHeader}>
             <a href={props.article.url} rel="noreferrer" target="_blank">
               {t.reader.originalLink}
@@ -3450,6 +3516,19 @@ function articleQueryFor(source: SourceSelection): { feedId?: string; folderId?:
   }
 
   return {};
+}
+
+function classNames(...values: Array<string | null | undefined | false>): string {
+  return values.filter(Boolean).join(" ");
+}
+
+function rememberArticleStates(
+  articles: Pick<ArticleListItem, "id" | "state">[],
+  target: Map<string, ArticleState>
+): void {
+  for (const article of articles) {
+    target.set(article.id, article.state);
+  }
 }
 
 function sameSourceSelection(left: SourceSelection, right: SourceSelection): boolean {

@@ -43,6 +43,29 @@ export function articleListAfterStateUpdate(
     );
 }
 
+export function unreadCountAfterStateChange(
+  current: number,
+  previous: ArticleState,
+  next: ArticleState
+): number {
+  const wasUnread = isCountedUnread(previous);
+  const isUnread = isCountedUnread(next);
+
+  if (wasUnread === isUnread) {
+    return current;
+  }
+
+  return Math.max(0, current + (isUnread ? 1 : -1));
+}
+
+function isCountedUnread(state: ArticleState): boolean {
+  return (
+    !state.hidden &&
+    !state.notInterested &&
+    articleInteractionStatusForState(state) === "unseen"
+  );
+}
+
 function isVisibleForUnreadFilter(state: ArticleState, unreadOnly: boolean): boolean {
   return !unreadOnly || articleInteractionStatusForState(state) === "unseen";
 }

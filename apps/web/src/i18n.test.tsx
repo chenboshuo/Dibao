@@ -18,7 +18,8 @@ import {
 } from "./App.js";
 import {
   articleListAfterStateUpdate,
-  articlesVisibleForUnreadFilter
+  articlesVisibleForUnreadFilter,
+  unreadCountAfterStateChange
 } from "./articleListState.js";
 import { defaultAppSettings, type ArticleListItem } from "./api.js";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
@@ -146,6 +147,19 @@ describe("web i18n", () => {
         }
       )[0].state.interactionStatus
     ).toBe("ignored");
+    expect(
+      unreadCountAfterStateChange(12, unreadArticle.state, {
+        ...unreadArticle.state,
+        interactionStatus: "opened",
+        openedAt: Date.parse("2026-05-14T08:31:00.000Z")
+      })
+    ).toBe(11);
+    expect(
+      unreadCountAfterStateChange(11, unreadArticle.state, {
+        ...unreadArticle.state,
+        hidden: true
+      })
+    ).toBe(10);
   });
 
   it("renders setup and login auth gate copy from the dictionary", () => {
@@ -241,19 +255,17 @@ describe("web i18n", () => {
               updatedAt: "2026-05-14T08:00:00.000Z"
             }
           ]}
-          feedUrl=""
-          isAddingFeed={false}
+          isOpen={false}
           isExportingOpml={false}
           isFeedsLoading={false}
           isImportingOpml={false}
           isRefreshingAllFeeds={false}
-          onAddFeed={() => undefined}
           onExportOpml={() => undefined}
           onImportOpml={() => undefined}
           onRefreshAllFeeds={() => undefined}
           onRefreshFeed={() => undefined}
+          onCloseSources={() => undefined}
           onSelectSource={() => undefined}
-          onUpdateFeedUrl={() => undefined}
           opmlSummary={null}
           refreshingFeedId={null}
           sourceSelection={{ type: "all" }}
@@ -275,6 +287,7 @@ describe("web i18n", () => {
           nextCursor="cursor_1"
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
+          onOpenSources={() => undefined}
           onSelectArticle={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
@@ -287,6 +300,7 @@ describe("web i18n", () => {
             sortOrder: 0
           }}
           showRecommendationStatus={false}
+          unreadCount={12}
           unreadOnly={false}
         />
       </DibaoI18nProvider>
@@ -318,6 +332,7 @@ describe("web i18n", () => {
           nextCursor={null}
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
+          onOpenSources={() => undefined}
           onSelectArticle={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={{
@@ -355,6 +370,7 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus
+          unreadCount={3}
           unreadOnly={false}
         />
       </DibaoI18nProvider>
@@ -371,6 +387,8 @@ describe("web i18n", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <FeedManagementWorkspace
+          feedError={null}
+          feedUrl=""
           feedFolders={[
             {
               id: "folder_design",
@@ -396,17 +414,22 @@ describe("web i18n", () => {
               updatedAt: "2026-05-14T08:00:00.000Z"
             }
           ]}
+          isAddingFeed={false}
           isLoading={false}
+          onAddFeed={() => Promise.resolve()}
           onCreateFolder={() => Promise.resolve()}
           onDeleteFeed={() => Promise.resolve()}
           onDeleteFolder={() => Promise.resolve()}
           onUpdateFeed={() => Promise.resolve()}
+          onUpdateFeedUrl={() => undefined}
           onUpdateFolder={() => Promise.resolve()}
         />
       </DibaoI18nProvider>
     );
 
     expect(html).toContain("新建分组");
+    expect(html).toContain("添加订阅源");
+    expect(html).toContain("RSS / Atom URL");
     expect(html).toContain("重命名");
     expect(html).toContain("删除");
     expect(html).toContain("Design Feed");

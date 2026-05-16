@@ -245,7 +245,7 @@ export class SqliteArticleRepository implements ArticleRepository {
   list(input: ArticleListInput = {}): ArticleListResult {
     const limit = normalizeLimit(input.limit);
     const offset = normalizeOffset(input.offset);
-    const conditions = [
+    const baseConditions = [
       "a.deleted_at is null",
       "a.status != 'deleted'",
       "s.hidden_at is null",
@@ -255,14 +255,27 @@ export class SqliteArticleRepository implements ArticleRepository {
     const params: unknown[] = [rankContext, BASE_RANK_CONTEXT];
 
     if (input.feedId) {
-      conditions.push("a.feed_id = ?");
+      baseConditions.push("a.feed_id = ?");
       params.push(input.feedId);
     }
 
     if (input.folderId) {
-      conditions.push("f.folder_id = ?");
+      baseConditions.push("f.folder_id = ?");
       params.push(input.folderId);
     }
+
+    if (input.view === "favorites") {
+      baseConditions.push("s.favorited_at is not null");
+    } else if (input.view === "read_later") {
+      baseConditions.push("s.read_later_at is not null");
+    }
+
+    const unreadCount = this.countForConditions(
+      [...baseConditions, unreadArticleCondition()],
+      params
+    );
+
+    const conditions = [...baseConditions];
 
     if (input.status === "read") {
       conditions.push("(s.read_at is not null or coalesce(s.reading_progress, 0) >= 0.9)");
@@ -272,12 +285,6 @@ export class SqliteArticleRepository implements ArticleRepository {
 
     if (input.unreadOnly && input.status !== "unread") {
       conditions.push(unreadArticleCondition());
-    }
-
-    if (input.view === "favorites") {
-      conditions.push("s.favorited_at is not null");
-    } else if (input.view === "read_later") {
-      conditions.push("s.read_later_at is not null");
     }
 
     const rows = this.db
@@ -298,8 +305,23 @@ export class SqliteArticleRepository implements ArticleRepository {
 
     return {
       items,
-      nextOffset: hasMore ? offset + limit : null
+      nextOffset: hasMore ? offset + limit : null,
+      unreadCount
     };
+  }
+
+  private countForConditions(conditions: string[], params: unknown[]): number {
+    const row = this.db
+      .prepare(
+        `
+          select count(*) as count
+          ${baseArticleReadFrom()}
+          where ${conditions.join(" and ")}
+        `
+      )
+      .get(...params) as { count: number } | undefined;
+
+    return row?.count ?? 0;
   }
 
   upsert(input: UpsertArticleInput): ArticleRow {
