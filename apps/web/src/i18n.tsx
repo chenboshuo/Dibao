@@ -356,7 +356,11 @@ export const zhCN = {
     noWarnings: "暂无警告",
     sections: {
       currentStatus: "当前推荐状态",
-      howItWorks: "固定说明"
+      terms: "先解释几个词",
+      scoreTable: "行为积分表",
+      rankingFlow: "排序流程图",
+      channelRules: "频道排序规则",
+      dataAndFallback: "本地数据与 fallback"
     },
     fields: {
       provider: "Provider",
@@ -367,11 +371,137 @@ export const zhCN = {
       lastUpdates: "最近更新",
       warnings: "Warnings"
     },
+    terms: [
+      {
+        term: "用户模型卡",
+        description:
+          "邸报不会为每篇文章写一张静态卡片，而是把你的行为沉淀成一组正向/负向兴趣簇、来源偏好和文章状态。推荐排序时会拿候选文章向量与这些兴趣簇比较。"
+      },
+      {
+        term: "兴趣簇",
+        description:
+          "兴趣簇是由相似文章向量合并出来的主题中心。点赞、收藏、稍后读、读完会增强正向兴趣簇；不感兴趣、隐藏会形成负向兴趣簇。"
+      },
+      {
+        term: "Coverage",
+        description:
+          "Coverage 表示当前可排序文章中有多少已经生成 embedding。Coverage 不足时，新文章仍会进入列表，但会更多依赖新鲜度、来源和状态。"
+      },
+      {
+        term: "基础排序",
+        description:
+          "没有 provider、没有 embedding 或画像还不足时，系统使用基础排序：主要看发布时间、来源权重和显式状态，不做语义相似度匹配。"
+      }
+    ],
+    scoreTable: {
+      columns: {
+        behavior: "行为",
+        modelCard: "用户模型卡积分",
+        source: "来源偏好",
+        ranking: "短期排序影响",
+        notes: "说明"
+      },
+      rows: [
+        {
+          behavior: "滚过未打开 / 忽略",
+          modelCard: "0",
+          source: "-0.05",
+          ranking: "-0.025，状态 -0.08",
+          notes: "弱负反馈；表示这篇文章标题没有吸引你，不会单独创建负向兴趣簇。"
+        },
+        {
+          behavior: "点进文章",
+          modelCard: "0",
+          source: "+0.02",
+          ranking: "+0.005，状态 +0.015 到 +0.02",
+          notes: "轻微正反馈；点进不等于读完，主要用于把已忽略文章恢复为已点进。"
+        },
+        {
+          behavior: "阅读 25%",
+          modelCard: "+1.2",
+          source: "0",
+          ranking: "+0.01",
+          notes: "非常轻的兴趣信号，只记录最高档位的增量。"
+        },
+        {
+          behavior: "阅读 50%",
+          modelCard: "+2.0",
+          source: "0",
+          ranking: "+0.04",
+          notes: "开始进入有效阅读信号。"
+        },
+        {
+          behavior: "阅读 75%",
+          modelCard: "+3.0",
+          source: "0",
+          ranking: "+0.06",
+          notes: "强阅读信号。"
+        },
+        {
+          behavior: "读完 / 90%",
+          modelCard: "+4.0",
+          source: "+1.0",
+          ranking: "+0.10，已读状态 -0.08",
+          notes: "说明主题有价值，但已读文章在当前推荐中会略降权，避免反复出现。"
+        },
+        {
+          behavior: "加入稍后读",
+          modelCard: "+3.0",
+          source: "+1.0",
+          ranking: "+0.08，状态 +0.08",
+          notes: "稍后读是待读队列，列表内仍使用个性化排序。"
+        },
+        {
+          behavior: "收藏",
+          modelCard: "+6.0",
+          source: "+2.0",
+          ranking: "+0.12，状态 +0.04",
+          notes: "收藏是资料库/书签信号；收藏频道默认不使用个性化排序。"
+        },
+        {
+          behavior: "点赞",
+          modelCard: "+8.0",
+          source: "+3.0",
+          ranking: "+0.16，状态 +0.10",
+          notes: "最强正反馈，用来明确告诉系统你想看更多相似主题。"
+        },
+        {
+          behavior: "取消点赞",
+          modelCard: "-1.0",
+          source: "-0.4",
+          ranking: "-0.04",
+          notes: "弱纠正信号；默认不创建新的强负向兴趣簇。"
+        },
+        {
+          behavior: "不感兴趣",
+          modelCard: "-6.0",
+          source: "-2.5",
+          ranking: "当前文章过滤，相似主题最多 -0.45",
+          notes: "强负反馈，会创建负向兴趣簇并压低相似候选。"
+        }
+      ]
+    },
+    rankingFlow: [
+      "收集候选文章：按当前频道、来源、分组、未读开关和分页条件取候选。",
+      "过滤不可见项：隐藏、不感兴趣、已删除文章不会进入普通列表。",
+      "读取文章状态：收藏、点赞、稍后读、阅读进度、忽略、点进等状态进入 state score。",
+      "读取来源偏好：手动来源权重和 feed_stats 共同形成 source score。",
+      "计算新鲜度：按发布时间或发现时间计算 freshness score，半衰期约 36 小时。",
+      "如果有 active embedding index：把文章向量与正/负兴趣簇比较，得到 interest score 和 negative penalty。",
+      "合成总分：recommended/read_later 按 active rank context 排序；缺失时 fallback 到 base score。",
+      "按频道输出：最新按时间，推荐按个性化分，稍后读按个性化分，收藏默认按收藏时间。"
+    ],
+    channelRules: [
+      "最新：默认按时间倒序。只看未读开关只过滤派生未读状态，不改变排序语义。",
+      "推荐：使用个性化排序。没有模型卡或 embedding 时自动 fallback 到基础排序。",
+      "稍后读：只显示稍后读文章，但仍使用个性化排序，适合当待读队列。",
+      "收藏：是资料库/书签。默认按收藏时间倒序，可切换收藏时间或发布时间排序，不使用个性化排序。"
+    ],
     copy: {
-      behavior: "打开、阅读进度、收藏、点赞、稍后读会作为正向信号；忽略、隐藏、不感兴趣和读完会降低相似内容的优先级。",
-      channelRanking: "频道排序会结合来源权重、新鲜度、多样性和个人行为信号；当信号不足时优先保持时间排序和来源均衡。",
-      localData: "本地保存文章状态、阅读进度、轻量行为计数、来源权重、embedding provider 配置和索引状态。",
-      fallback: "当 provider 未配置、索引 coverage 不足、请求失败或诊断状态不可用时，会 fallback 到基础排序。"
+      localData:
+        "本地保存原始行为事件、文章状态、阅读进度、来源偏好、兴趣簇、embedding provider 配置和索引状态。API key 当前按本地自托管策略保存在 SQLite 中。",
+      fallback:
+        "当 provider 未配置、索引 coverage 不足、provider 请求失败、文章缺少 embedding、或诊断状态不可用时，系统会 fallback 到基础排序。fallback 不会阻塞阅读。"
     }
   },
   recommendationStatus: {
@@ -840,7 +970,11 @@ export const enUS = {
     noWarnings: "No warnings",
     sections: {
       currentStatus: "Current recommendation status",
-      howItWorks: "Standing notes"
+      terms: "Terms",
+      scoreTable: "Behavior score table",
+      rankingFlow: "Ranking flow",
+      channelRules: "Channel rules",
+      dataAndFallback: "Local data and fallback"
     },
     fields: {
       provider: "Provider",
@@ -851,11 +985,137 @@ export const enUS = {
       lastUpdates: "Last updates",
       warnings: "Warnings"
     },
+    terms: [
+      {
+        term: "User profile card",
+        description:
+          "Dibao does not write one static card per article. It turns your behavior into positive and negative interest clusters, source preferences, and article state. Ranking compares candidate article vectors with those clusters."
+      },
+      {
+        term: "Interest cluster",
+        description:
+          "An interest cluster is a topic centroid merged from similar article vectors. Likes, favorites, read-later saves, and completed reads strengthen positive clusters; not-interested and hidden actions create negative clusters."
+      },
+      {
+        term: "Coverage",
+        description:
+          "Coverage means how many rankable articles already have embeddings. When coverage is low, new articles can still appear, but Dibao relies more on freshness, source, and state."
+      },
+      {
+        term: "Baseline ranking",
+        description:
+          "When there is no provider, no embedding, or not enough profile signal, Dibao uses baseline ranking: time, source weight, and explicit article state, without semantic similarity matching."
+      }
+    ],
+    scoreTable: {
+      columns: {
+        behavior: "Behavior",
+        modelCard: "Profile score",
+        source: "Source preference",
+        ranking: "Short-term ranking",
+        notes: "Notes"
+      },
+      rows: [
+        {
+          behavior: "Scrolled past unopened / ignored",
+          modelCard: "0",
+          source: "-0.05",
+          ranking: "-0.025, state -0.08",
+          notes: "Weak negative signal. It means the title did not attract you; it does not create a negative cluster by itself."
+        },
+        {
+          behavior: "Opened article",
+          modelCard: "0",
+          source: "+0.02",
+          ranking: "+0.005, state +0.015 to +0.02",
+          notes: "Very light positive signal. Opening is not the same as reading; it mainly restores an ignored article to opened."
+        },
+        {
+          behavior: "Read 25%",
+          modelCard: "+1.2",
+          source: "0",
+          ranking: "+0.01",
+          notes: "Very light interest signal. Dibao only applies the highest progress-tier delta."
+        },
+        {
+          behavior: "Read 50%",
+          modelCard: "+2.0",
+          source: "0",
+          ranking: "+0.04",
+          notes: "Starts to count as meaningful reading."
+        },
+        {
+          behavior: "Read 75%",
+          modelCard: "+3.0",
+          source: "0",
+          ranking: "+0.06",
+          notes: "Strong reading signal."
+        },
+        {
+          behavior: "Completed / 90%",
+          modelCard: "+4.0",
+          source: "+1.0",
+          ranking: "+0.10, read state -0.08",
+          notes: "Shows the topic was valuable, but finished articles are slightly lowered so they do not keep resurfacing."
+        },
+        {
+          behavior: "Save for later",
+          modelCard: "+3.0",
+          source: "+1.0",
+          ranking: "+0.08, state +0.08",
+          notes: "Read later is a to-read queue, and the page still uses personalized ranking."
+        },
+        {
+          behavior: "Favorite",
+          modelCard: "+6.0",
+          source: "+2.0",
+          ranking: "+0.12, state +0.04",
+          notes: "Favorites are library/bookmark signals. The favorites channel does not use personalized sorting by default."
+        },
+        {
+          behavior: "Like",
+          modelCard: "+8.0",
+          source: "+3.0",
+          ranking: "+0.16, state +0.10",
+          notes: "The strongest positive signal. It explicitly asks for more similar topics."
+        },
+        {
+          behavior: "Unlike",
+          modelCard: "-1.0",
+          source: "-0.4",
+          ranking: "-0.04",
+          notes: "Weak correction. It does not create a new strong negative cluster by default."
+        },
+        {
+          behavior: "Not interested",
+          modelCard: "-6.0",
+          source: "-2.5",
+          ranking: "Current article filtered, similar topics up to -0.45",
+          notes: "Strong negative feedback. It creates a negative cluster and lowers similar candidates."
+        }
+      ]
+    },
+    rankingFlow: [
+      "Collect candidates by channel, source, folder, unread filter, and cursor.",
+      "Filter invisible items: hidden, not-interested, and deleted articles are removed from normal lists.",
+      "Read article state: favorite, like, read later, reading progress, ignored, and opened feed into state score.",
+      "Read source preference: manual source weight and feed_stats form source score.",
+      "Calculate freshness from published or discovered time, with an approximately 36-hour half-life.",
+      "If an active embedding index exists, compare article vectors with positive and negative interest clusters for interest score and negative penalty.",
+      "Blend the final score: recommended/read_later use the active rank context, falling back to base score when needed.",
+      "Return by channel: latest by time, recommended by personalized score, read later by personalized score, favorites by saved time by default."
+    ],
+    channelRules: [
+      "Latest: time-descending by default. Only unread filters derived unread state without changing the sort meaning.",
+      "Recommended: personalized ranking. If the profile card or embeddings are missing, Dibao falls back to baseline ranking.",
+      "Read later: shows only read-later articles, but still uses personalized ranking as a to-read queue.",
+      "Favorites: library/bookmark mode. It defaults to favorited time descending and can switch between favorited time and published time; it does not use personalized ranking."
+    ],
     copy: {
-      behavior: "Opens, reading progress, favorites, likes, and read-later saves act as positive signals; ignored, hidden, not-interested, and finished states lower similar content priority.",
-      channelRanking: "Channel ranking blends source weight, freshness, diversity, and personal behavior signals; when signals are sparse it keeps time order and source balance first.",
-      localData: "Dibao stores article state, reading progress, lightweight behavior counts, source weights, embedding provider configuration, and index status locally.",
-      fallback: "Dibao falls back to baseline ranking when a provider is not configured, index coverage is low, requests fail, or diagnostics are unavailable."
+      localData:
+        "Dibao stores raw behavior events, article state, reading progress, source preference, interest clusters, embedding provider configuration, and index status locally. API keys currently use the MVP local SQLite storage strategy.",
+      fallback:
+        "Dibao falls back to baseline ranking when a provider is not configured, index coverage is low, provider requests fail, an article has no embedding, or diagnostics are unavailable. Fallback never blocks reading."
     }
   },
   recommendationStatus: {

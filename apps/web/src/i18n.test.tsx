@@ -529,6 +529,10 @@ describe("web i18n", () => {
     expect(html).toContain("8 / 10 · 80%");
     expect(html).toContain("like: 2");
     expect(html).toContain("LOW_COVERAGE");
+    expect(html).toContain("用户模型卡");
+    expect(html).toContain("+8.0");
+    expect(html).toContain("排序流程图");
+    expect(html).toContain("收藏：是资料库/书签");
     expect(html).toContain("fallback 到基础排序");
   });
 

@@ -682,6 +682,7 @@ export function App() {
           articleStateById.current.set(articleId, detail.state);
           setArticleDetail(detail);
           setArticleActionError(null);
+          setIsDetailLoading(false);
         }
         if (!openedArticleIds.current.has(articleId)) {
           openedArticleIds.current.add(articleId);
@@ -2416,10 +2417,74 @@ export function AlgorithmTransparencyPage(props: {
 
         <section className={styles.settingsSection}>
           <div>
-            <h3>{t.algorithmTransparency.sections.howItWorks}</h3>
-            <p>{t.algorithmTransparency.copy.behavior}</p>
+            <h3>{t.algorithmTransparency.sections.terms}</h3>
           </div>
-          <p>{t.algorithmTransparency.copy.channelRanking}</p>
+          <dl className={styles.algorithmTermList}>
+            {t.algorithmTransparency.terms.map((item) => (
+              <div key={item.term}>
+                <dt>{item.term}</dt>
+                <dd>{item.description}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <section className={styles.settingsSection}>
+          <div>
+            <h3>{t.algorithmTransparency.sections.scoreTable}</h3>
+          </div>
+          <div className={styles.algorithmScoreTableWrap}>
+            <table className={styles.algorithmScoreTable}>
+              <thead>
+                <tr>
+                  <th>{t.algorithmTransparency.scoreTable.columns.behavior}</th>
+                  <th>{t.algorithmTransparency.scoreTable.columns.modelCard}</th>
+                  <th>{t.algorithmTransparency.scoreTable.columns.source}</th>
+                  <th>{t.algorithmTransparency.scoreTable.columns.ranking}</th>
+                  <th>{t.algorithmTransparency.scoreTable.columns.notes}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {t.algorithmTransparency.scoreTable.rows.map((row) => (
+                  <tr key={row.behavior}>
+                    <th scope="row">{row.behavior}</th>
+                    <td>{row.modelCard}</td>
+                    <td>{row.source}</td>
+                    <td>{row.ranking}</td>
+                    <td>{row.notes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className={styles.settingsSection}>
+          <div>
+            <h3>{t.algorithmTransparency.sections.rankingFlow}</h3>
+          </div>
+          <ol className={styles.algorithmFlowList}>
+            {t.algorithmTransparency.rankingFlow.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </section>
+
+        <section className={styles.settingsSection}>
+          <div>
+            <h3>{t.algorithmTransparency.sections.channelRules}</h3>
+          </div>
+          <ul className={styles.algorithmBulletList}>
+            {t.algorithmTransparency.channelRules.map((rule) => (
+              <li key={rule}>{rule}</li>
+            ))}
+          </ul>
+        </section>
+
+        <section className={styles.settingsSection}>
+          <div>
+            <h3>{t.algorithmTransparency.sections.dataAndFallback}</h3>
+          </div>
           <p>{t.algorithmTransparency.copy.localData}</p>
           <p>{t.algorithmTransparency.copy.fallback}</p>
         </section>
