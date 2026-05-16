@@ -37,6 +37,17 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("button", { name: "登录" }).click();
 
     await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
+    await page.getByLabel("只看未读").check();
+    await page.getByTestId("article-list-scroll-container").evaluate((element) => {
+      element.scrollTop = 900;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(() => latestBehaviorEvent("E2E Article Beta", "impression") !== null)
+      .toBe(true);
+    await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toHaveCount(0);
+    await page.getByLabel("只看未读").uncheck();
+    await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
     await page.getByRole("button", { name: /E2E Article Beta/ }).click();
     await expect(page.getByRole("heading", { name: "E2E Article Beta" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
@@ -163,6 +174,37 @@ function latestReadProgressEvent(articleTitle: string):
         progress: number;
         scrollSource: string;
       }
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function latestBehaviorEvent(articleTitle: string, eventType: string): { metadata: unknown } | null {
+  const db = new Database(e2eDatabasePath, {
+    readonly: true
+  });
+  try {
+    const row = db
+      .prepare(
+        `
+          select be.metadata_json as metadataJson
+          from behavior_events be
+          join articles a on a.id = be.article_id
+          where a.title = ?
+            and be.event_type = ?
+          order by be.created_at desc
+          limit 1
+        `
+      )
+      .get(articleTitle, eventType) as { metadataJson: string | null } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      metadata: row.metadataJson ? JSON.parse(row.metadataJson) : null
     };
   } finally {
     db.close();

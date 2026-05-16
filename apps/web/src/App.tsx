@@ -2395,7 +2395,7 @@ export function ArticleListPanel(props: {
   unreadOnly: boolean;
 }) {
   const { t, formatDate } = useI18n();
-  const listRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLElement>(null);
   const sourceTitle =
     props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
 
@@ -2403,7 +2403,7 @@ export function ArticleListPanel(props: {
     articles: props.articles,
     enabled: props.isIgnoreTelemetryEnabled,
     onIgnoreArticle: props.onIgnoreArticle,
-    rootRef: listRef,
+    rootRef: scrollContainerRef,
     selectedArticleId: props.selectedArticleId
   });
 
@@ -2411,6 +2411,7 @@ export function ArticleListPanel(props: {
     <section
       className={styles.articlePanel}
       data-testid="article-list-scroll-container"
+      ref={scrollContainerRef}
       aria-labelledby="articles-title"
     >
       <div className={styles.panelHeader}>
@@ -2442,7 +2443,7 @@ export function ArticleListPanel(props: {
 
       {props.articleError ? <p className={styles.errorText}>{props.articleError}</p> : null}
 
-      <div className={styles.list} aria-live="polite" ref={listRef}>
+      <div className={styles.list} aria-live="polite">
         {props.isArticlesLoading ? <SkeletonRows count={10} /> : null}
 
         {!props.isArticlesLoading && props.articles.length === 0 ? (
@@ -2544,7 +2545,7 @@ function useArticleListIgnoreTelemetry(props: {
   articles: ArticleListItem[];
   enabled: boolean;
   onIgnoreArticle: (articleId: string) => void;
-  rootRef: RefObject<HTMLDivElement | null>;
+  rootRef: RefObject<HTMLElement | null>;
   selectedArticleId: string | null;
 }) {
   const onIgnoreArticleRef = useRef(props.onIgnoreArticle);
