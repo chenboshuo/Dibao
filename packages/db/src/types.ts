@@ -71,6 +71,12 @@ export type JobRow = {
   updatedAt: number;
 };
 
+export type JobListInput = {
+  status?: JobStatus;
+  type?: JobType;
+  limit?: number;
+};
+
 export type EnqueueJobInput = {
   id: string;
   type: JobType;
@@ -366,6 +372,21 @@ export type FeedStatsInput = {
   now?: number;
 };
 
+export type BehaviorEventCountRow = {
+  eventType: BehaviorEventType;
+  count: number;
+};
+
+export type ClusterCountRow = {
+  positive: number;
+  negative: number;
+};
+
+export type RankedArticleCountsRow = {
+  base: number;
+  active: number;
+};
+
 export type ArticleListItemRow = {
   id: string;
   feedId: string;
@@ -498,9 +519,13 @@ export type EmbeddingIndexRow = {
 };
 
 export type EmbeddingIndexListRow = EmbeddingIndexRow & {
+  candidateCount: number;
   embeddingCount: number;
+  coverageRatio: number;
   pendingJobs: number;
   failedJobs: number;
+  lastFailedAt: number | null;
+  lastError: string | null;
 };
 
 export type ArticleVectorInput = {

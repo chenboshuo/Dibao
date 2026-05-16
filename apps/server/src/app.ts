@@ -29,9 +29,14 @@ import {
   type ArticleListView,
   type ArticleReadStatus,
   type DibaoDatabase,
+  type EmbeddingIndexListRow,
+  type EmbeddingProviderRow,
   type FeedFolderRow,
   type FeedListInput,
-  type FeedRow
+  type FeedRow,
+  type JobRow,
+  type JobStatus,
+  type JobType
 } from "@dibao/db";
 import { dibaoVersion, type ApiError } from "@dibao/shared";
 import {
@@ -47,7 +52,8 @@ import { AuthService, AuthServiceError } from "./auth-service.js";
 import { ArticleRetentionService } from "./article-retention-service.js";
 import {
   EmbeddingJobService,
-  EMBEDDING_GENERATE_JOB_TYPE
+  EMBEDDING_GENERATE_JOB_TYPE,
+  parseEmbeddingGeneratePayload
 } from "./embedding-job-service.js";
 import {
   EmbeddingProviderService,
@@ -140,6 +146,12 @@ type ArticleQuery = {
   status?: string;
   limit?: string;
   cursor?: string;
+};
+
+type JobQuery = {
+  status?: string;
+  type?: string;
+  limit?: string;
 };
 
 type ArticleParams = {
@@ -523,6 +535,26 @@ export function buildServer(options: BuildServerOptions = {}) {
       feeds.list().length > 0,
       embeddingProviderService.hasActiveProviderAndIndex()
     )
+  }));
+
+  app.get<{ Querystring: JobQuery }>("/api/jobs", async (request, reply) => {
+    const parsed = parseJobQuery(request.query);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    return {
+      data: jobs.list(parsed.input).map(mapJob)
+    };
+  });
+
+  app.get("/api/recommendation/status", async () => ({
+    data: getRecommendationStatus({
+      embeddings,
+      profiles,
+      rankings,
+      rankingService
+    })
   }));
 
   app.get("/api/settings", async () => ({
@@ -1116,6 +1148,263 @@ function getSetupStatus(
   };
 }
 
+function getRecommendationStatus(options: {
+  embeddings: SqliteEmbeddingRepository;
+  profiles: SqliteProfileRepository;
+  rankings: SqliteRankingRepository;
+  rankingService: RecommendationRankingService;
+}) {
+  const activeProvider = options.embeddings.findActiveProvider();
+  const indexes = options.embeddings.listIndexes();
+  const activeIndex = activeProvider ? activeDiagnosticIndexFor(activeProvider.id, indexes) : null;
+  const activeRankContext = options.rankingService.getActiveRankContext();
+  const coverage = coverageFor(activeIndex);
+  const behaviorCounts = Object.fromEntries(
+    options.profiles.countBehaviorEvents().map((row) => [row.eventType, row.count])
+  );
+  const clusters = options.profiles.countClusters({
+    ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
+  });
+  const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
+  const lastProfileUpdate = options.profiles.getLastProfileUpdate({
+    ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
+  });
+  const lastRankingUpdate = options.rankings.getLastRankingUpdate({ activeRankContext });
+  const profileLearning = isProfileLearning(behaviorCounts, clusters);
+  const warnings = recommendationWarnings({
+    activeProvider,
+    activeIndex,
+    coverage,
+    profileLearning
+  });
+  const mode = recommendationMode({
+    activeProvider,
+    activeIndex,
+    coverage
+  });
+
+  return {
+    mode,
+    activeProvider: activeProvider ? mapRecommendationProvider(activeProvider) : null,
+    activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
+    activeRankContext,
+    coverage: mapCoverage(coverage),
+    behaviorCounts,
+    clusters,
+    rankedArticles,
+    lastProfileUpdate: timestampToIso(lastProfileUpdate),
+    lastRankingUpdate: timestampToIso(lastRankingUpdate),
+    warnings
+  };
+}
+
+type RecommendationCoverage = {
+  candidateCount: number;
+  embeddingCount: number;
+  coverageRatio: number;
+  pendingJobs: number;
+  failedJobs: number;
+  lastFailedAt: number | null;
+  lastError: string | null;
+};
+
+type RecommendationMode = "baseline" | "learning" | "embedding" | "degraded";
+
+function activeDiagnosticIndexFor(
+  providerId: string,
+  indexes: EmbeddingIndexListRow[]
+): EmbeddingIndexListRow | null {
+  return (
+    indexes.find((index) => index.providerId === providerId && index.status === "active") ??
+    indexes.find((index) => index.providerId === providerId && index.status === "failed") ??
+    null
+  );
+}
+
+function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverage {
+  if (!index) {
+    return {
+      candidateCount: 0,
+      embeddingCount: 0,
+      coverageRatio: 0,
+      pendingJobs: 0,
+      failedJobs: 0,
+      lastFailedAt: null,
+      lastError: null
+    };
+  }
+
+  return {
+    candidateCount: index.candidateCount,
+    embeddingCount: index.embeddingCount,
+    coverageRatio: index.coverageRatio,
+    pendingJobs: index.pendingJobs,
+    failedJobs: index.failedJobs,
+    lastFailedAt: index.lastFailedAt,
+    lastError: index.lastError
+  };
+}
+
+function recommendationMode(input: {
+  activeProvider: EmbeddingProviderRow | null;
+  activeIndex: EmbeddingIndexListRow | null;
+  coverage: RecommendationCoverage;
+}): RecommendationMode {
+  if (!input.activeProvider || !input.activeIndex) {
+    return "baseline";
+  }
+
+  if (
+    input.activeIndex.status === "failed" ||
+    input.activeProvider.lastTestStatus === "failed" ||
+    input.coverage.failedJobs > 0
+  ) {
+    return "degraded";
+  }
+
+  if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
+    return "embedding";
+  }
+
+  return "learning";
+}
+
+function recommendationWarnings(input: {
+  activeProvider: EmbeddingProviderRow | null;
+  activeIndex: EmbeddingIndexListRow | null;
+  coverage: RecommendationCoverage;
+  profileLearning: boolean;
+}): Array<{ code: string; message: string }> {
+  const warnings: Array<{ code: string; message: string }> = [];
+
+  if (!input.activeProvider || !input.activeIndex) {
+    warnings.push({
+      code: "NO_PROVIDER",
+      message: "No active embedding provider and index are configured; recommendations are using baseline ranking."
+    });
+    return warnings;
+  }
+
+  if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
+    warnings.push({
+      code: "EMBEDDING_PENDING",
+      message: "Embedding generation is still running or incomplete for the active index."
+    });
+  }
+
+  if (input.coverage.failedJobs > 0 || input.activeIndex.status === "failed") {
+    warnings.push({
+      code: "EMBEDDING_JOB_FAILED",
+      message: "Embedding generation has failed jobs for the active index."
+    });
+  }
+
+  if (input.activeProvider.lastTestStatus === "failed") {
+    warnings.push({
+      code: "PROVIDER_TEST_FAILED",
+      message: "The active embedding provider's latest connection test failed."
+    });
+  }
+
+  if (input.profileLearning) {
+    warnings.push({
+      code: "PROFILE_LEARNING",
+      message: "The recommendation profile is still learning from behavior and interest signals."
+    });
+  }
+
+  return warnings;
+}
+
+function isProfileLearning(
+  behaviorCounts: Record<string, number>,
+  clusters: { positive: number; negative: number }
+): boolean {
+  const behaviorTotal = Object.values(behaviorCounts).reduce((sum, count) => sum + count, 0);
+  return behaviorTotal < 3 || clusters.positive + clusters.negative === 0;
+}
+
+function mapRecommendationProvider(provider: EmbeddingProviderRow) {
+  return {
+    id: provider.id,
+    type: provider.type,
+    name: provider.name,
+    model: provider.model,
+    dimension: provider.dimension,
+    lastTestStatus: provider.lastTestStatus,
+    lastTestAt: timestampToIso(provider.lastTestAt)
+  };
+}
+
+function mapRecommendationIndex(index: EmbeddingIndexListRow) {
+  return {
+    id: index.id,
+    status: index.status,
+    model: index.model,
+    dimension: index.dimension
+  };
+}
+
+function mapCoverage(coverage: RecommendationCoverage) {
+  return {
+    candidateCount: coverage.candidateCount,
+    embeddingCount: coverage.embeddingCount,
+    coverageRatio: coverage.coverageRatio,
+    pendingJobs: coverage.pendingJobs,
+    failedJobs: coverage.failedJobs,
+    lastFailedAt: timestampToIso(coverage.lastFailedAt),
+    lastError: coverage.lastError
+  };
+}
+
+function parseJobQuery(query: JobQuery):
+  | {
+      ok: true;
+      input: {
+        status?: JobStatus;
+        type?: JobType;
+        limit?: number;
+      };
+    }
+  | { ok: false; message: string; details?: unknown } {
+  const status = parseJobStatus(query.status);
+  if (status === null) {
+    return {
+      ok: false,
+      message: "status must be queued, running, succeeded, failed, or cancelled",
+      details: { field: "status" }
+    };
+  }
+
+  const type = parseJobType(query.type);
+  if (type === null) {
+    return {
+      ok: false,
+      message:
+        "type must be feed_refresh, content_extract, embedding_generate, ranking_recalculate, profile_decay, retention_cleanup, or vector_index_rebuild",
+      details: { field: "type" }
+    };
+  }
+
+  const limit = parseLimit(query.limit);
+  if (limit === null) {
+    return {
+      ok: false,
+      message: "limit must be a positive integer",
+      details: { field: "limit" }
+    };
+  }
+
+  return {
+    ok: true,
+    input: {
+      ...(status !== undefined ? { status } : {}),
+      ...(type !== undefined ? { type } : {}),
+      ...(limit !== undefined ? { limit } : {})
+    }
+  };
+}
+
 function parseArticleQuery(query: ArticleQuery):
   | { ok: true; input: ArticleListInput }
   | { ok: false; message: string; details?: unknown } {
@@ -1360,6 +1649,44 @@ function parseArticleView(value: string | undefined): ArticleListView | undefine
   return null;
 }
 
+function parseJobStatus(value: string | undefined): JobStatus | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (
+    value === "queued" ||
+    value === "running" ||
+    value === "succeeded" ||
+    value === "failed" ||
+    value === "cancelled"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function parseJobType(value: string | undefined): JobType | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (
+    value === "feed_refresh" ||
+    value === "content_extract" ||
+    value === "embedding_generate" ||
+    value === "ranking_recalculate" ||
+    value === "profile_decay" ||
+    value === "retention_cleanup" ||
+    value === "vector_index_rebuild"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
 function isArticleActionType(value: unknown): value is ArticleActionType {
   return (
     typeof value === "string" &&
@@ -1492,6 +1819,39 @@ function mapFeed(feed: FeedRow) {
     lastSuccessAt: timestampToIso(feed.lastSuccessAt),
     createdAt: timestampToIsoValue(feed.createdAt),
     updatedAt: timestampToIsoValue(feed.updatedAt)
+  };
+}
+
+function mapJob(job: JobRow) {
+  return {
+    id: job.id,
+    type: job.type,
+    status: job.status,
+    error: job.error,
+    attempts: job.attempts,
+    maxAttempts: job.maxAttempts,
+    runAfter: timestampToIsoValue(job.runAfter),
+    startedAt: timestampToIso(job.startedAt),
+    finishedAt: timestampToIso(job.finishedAt),
+    createdAt: timestampToIsoValue(job.createdAt),
+    updatedAt: timestampToIsoValue(job.updatedAt),
+    payloadSummary: summarizeJobPayload(job)
+  };
+}
+
+function summarizeJobPayload(job: JobRow): { embeddingIndexId: string; articleCount: number } | null {
+  if (job.type !== EMBEDDING_GENERATE_JOB_TYPE) {
+    return null;
+  }
+
+  const payload = parseEmbeddingGeneratePayload(job.payloadJson);
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    embeddingIndexId: payload.embeddingIndexId,
+    articleCount: payload.articleIds.length
   };
 }
 

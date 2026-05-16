@@ -1,4 +1,6 @@
 import type {
+  BehaviorEventCountRow,
+  ClusterCountRow,
   DibaoDatabase,
   FeedBehaviorEventRow,
   FeedStatsInput,
@@ -41,8 +43,11 @@ type InterestClusterDbRow = {
 };
 
 export interface ProfileRepository {
+  countBehaviorEvents(): BehaviorEventCountRow[];
+  countClusters(input?: { embeddingIndexId?: string }): ClusterCountRow;
   deleteCluster(id: string): boolean;
   findEventForIndex(eventId: string, embeddingIndexId: string | null): ProfileBehaviorEventRow | null;
+  getLastProfileUpdate(input?: { embeddingIndexId?: string }): number | null;
   getTopicSnapshot(articleId: string): string | null;
   listClusters(input?: {
     embeddingIndexId?: string;
@@ -66,6 +71,69 @@ export interface ProfileRepository {
 
 export class SqliteProfileRepository implements ProfileRepository {
   constructor(private readonly db: DibaoDatabase) {}
+
+  countBehaviorEvents(): BehaviorEventCountRow[] {
+    return this.db
+      .prepare(
+        `
+          select
+            event_type as eventType,
+            count(*) as count
+          from behavior_events
+          group by event_type
+          order by event_type
+        `
+      )
+      .all() as BehaviorEventCountRow[];
+  }
+
+  countClusters(input: { embeddingIndexId?: string } = {}): ClusterCountRow {
+    const row = this.db
+      .prepare(
+        `
+          select
+            sum(case when polarity = 'positive' then 1 else 0 end) as positive,
+            sum(case when polarity = 'negative' then 1 else 0 end) as negative
+          from interest_clusters
+          where (? is null or embedding_index_id = ?)
+        `
+      )
+      .get(input.embeddingIndexId ?? null, input.embeddingIndexId ?? null) as
+      | ClusterCountRow
+      | undefined;
+
+    return {
+      positive: row?.positive ?? 0,
+      negative: row?.negative ?? 0
+    };
+  }
+
+  getLastProfileUpdate(input: { embeddingIndexId?: string } = {}): number | null {
+    const row = this.db
+      .prepare(
+        `
+          select max(updatedAt) as updatedAt
+          from (
+            select updated_at as updatedAt
+            from interest_clusters
+            where (? is null or embedding_index_id = ?)
+            union all
+            select last_calculated_at as updatedAt
+            from feed_stats
+            where last_calculated_at is not null
+            union all
+            select last_event_at as updatedAt
+            from article_behavior_summaries
+            where last_event_at is not null
+          )
+        `
+      )
+      .get(input.embeddingIndexId ?? null, input.embeddingIndexId ?? null) as
+      | { updatedAt: number | null }
+      | undefined;
+
+    return row?.updatedAt ?? null;
+  }
 
   findEventForIndex(
     eventId: string,

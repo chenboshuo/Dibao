@@ -11,6 +11,8 @@ import {
   SqliteFeedRepository,
   SqliteProfileRepository,
   SqliteRankingRepository,
+  SqliteVecVectorStore,
+  toVectorBlob,
   type DibaoDatabase
 } from "@dibao/db";
 import { parseOpml } from "@dibao/rss";
@@ -451,6 +453,38 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("protects recommendation diagnostics and jobs APIs", async () => {
+    const db = createEmptyDatabase();
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const jobs = await app.inject({
+        method: "GET",
+        url: "/api/jobs"
+      });
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(jobs.statusCode, jobs.body).toBe(401);
+      expect(jobs.json()).toMatchObject({
+        error: {
+          code: "UNAUTHORIZED"
+        }
+      });
+      expect(status.statusCode, status.body).toBe(401);
+      expect(status.json()).toMatchObject({
+        error: {
+          code: "UNAUTHORIZED"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("reports setup status with existing undeleted feeds", async () => {
     const db = createEmptyDatabase();
     const feedRepository = new SqliteFeedRepository(db);
@@ -481,6 +515,139 @@ describe("server API vertical slice", () => {
           hasFeeds: true,
           hasEmbeddingProvider: false,
           firstRefreshStatus: "idle"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("lists jobs with filters and redacted payload summaries", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    jobs.enqueue({
+      id: "job_feed_refresh",
+      type: "feed_refresh",
+      payloadJson: JSON.stringify({ feedId: "feed_secret_shape" }),
+      now: 1000
+    });
+    jobs.enqueue({
+      id: "job_embedding",
+      type: "embedding_generate",
+      payloadJson: JSON.stringify({
+        embeddingIndexId: "index_fixture",
+        articleIds: ["article_a", "article_b"]
+      }),
+      now: 2000
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const embedding = await app.inject({
+        method: "GET",
+        url: "/api/jobs?status=queued&type=embedding_generate&limit=1"
+      });
+      expect(embedding.statusCode, embedding.body).toBe(200);
+      expect(embedding.json()).toEqual({
+        data: [
+          {
+            id: "job_embedding",
+            type: "embedding_generate",
+            status: "queued",
+            error: null,
+            attempts: 0,
+            maxAttempts: 3,
+            runAfter: "1970-01-01T00:00:02.000Z",
+            startedAt: null,
+            finishedAt: null,
+            createdAt: "1970-01-01T00:00:02.000Z",
+            updatedAt: "1970-01-01T00:00:02.000Z",
+            payloadSummary: {
+              embeddingIndexId: "index_fixture",
+              articleCount: 2
+            }
+          }
+        ]
+      });
+      expect(embedding.body).not.toContain("payloadJson");
+      expect(embedding.body).not.toContain("article_a");
+      expect(embedding.body).not.toContain("article_b");
+
+      const feedRefresh = await app.inject({
+        method: "GET",
+        url: "/api/jobs?type=feed_refresh"
+      });
+      expect(feedRefresh.statusCode, feedRefresh.body).toBe(200);
+      expect(feedRefresh.json().data[0]).toMatchObject({
+        id: "job_feed_refresh",
+        payloadSummary: null
+      });
+      expect(feedRefresh.body).not.toContain("feed_secret_shape");
+
+      const invalid = await app.inject({
+        method: "GET",
+        url: "/api/jobs?status=waiting"
+      });
+      expect(invalid.statusCode, invalid.body).toBe(400);
+      expect(invalid.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "status"
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports baseline recommendation status without an active provider and index", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toEqual({
+        data: {
+          mode: "baseline",
+          activeProvider: null,
+          activeIndex: null,
+          activeRankContext: "base",
+          coverage: {
+            candidateCount: 0,
+            embeddingCount: 0,
+            coverageRatio: 0,
+            pendingJobs: 0,
+            failedJobs: 0,
+            lastFailedAt: null,
+            lastError: null
+          },
+          behaviorCounts: {},
+          clusters: {
+            positive: 0,
+            negative: 0
+          },
+          rankedArticles: {
+            base: 0,
+            active: 0
+          },
+          lastProfileUpdate: null,
+          lastRankingUpdate: null,
+          warnings: [
+            {
+              code: "NO_PROVIDER",
+              message:
+                "No active embedding provider and index are configured; recommendations are using baseline ranking."
+            }
+          ]
         }
       });
     } finally {
@@ -924,6 +1091,230 @@ describe("server API vertical slice", () => {
       expect(payload.articleIds).toHaveLength(2);
       expect(payload.articleIds.length).toBeLessThanOrEqual(16);
       expect(embeddingCalls).toEqual([]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports embedding coverage on index and recommendation diagnostics", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    const jobs = new SqliteJobRepository(db);
+    jobs.enqueue({
+      id: "job_embedding_pending",
+      type: "embedding_generate",
+      payloadJson: JSON.stringify({
+        embeddingIndexId: index.id,
+        articleIds: ["article_recent"]
+      }),
+      now: 6000
+    });
+    new SqliteVecVectorStore(db).upsertArticleVector({
+      articleId: "article_recommended",
+      embeddingIndexId: index.id,
+      vector: [1, 0, 0],
+      contentHash: "article_recommended:2000",
+      now: 6100
+    });
+    db.prepare(
+      `
+        insert into article_states (
+          article_id,
+          hidden_at,
+          reading_progress,
+          updated_at
+        )
+        values (?, ?, ?, ?)
+        on conflict(article_id) do update set
+          hidden_at = excluded.hidden_at,
+          updated_at = excluded.updated_at
+      `
+    ).run("article_recommended", 6200, 0, 6200);
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const indexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      expect(indexes.statusCode, indexes.body).toBe(200);
+      expect(indexes.json().data[0]).toMatchObject({
+        id: index.id,
+        candidateCount: 2,
+        embeddingCount: 1,
+        coverageRatio: 0.5,
+        pendingJobs: 1,
+        failedJobs: 0,
+        lastFailedAt: null,
+        lastError: null
+      });
+
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json()).toMatchObject({
+        data: {
+          mode: "embedding",
+          activeProvider: {
+            id: "provider_diagnostics",
+            type: "openai_compatible",
+            name: "Diagnostics Provider",
+            model: "fixture-embedding",
+            dimension: 3,
+            lastTestStatus: "success",
+            lastTestAt: "1970-01-01T00:00:05.000Z"
+          },
+          activeIndex: {
+            id: index.id,
+            status: "active",
+            model: "fixture-embedding",
+            dimension: 3
+          },
+          activeRankContext: index.id,
+          coverage: {
+            candidateCount: 2,
+            embeddingCount: 1,
+            coverageRatio: 0.5,
+            pendingJobs: 1,
+            failedJobs: 0,
+            lastFailedAt: null,
+            lastError: null
+          },
+          warnings: expect.arrayContaining([
+            {
+              code: "EMBEDDING_PENDING",
+              message: "Embedding generation is still running or incomplete for the active index."
+            }
+          ])
+        }
+      });
+      expect(status.body).not.toContain("apiKey");
+      expect(status.body).not.toContain("apiKeyEncrypted");
+      expect(status.body).not.toContain("hasApiKey");
+      expect(status.body).not.toContain("vectorBlob");
+      expect(status.body).not.toContain("tableName");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports degraded recommendation diagnostics for failed embedding jobs while recommendations remain usable", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    const jobs = new SqliteJobRepository(db);
+    const failedJob = jobs.enqueue({
+      id: "job_embedding_failed",
+      type: "embedding_generate",
+      payloadJson: JSON.stringify({
+        embeddingIndexId: index.id,
+        articleIds: ["article_recent", "article_recommended"]
+      }),
+      now: 7000
+    });
+    jobs.markFailed(failedJob.id, "Provider request failed", 7100);
+    const profiles = new SqliteProfileRepository(db);
+    profiles.upsertCluster({
+      id: "cluster_positive",
+      embeddingIndexId: index.id,
+      polarity: "positive",
+      centroidVectorBlob: toVectorBlob([1, 0, 0]),
+      weight: 1,
+      sampleCount: 1,
+      now: 7200
+    });
+    profiles.upsertCluster({
+      id: "cluster_negative",
+      embeddingIndexId: index.id,
+      polarity: "negative",
+      centroidVectorBlob: toVectorBlob([0, 1, 0]),
+      weight: 1,
+      sampleCount: 1,
+      now: 7300
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json()).toMatchObject({
+        data: {
+          mode: "degraded",
+          coverage: {
+            candidateCount: 2,
+            embeddingCount: 0,
+            coverageRatio: 0,
+            pendingJobs: 0,
+            failedJobs: 1,
+            lastFailedAt: "1970-01-01T00:00:07.100Z",
+            lastError: "Provider request failed"
+          },
+          clusters: {
+            positive: 1,
+            negative: 1
+          },
+          warnings: expect.arrayContaining([
+            {
+              code: "EMBEDDING_JOB_FAILED",
+              message: "Embedding generation has failed jobs for the active index."
+            }
+          ])
+        }
+      });
+
+      const recommended = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended"
+      });
+      expect(recommended.statusCode, recommended.body).toBe(200);
+      expect(recommended.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recommended",
+        "article_recent"
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports degraded recommendation diagnostics when the active provider test failed", async () => {
+    const db = createFixtureDatabase();
+    createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "failed"
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json()).toMatchObject({
+        data: {
+          mode: "degraded",
+          activeProvider: {
+            lastTestStatus: "failed"
+          },
+          warnings: expect.arrayContaining([
+            {
+              code: "PROVIDER_TEST_FAILED",
+              message: "The active embedding provider's latest connection test failed."
+            }
+          ])
+        }
+      });
     } finally {
       await app.close();
       db.close();
@@ -2673,6 +3064,43 @@ function createRankingFixtureDatabase(): DibaoDatabase {
   }
 
   return db;
+}
+
+function createActiveEmbeddingDiagnosticsFixture(
+  db: DibaoDatabase,
+  input: { providerTestStatus: "success" | "failed" }
+) {
+  const embeddings = new SqliteEmbeddingRepository(db);
+  embeddings.upsertProvider({
+    id: "provider_diagnostics",
+    type: "openai_compatible",
+    name: "Diagnostics Provider",
+    baseUrl: "https://api.example.com/v1",
+    model: "fixture-embedding",
+    dimension: 3,
+    apiKeyEncrypted: "plain:v1:secret",
+    enabled: true,
+    now: 5000
+  });
+  embeddings.recordProviderTestResult({
+    id: "provider_diagnostics",
+    status: input.providerTestStatus,
+    error: input.providerTestStatus === "failed" ? "Provider request failed" : null,
+    testedAt: 5000
+  });
+  const index = embeddings.createIndex({
+    id: "index_diagnostics",
+    providerId: "provider_diagnostics",
+    model: "fixture-embedding",
+    dimension: 3,
+    status: "active",
+    now: 5000
+  });
+
+  return {
+    provider: embeddings.findProviderById("provider_diagnostics"),
+    index
+  };
 }
 
 function insertRank(

@@ -1,6 +1,7 @@
 import type {
   DibaoDatabase,
   EnqueueJobInput,
+  JobListInput,
   JobRow,
   JobStatus,
   JobType
@@ -26,6 +27,7 @@ export interface JobRepository {
   countByTypeAndStatus(type: JobType, status: JobStatus): number;
   enqueue(input: EnqueueJobInput): JobRow;
   findById(id: string): JobRow | null;
+  list(input?: JobListInput): JobRow[];
   listOpenByType(type: JobType): JobRow[];
   markFailed(id: string, error: string, now: number): JobRow | null;
   markFailedOrRetry(id: string, error: string, now: number, retryDelayMs: number): JobRow | null;
@@ -137,6 +139,37 @@ export class SqliteJobRepository implements JobRepository {
       .get(id) as JobDbRow | undefined;
 
     return row ? mapJob(row) : null;
+  }
+
+  list(input: JobListInput = {}): JobRow[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (input.status) {
+      conditions.push("status = ?");
+      params.push(input.status);
+    }
+
+    if (input.type) {
+      conditions.push("type = ?");
+      params.push(input.type);
+    }
+
+    const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+    const limit = Math.min(Math.max(input.limit ?? 50, 1), 100);
+
+    return (
+      this.db
+        .prepare(
+          `
+            ${baseJobSelect()}
+            ${where}
+            order by updated_at desc, id desc
+            limit ?
+          `
+        )
+        .all(...params, limit) as JobDbRow[]
+    ).map(mapJob);
   }
 
   listOpenByType(type: JobType): JobRow[] {

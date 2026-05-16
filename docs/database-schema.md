@@ -609,6 +609,22 @@ packages/db/src/vector/sqlite-vec-vector-store.ts
 - 删除单篇文章向量。
 - 从 `article_embeddings` 重建 vec0 索引。
 
+### Embedding coverage diagnostics
+
+`GET /api/embedding/indexes` 和 `GET /api/recommendation/status` 的 coverage 字段是
+只读投影，不需要额外表或 migration。
+
+`candidateCount` 定义为当前可生成 embedding 的文章数：
+
+- feed `enabled = 1`。
+- feed `deleted_at is null`。
+- article `deleted_at is null` 且 `status != 'deleted'`。
+- title、summary、content_text 拼接后至少有一个非空文本。
+
+`candidateCount` 不排除 hidden/not_interested，因为它表示 embedding 生成候选，不是推荐列表候选。
+`coverageRatio = embeddingCount / candidateCount`；`candidateCount = 0` 时 API 返回 `0`。
+pending/failed/lastFailedAt/lastError 从当前 index 的 `embedding_generate` jobs 聚合。
+
 ## 用户画像
 
 ### interest_clusters
@@ -797,6 +813,14 @@ MVP runner 约定：
 - `embedding_generate` payload 目前只接受 `{ "embeddingIndexId": "string", "articleIds": ["string"] }`，`articleIds` 长度限制 `1..16`。
 - `embedding_generate` 只对 queued/running open jobs 去重，历史 succeeded job 不会阻止内容变更后的重新 embedding。
 - `vector_index_rebuild` payload 目前只接受 `{ "embeddingIndexId": "string" }`。
+
+API 诊断约定：
+
+- `GET /api/jobs` 是只读列表，不实现 retry。
+- API 不返回 `payload_json` 原文。
+- `embedding_generate` job 只暴露脱敏摘要 `{ "embeddingIndexId": "string", "articleCount": number }`。
+- 其他 job 的 `payloadSummary` 当前返回 `null`。
+- `POST /api/jobs/:id/retry` 是 planned / not implemented。
 
 索引：
 

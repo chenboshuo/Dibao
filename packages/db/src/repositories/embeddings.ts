@@ -325,6 +325,29 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
       this.db
         .prepare(
           `
+            with eligible_articles as (
+              select count(*) as candidateCount
+              from articles a
+              join feeds f on f.id = a.feed_id
+              left join article_contents ac on ac.article_id = a.id
+              where a.deleted_at is null
+                and a.status != 'deleted'
+                and f.deleted_at is null
+                and f.enabled = 1
+                and trim(coalesce(a.title, '') || ' ' || coalesce(a.summary, '') || ' ' || coalesce(ac.content_text, '')) != ''
+            ),
+            job_diagnostics as (
+              select
+                json_extract(j.payload_json, '$.embeddingIndexId') as embeddingIndexId,
+                sum(case when j.status in ('queued', 'running') then 1 else 0 end) as pendingJobs,
+                sum(case when j.status = 'failed' then 1 else 0 end) as failedJobs,
+                max(case when j.status = 'failed' then coalesce(j.finished_at, j.updated_at) else null end) as lastFailedAt
+              from jobs j
+              where j.type = 'embedding_generate'
+                and j.payload_json is not null
+                and json_valid(j.payload_json)
+              group by json_extract(j.payload_json, '$.embeddingIndexId')
+            )
             select
               ei.id,
               ei.provider_id as providerId,
@@ -335,26 +358,30 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
               ei.status,
               ei.created_at as createdAt,
               ei.updated_at as updatedAt,
+              ea.candidateCount as candidateCount,
               (
                 select count(*)
                 from article_embeddings ae
                 where ae.embedding_index_id = ei.id
               ) as embeddingCount,
+              0 as coverageRatio,
+              coalesce(jd.pendingJobs, 0) as pendingJobs,
+              coalesce(jd.failedJobs, 0) as failedJobs,
+              jd.lastFailedAt as lastFailedAt,
               (
-                select count(*)
-                from jobs j
-                where j.type = 'embedding_generate'
-                  and j.status in ('queued', 'running')
-                  and j.payload_json like '%' || ei.id || '%'
-              ) as pendingJobs,
-              (
-                select count(*)
+                select j.error
                 from jobs j
                 where j.type = 'embedding_generate'
                   and j.status = 'failed'
-                  and j.payload_json like '%' || ei.id || '%'
-              ) as failedJobs
+                  and j.payload_json is not null
+                  and json_valid(j.payload_json)
+                  and json_extract(j.payload_json, '$.embeddingIndexId') = ei.id
+                order by coalesce(j.finished_at, j.updated_at) desc, j.id desc
+                limit 1
+              ) as lastError
             from embedding_indexes ei
+            cross join eligible_articles ea
+            left join job_diagnostics jd on jd.embeddingIndexId = ei.id
             order by
               case ei.status
                 when 'active' then 0
@@ -367,7 +394,10 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
           `
         )
         .all() as EmbeddingIndexListRow[]
-    );
+    ).map((row) => ({
+      ...row,
+      coverageRatio: coverageRatio(row.embeddingCount, row.candidateCount)
+    }));
   }
 
   markIndexStatus(
@@ -449,6 +479,10 @@ function mapProvider(row: EmbeddingProviderDbRow): EmbeddingProviderRow {
     ...row,
     enabled: row.enabled === 1
   };
+}
+
+function coverageRatio(embeddingCount: number, candidateCount: number): number {
+  return candidateCount === 0 ? 0 : embeddingCount / candidateCount;
 }
 
 function baseIndexSelect(): string {

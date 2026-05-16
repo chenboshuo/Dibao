@@ -36,9 +36,13 @@ export type EmbeddingIndexResponse = {
   dimension: number;
   distanceMetric: EmbeddingIndexRow["distanceMetric"];
   status: EmbeddingIndexRow["status"];
+  candidateCount: number;
   embeddingCount: number;
+  coverageRatio: number;
   pendingJobs: number;
   failedJobs: number;
+  lastFailedAt: string | null;
+  lastError: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -553,9 +557,13 @@ function mapIndex(index: EmbeddingIndexListRow): EmbeddingIndexResponse {
     dimension: index.dimension,
     distanceMetric: index.distanceMetric,
     status: index.status,
+    candidateCount: index.candidateCount,
     embeddingCount: index.embeddingCount,
+    coverageRatio: index.coverageRatio,
     pendingJobs: index.pendingJobs,
     failedJobs: index.failedJobs,
+    lastFailedAt: timestampToIso(index.lastFailedAt),
+    lastError: index.lastError,
     createdAt: timestampToIso(index.createdAt ?? null),
     updatedAt: timestampToIso(index.updatedAt ?? null)
   };
