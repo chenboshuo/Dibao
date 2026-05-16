@@ -121,6 +121,99 @@ describe("profile algorithm and recommendation ranking", () => {
     }
   });
 
+  it("weights like above favorite in profile clusters and source stats", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const actions = new SqliteArticleActionRepository(db);
+    const embeddings = new SqliteEmbeddingRepository(db);
+    const profiles = new SqliteProfileRepository(db);
+    const vectorStore = new SqliteVecVectorStore(db);
+
+    try {
+      feeds.upsert({ id: "feed_like", title: "Like Feed", feedUrl: "https://example.com/like.xml", now: 1000 });
+      feeds.upsert({ id: "feed_favorite", title: "Favorite Feed", feedUrl: "https://example.com/favorite.xml", now: 1000 });
+      embeddings.upsertProvider({
+        id: "provider_like",
+        type: "openai_compatible",
+        name: "Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture",
+        dimension: 3,
+        enabled: true,
+        now: 1000
+      });
+      embeddings.createIndex({
+        id: "index_like",
+        providerId: "provider_like",
+        model: "fixture",
+        dimension: 3,
+        now: 1000
+      });
+
+      insertArticleForFeed(articles, "seed_like", "feed_like", "Seed like", "hash_like", 1000);
+      insertArticleForFeed(articles, "seed_favorite", "feed_favorite", "Seed favorite", "hash_favorite", 1000);
+      vectorStore.upsertArticleVector({
+        articleId: "seed_like",
+        embeddingIndexId: "index_like",
+        vector: [1, 0, 0],
+        contentHash: "hash_like",
+        now: 1000
+      });
+      vectorStore.upsertArticleVector({
+        articleId: "seed_favorite",
+        embeddingIndexId: "index_like",
+        vector: [0, 1, 0],
+        contentHash: "hash_favorite",
+        now: 1000
+      });
+
+      let clusterCount = 0;
+      const profile = new ProfileService({
+        embeddings,
+        profiles,
+        clusterIdFactory: () => {
+          clusterCount += 1;
+          return `cluster_like_${clusterCount}`;
+        },
+        now: () => 5000
+      });
+
+      const like = actions.record({ articleId: "seed_like", type: "like", now: 2000 });
+      const favorite = actions.record({ articleId: "seed_favorite", type: "favorite", now: 2100 });
+      profile.processEvent(like!.eventId);
+      profile.processEvent(favorite!.eventId);
+
+      const clusters = profiles.listClusters({ embeddingIndexId: "index_like", polarity: "positive" });
+      expect(clusters.map((cluster) => cluster.weight)).toEqual([8, 6]);
+      expect(feedStats(db, "feed_like").positiveScore).toBeGreaterThan(
+        feedStats(db, "feed_favorite").positiveScore
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("treats unlike as a weak correction without creating a negative interest cluster", () => {
+    const fixture = createProfileFixture();
+    const { actions, db, profile, profiles } = fixture;
+
+    try {
+      const unlike = actions.record({
+        articleId: "article_liked",
+        type: "unlike",
+        now: 2000
+      });
+      profile.processEvent(unlike!.eventId);
+
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile", polarity: "negative" })).toHaveLength(0);
+      expect(feedStats(db, "feed_profile").negativeScore).toBeGreaterThan(0);
+      expect(feedStats(db, "feed_profile").negativeScore).toBeLessThan(0.1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("queues ranking recalculation after article actions and applies it after draining jobs", async () => {
     const fixture = createProfileFixture();
     const { db, jobs } = fixture;
@@ -706,6 +799,25 @@ function activeScoreForContext(
     .get(articleId, rankContext) as { score: number } | undefined;
 
   return row?.score ?? null;
+}
+
+function feedStats(db: DibaoDatabase, feedId: string): {
+  positiveScore: number;
+  negativeScore: number;
+} {
+  const row = db
+    .prepare(
+      `
+        select
+          positive_score as positiveScore,
+          negative_score as negativeScore
+        from feed_stats
+        where feed_id = ?
+      `
+    )
+    .get(feedId) as { positiveScore: number; negativeScore: number } | undefined;
+
+  return row ?? { positiveScore: 0, negativeScore: 0 };
 }
 
 async function drainRankingJobs(db: DibaoDatabase, now: number): Promise<void> {

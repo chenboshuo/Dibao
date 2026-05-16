@@ -190,6 +190,12 @@ export type ArticleRow = {
 
 export type ArticleListView = "recommended" | "latest" | "favorites" | "read_later";
 
+export type ArticleFavoriteSort =
+  | "favorited_desc"
+  | "favorited_asc"
+  | "published_desc"
+  | "published_asc";
+
 export type ArticleReadStatus = "unread" | "read" | "all";
 
 export type ArticleInteractionStatus = "unseen" | "ignored" | "opened" | "reading" | "read";
@@ -203,11 +209,13 @@ export type ArticleListInput = {
   limit?: number;
   offset?: number;
   rankContext?: string;
+  sort?: ArticleFavoriteSort;
 };
 
 export type ArticleStateSnapshot = {
   read: boolean;
   favorited: boolean;
+  liked: boolean;
   readLater: boolean;
   hidden: boolean;
   notInterested: boolean;
@@ -226,6 +234,8 @@ export type ArticleActionType =
   | "mark_unread"
   | "favorite"
   | "unfavorite"
+  | "like"
+  | "unlike"
   | "read_later"
   | "remove_read_later"
   | "hide"

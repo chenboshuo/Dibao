@@ -72,12 +72,14 @@ read_progress_25: 1.2
 read_progress_50: 2.0
 read_progress_75: 3.0
 read_complete: 4.0
+like: 8.0
 favorite: 6.0
 read_later: 3.0
 mark_read: 1.0
 quick_bounce: 0.0
 hide: -3.5
 not_interested: -6.0
+unlike: -1.0
 unfavorite: -1.5
 remove_read_later: -1.0
 mark_unread: -0.5
@@ -90,7 +92,8 @@ mark_unread: -0.5
 - `open` 与 `impression` 在文章交互状态上互斥：被忽略文章再次点进后状态回到 `opened`，后续通过 `read_progress` 判断真实阅读深度。
 - `quick_bounce` 指打开后很快关闭且阅读进度很低。
 - `not_interested` 是强负反馈。
-- `favorite` 是最强正反馈。
+- `like` 是最强正反馈；`favorite` 是次强正反馈并偏向保存语义。
+- `unlike` 是弱负向纠正，不单独创建新的强负兴趣簇。
 
 ## 画像更新资格
 
@@ -101,12 +104,14 @@ update_positive_clusters:
   read_progress_50
   read_progress_75
   read_complete
+  like
   favorite
   read_later
 
 update_negative_clusters:
   hide
   not_interested
+  unlike
 
 stats_only:
   impression
@@ -122,6 +127,7 @@ stats_only:
 说明：
 
 - `quick_bounce` 会影响来源统计和短期排序，但不会单独创建负向兴趣簇。
+- `unlike` 只允许修正已存在的相似负向簇；没有可合并负向簇时仅进入来源统计和短期投影。
 - 如果某一主题连续多次出现 quick bounce，可在后续版本中升级为弱负向主题信号；MVP 先不做。
 - 用户显式动作优先于自动推断行为。
 
@@ -304,11 +310,13 @@ negative_delete_if_sample_count_is_1_and_inactive_days_over: 60
 feed_positive_event_weight:
   open: 0.02
   read_complete: 1.0
+  like: 3.0
   favorite: 2.0
   read_later: 1.0
 
 feed_negative_event_weight:
   impression: 0.05
+  unlike: 0.4
   quick_bounce: 0.2
   hide: 1.5
   not_interested: 2.5
@@ -317,7 +325,7 @@ feed_negative_event_weight:
 来源分计算：
 
 ```text
-clear_signal_count = count(read_complete, favorite, read_later, quick_bounce, hide, not_interested)
+clear_signal_count = count(read_complete, like, favorite, read_later, unlike, quick_bounce, hide, not_interested)
 confidence = clamp(clear_signal_count / 10, 0, 1)
 open_only_confidence = 0.1
 raw_feed_score = positive_score - negative_score
@@ -410,6 +418,7 @@ freshness_half_life_hours: 36
 ```text
 unread: +0.06
 read_later: +0.08
+liked: +0.10
 favorite: +0.04
 read: -0.08
 ```
@@ -484,6 +493,7 @@ freshness_score_max: 0.35
 source_weight_max_score: 0.18
 feed_stat_max_score: 0.10
 favorite: +0.50
+liked: +0.10
 read_later: +0.24
 reading_progress: progress * 0.22
 read: -0.06
@@ -501,6 +511,8 @@ read_progress_25: +0.01
 read_progress_50: +0.04
 read_progress_75: +0.06
 read_complete: +0.10
+like: +0.16
+unlike: -0.04
 favorite: +0.12
 read_later: +0.08
 quick_bounce: -0.04

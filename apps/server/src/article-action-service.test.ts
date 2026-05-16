@@ -73,6 +73,7 @@ function fixedActionRepository(): ArticleActionRepository {
         state: {
           read: false,
           favorited: false,
+          liked: false,
           readLater: false,
           hidden: false,
           notInterested: false,

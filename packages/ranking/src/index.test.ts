@@ -35,6 +35,9 @@ describe("ranking package", () => {
     expect(calculateBaselineRankScore({ ...base, favorited: true }).score).toBeGreaterThan(
       baseScore
     );
+    expect(calculateBaselineRankScore({ ...base, liked: true }).score).toBeGreaterThan(
+      baseScore
+    );
     expect(calculateBaselineRankScore({ ...base, readLater: true }).score).toBeGreaterThan(
       baseScore
     );
@@ -55,6 +58,20 @@ describe("ranking package", () => {
 
     expect(openScore).toBeGreaterThan(baseScore);
     expect(openScore).toBeLessThan(readLaterScore);
+  });
+
+  it("keeps like projection above favorite projection", () => {
+    const base = baselineInput();
+    const likeScore = calculateBaselineRankScore({
+      ...base,
+      behaviorProjectionScore: 0.16
+    }).interestScore;
+    const favoriteScore = calculateBaselineRankScore({
+      ...base,
+      behaviorProjectionScore: 0.12
+    }).interestScore;
+
+    expect(likeScore).toBeGreaterThan(favoriteScore);
   });
 
   it("penalizes hidden and not interested articles", () => {
@@ -129,6 +146,7 @@ function baselineInput(): BaselineRankInput {
     feedNotInterestedRate: 0,
     read: false,
     favorited: false,
+    liked: false,
     readLater: false,
     hidden: false,
     notInterested: false,
@@ -151,6 +169,7 @@ function recommendationInput(): RecommendationRankInput {
     feedNotInterestedRate: 0,
     read: false,
     favorited: false,
+    liked: false,
     readLater: false,
     hidden: false,
     notInterested: false,

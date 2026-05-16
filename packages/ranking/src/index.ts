@@ -36,6 +36,7 @@ export const baselineRankingDefaults = {
   sourceWeightMaxScore: 0.18,
   feedStatMaxScore: 0.1,
   favoriteScore: 0.5,
+  likedScore: 0.1,
   readLaterScore: 0.24,
   readProgressMaxScore: 0.22,
   openedScore: 0.02,
@@ -61,6 +62,7 @@ export type BaselineRankInput = {
   feedNotInterestedRate: number;
   read: boolean;
   favorited: boolean;
+  liked: boolean;
   readLater: boolean;
   opened?: boolean;
   ignored?: boolean;
@@ -92,6 +94,7 @@ export const recommendationRankingDefaults = {
   unreadScore: 0.06,
   readLaterScore: 0.08,
   favoriteScore: 0.04,
+  likedScore: 0.1,
   openedScore: 0.015,
   ignoredPenalty: -0.04,
   readPenalty: -0.08,
@@ -112,6 +115,7 @@ export type RecommendationRankInput = {
   feedNotInterestedRate: number;
   read: boolean;
   favorited: boolean;
+  liked: boolean;
   readLater: boolean;
   opened?: boolean;
   ignored?: boolean;
@@ -223,6 +227,7 @@ function calculateSourceScore(input: BaselineRankInput): number {
 function calculateStateScore(input: BaselineRankInput): number {
   return (
     (input.favorited ? baselineRankingDefaults.favoriteScore : 0) +
+    (input.liked ? baselineRankingDefaults.likedScore : 0) +
     (input.readLater ? baselineRankingDefaults.readLaterScore : 0) +
     (input.opened && !input.read && input.readingProgress <= 0
       ? baselineRankingDefaults.openedScore
@@ -271,6 +276,7 @@ function calculateRecommendationStateScore(input: RecommendationRankInput): numb
     (!input.read ? recommendationRankingDefaults.unreadScore : 0) +
     (input.readLater ? recommendationRankingDefaults.readLaterScore : 0) +
     (input.favorited ? recommendationRankingDefaults.favoriteScore : 0) +
+    (input.liked ? recommendationRankingDefaults.likedScore : 0) +
     (input.opened && !input.read ? recommendationRankingDefaults.openedScore : 0) +
     (input.ignored ? recommendationRankingDefaults.ignoredPenalty : 0) +
     (input.read ? recommendationRankingDefaults.readPenalty : 0)

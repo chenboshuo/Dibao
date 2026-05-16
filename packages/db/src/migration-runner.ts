@@ -6,6 +6,9 @@ import type { AppliedMigration, DibaoDatabase, Migration } from "./types.js";
 const initialSchemaPath = fileURLToPath(
   new URL("../migrations/001_initial_schema.sql", import.meta.url)
 );
+const articleStateLikesPath = fileURLToPath(
+  new URL("../migrations/002_article_state_likes.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -13,6 +16,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "001",
       name: "initial_schema",
       sql: readFileSync(initialSchemaPath, "utf8")
+    },
+    {
+      version: "002",
+      name: "article_state_likes",
+      sql: readFileSync(articleStateLikesPath, "utf8")
     }
   ];
 }

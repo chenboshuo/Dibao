@@ -15,6 +15,8 @@ export const ARTICLE_ACTION_EVENT_WEIGHTS = {
   mark_unread: -0.1,
   favorite: 1,
   unfavorite: -0.4,
+  like: 1.1,
+  unlike: -0.25,
   read_later: 0.4,
   remove_read_later: -0.2,
   hide: -0.8,
@@ -25,6 +27,7 @@ export const ARTICLE_ACTION_EVENT_WEIGHTS = {
 type ArticleStateDbRow = {
   read: 0 | 1;
   favorited: 0 | 1;
+  liked: 0 | 1;
   readLater: 0 | 1;
   hidden: 0 | 1;
   notInterested: 0 | 1;
@@ -92,6 +95,7 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
             article_id,
             read_at,
             favorited_at,
+            liked_at,
             read_later_at,
             hidden_at,
             not_interested_at,
@@ -99,7 +103,7 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
             last_opened_at,
             updated_at
           )
-          values (?, null, null, null, null, null, 0, null, ?)
+          values (?, null, null, null, null, null, null, 0, null, ?)
           on conflict(article_id) do nothing
         `
       )
@@ -180,6 +184,16 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
             "update article_states set favorited_at = null, updated_at = ? where article_id = ?",
           params: [input.now, input.articleId]
         };
+      case "like":
+        return {
+          sql: "update article_states set liked_at = ?, updated_at = ? where article_id = ?",
+          params: [input.now, input.now, input.articleId]
+        };
+      case "unlike":
+        return {
+          sql: "update article_states set liked_at = null, updated_at = ? where article_id = ?",
+          params: [input.now, input.articleId]
+        };
       case "read_later":
         return {
           sql: "update article_states set read_later_at = ?, updated_at = ? where article_id = ?",
@@ -235,6 +249,7 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
           select
             case when read_at is not null then 1 else 0 end as read,
             case when favorited_at is not null then 1 else 0 end as favorited,
+            case when liked_at is not null then 1 else 0 end as liked,
             case when read_later_at is not null then 1 else 0 end as readLater,
             case when hidden_at is not null then 1 else 0 end as hidden,
             case when not_interested_at is not null then 1 else 0 end as notInterested,
@@ -259,6 +274,7 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
     return {
       read: row.read === 1,
       favorited: row.favorited === 1,
+      liked: row.liked === 1,
       readLater: row.readLater === 1,
       hidden: row.hidden === 1,
       notInterested: row.notInterested === 1,

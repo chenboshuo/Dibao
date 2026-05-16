@@ -20,6 +20,7 @@ import {
   fromVectorBlob,
   getAppliedMigrations,
   getSqliteVecVersion,
+  loadDefaultMigrations,
   openDatabase,
   runMigrations,
   vectorToJson
@@ -135,6 +136,74 @@ describe("db package", () => {
       }
 
       expect(hasFtsTable(db, "article_fts")).toBe(true);
+      expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
+      expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies migration 002 to old databases and permits like events", () => {
+    const db = openDatabase(":memory:", { loadSqliteVec: false });
+    try {
+      const initialMigration = loadDefaultMigrations().slice(0, 1);
+      expect(runMigrations(db, initialMigration, () => 1000).map((migration) => migration.version)).toEqual([
+        "001"
+      ]);
+      expect(hasColumn(db, "article_states", "liked_at")).toBe(false);
+
+      expect(runMigrations(db, loadDefaultMigrations(), () => 2000).map((migration) => migration.version)).toEqual([
+        "002"
+      ]);
+      expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
+      expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
+
+      db.prepare(
+        `
+          insert into feeds (id, title, feed_url, created_at, updated_at)
+          values ('feed_migrate', 'Migration Feed', 'https://example.com/migrate.xml', 2000, 2000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into articles (
+            id,
+            feed_id,
+            url,
+            title,
+            discovered_at,
+            dedupe_key,
+            created_at,
+            updated_at
+          )
+          values (
+            'article_migrate',
+            'feed_migrate',
+            'https://example.com/migrate',
+            'Migration Article',
+            2000,
+            'article_migrate',
+            2000,
+            2000
+          )
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            created_at
+          )
+          values ('event_like', 'article_migrate', 'like', 1.1, 2000)
+        `
+      ).run();
+
+      expect(
+        db.prepare("select event_type as eventType from behavior_events").get()
+      ).toEqual({ eventType: "like" });
     } finally {
       db.close();
     }
@@ -662,6 +731,33 @@ describe("db package", () => {
         behaviorEventCount: 1
       });
 
+      articles.upsert({
+        id: "article_like_rank",
+        feedId: "feed_rank",
+        url: "https://example.com/like-rank",
+        title: "Like rank candidate",
+        publishedAt: 1000,
+        discoveredAt: 1000,
+        dedupeKey: "like-rank",
+        now: 1000
+      });
+      actions.record({
+        articleId: "article_like_rank",
+        type: "like",
+        now: 2000
+      });
+      const likeCandidate = rankings.listBaseCandidates({ articleIds: ["article_like_rank"] })[0];
+      expect(likeCandidate).toMatchObject({
+        state: {
+          liked: true
+        },
+        behaviorProjectionScore: 0.16,
+        behaviorEventCount: 1
+      });
+      expect(likeCandidate?.behaviorProjectionScore).toBeGreaterThan(
+        candidate?.behaviorProjectionScore ?? 0
+      );
+
       rankings.upsertBaseScore({
         articleId: "article_rank",
         score: 0.75,
@@ -890,5 +986,31 @@ function hasFtsTable(db: ReturnType<typeof openDatabase>, name: string): boolean
         `
       )
       .get(name)
+  );
+}
+
+function hasColumn(
+  db: ReturnType<typeof openDatabase>,
+  tableName: string,
+  columnName: string
+): boolean {
+  return db
+    .prepare(`pragma table_info(${tableName})`)
+    .all()
+    .some((row) => (row as { name: string }).name === columnName);
+}
+
+function hasIndex(db: ReturnType<typeof openDatabase>, indexName: string): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `
+          select 1
+          from sqlite_schema
+          where name = ?
+            and type = 'index'
+        `
+      )
+      .get(indexName)
   );
 }

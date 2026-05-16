@@ -147,6 +147,7 @@ type ArticleQuery = {
   unreadOnly?: string;
   limit?: string;
   cursor?: string;
+  sort?: string;
 };
 
 type JobQuery = {
@@ -1482,6 +1483,18 @@ function parseArticleQuery(query: ArticleQuery):
     };
   }
 
+  const sort = parseArticleSort(query.sort);
+  if (sort === null) {
+    return {
+      ok: false,
+      message: "sort must be favorited_desc, favorited_asc, published_desc, or published_asc",
+      details: {
+        field: "sort",
+        allowed: ["favorited_desc", "favorited_asc", "published_desc", "published_asc"]
+      }
+    };
+  }
+
   const input: ArticleListInput = {
     view: view ?? "latest",
     limit,
@@ -1499,6 +1512,9 @@ function parseArticleQuery(query: ArticleQuery):
   }
   if (unreadOnly !== undefined) {
     input.unreadOnly = unreadOnly;
+  }
+  if (sort !== undefined) {
+    input.sort = sort;
   }
 
   return { ok: true, input };
@@ -1639,7 +1655,7 @@ function parseArticleActionBody(body: ArticleActionBody | undefined):
     return {
       ok: false,
       message:
-        "type must be impression, open, mark_read, mark_unread, favorite, unfavorite, read_later, remove_read_later, hide, not_interested, or read_progress"
+        "type must be impression, open, mark_read, mark_unread, favorite, unfavorite, like, unlike, read_later, remove_read_later, hide, not_interested, or read_progress"
     };
   }
 
@@ -1687,6 +1703,23 @@ function parseArticleView(value: string | undefined): ArticleListView | undefine
     value === "latest" ||
     value === "favorites" ||
     value === "read_later"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function parseArticleSort(value: string | undefined): ArticleListInput["sort"] | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (
+    value === "favorited_desc" ||
+    value === "favorited_asc" ||
+    value === "published_desc" ||
+    value === "published_asc"
   ) {
     return value;
   }
@@ -1747,6 +1780,9 @@ function normalizeArticleActionType(type: unknown, value: unknown): ArticleActio
   if (value === false) {
     if (type === "favorite") {
       return "unfavorite";
+    }
+    if (type === "like") {
+      return "unlike";
     }
     if (type === "read_later") {
       return "remove_read_later";

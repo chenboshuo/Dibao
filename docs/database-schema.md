@@ -4,10 +4,11 @@
 
 本文定义邸报 MVP 的 SQLite 数据库结构、索引、生命周期规则、FTS5 与 sqlite-vec 集成方式。
 
-它是 schema 合约。当前初始 migration SQL 已落地在：
+它是 schema 合约。当前 migration SQL 已落地在：
 
 ```text
 packages/db/migrations/001_initial_schema.sql
+packages/db/migrations/002_article_state_likes.sql
 ```
 
 实现时可以根据具体库和 sqlite-vec 版本调整语法，但不得改变这里定义的数据边界和所有权原则。
@@ -341,6 +342,7 @@ skipped
 article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE
 read_at INTEGER
 favorited_at INTEGER
+liked_at INTEGER
 read_later_at INTEGER
 hidden_at INTEGER
 not_interested_at INTEGER
@@ -354,6 +356,7 @@ updated_at INTEGER NOT NULL
 ```text
 idx_article_states_read_at(read_at)
 idx_article_states_favorited_at(favorited_at)
+idx_article_states_liked_at(liked_at)
 idx_article_states_read_later_at(read_later_at)
 idx_article_states_hidden_at(hidden_at)
 idx_article_states_not_interested_at(not_interested_at)
@@ -388,6 +391,8 @@ read_progress
 read_complete
 favorite
 unfavorite
+like
+unlike
 read_later
 remove_read_later
 hide

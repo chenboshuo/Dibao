@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   openDatabase,
+  SqliteArticleActionRepository,
   SqliteArticleRepository,
   SqliteEmbeddingRepository,
   SqliteFeedFolderRepository,
@@ -2717,6 +2718,141 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("orders read later by active rank, base fallback, then saved time", async () => {
+    const db = createArticleSortDatabase();
+    const embeddings = new SqliteEmbeddingRepository(db);
+    embeddings.upsertProvider({
+      id: "provider_sort",
+      type: "openai_compatible",
+      name: "Sort Provider",
+      baseUrl: "https://api.example.com/v1",
+      model: "fixture",
+      dimension: 3,
+      enabled: true,
+      now: 1000
+    });
+    embeddings.createIndex({
+      id: "index_sort",
+      providerId: "provider_sort",
+      model: "fixture",
+      dimension: 3,
+      now: 1000
+    });
+    const actions = new SqliteArticleActionRepository(db);
+    for (const [articleId, savedAt] of [
+      ["article_read_later_active", 6000],
+      ["article_read_later_base", 7000],
+      ["article_read_later_unranked_new", 9000],
+      ["article_read_later_unranked_old", 8000]
+    ] as const) {
+      actions.record({ articleId, type: "read_later", now: savedAt });
+    }
+    insertRank(db, "article_read_later_base", 0.8, 10_000);
+    insertRankForContext(db, {
+      articleId: "article_read_later_active",
+      rankContext: "index_sort",
+      embeddingIndexId: "index_sort",
+      score: 0.9,
+      calculatedAt: 10_000
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=read_later"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_read_later_active",
+        "article_read_later_base",
+        "article_read_later_unranked_new",
+        "article_read_later_unranked_old"
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("orders favorites by supported sort modes without rank ordering", async () => {
+    const db = createArticleSortDatabase();
+    const actions = new SqliteArticleActionRepository(db);
+    actions.record({ articleId: "article_favorite_old", type: "favorite", now: 5000 });
+    actions.record({ articleId: "article_favorite_recent", type: "favorite", now: 4000 });
+    actions.record({ articleId: "article_favorite_middle", type: "favorite", now: 6000 });
+    insertRank(db, "article_favorite_old", 100, 10_000);
+    insertRank(db, "article_favorite_recent", 0.1, 10_000);
+    insertRank(db, "article_favorite_middle", 0.2, 10_000);
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const expected: Record<string, string[]> = {
+        favorited_desc: [
+          "article_favorite_middle",
+          "article_favorite_old",
+          "article_favorite_recent"
+        ],
+        favorited_asc: [
+          "article_favorite_recent",
+          "article_favorite_old",
+          "article_favorite_middle"
+        ],
+        published_desc: [
+          "article_favorite_recent",
+          "article_favorite_middle",
+          "article_favorite_old"
+        ],
+        published_asc: [
+          "article_favorite_old",
+          "article_favorite_middle",
+          "article_favorite_recent"
+        ]
+      };
+
+      for (const [sort, ids] of Object.entries(expected)) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/articles?view=favorites&sort=${sort}`
+        });
+
+        expect(response.statusCode, `${sort}: ${response.body}`).toBe(200);
+        expect(response.json().data.map((article: { id: string }) => article.id)).toEqual(ids);
+      }
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("returns a contract-shaped error for invalid favorite sort", async () => {
+    const db = createArticleSortDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=favorites&sort=ranked"
+      });
+
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json()).toEqual({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "sort must be favorited_desc, favorited_asc, published_desc, or published_asc",
+          details: {
+            field: "sort",
+            allowed: ["favorited_desc", "favorited_asc", "published_desc", "published_asc"]
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("filters latest and recommended lists to unseen articles with unreadOnly", async () => {
     const db = createFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 5000 });
@@ -2984,6 +3120,42 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("records like and unlike article actions without exposing event ids", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 5050 });
+
+    try {
+      const like = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "like"
+      });
+      const unlike = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "unlike"
+      });
+
+      expect(like.statusCode, like.body).toBe(200);
+      expect(like.json().data).not.toHaveProperty("eventId");
+      expect(like.json().data.state).toMatchObject({
+        liked: true
+      });
+      expect(unlike.statusCode, unlike.body).toBe(200);
+      expect(unlike.json().data).not.toHaveProperty("eventId");
+      expect(unlike.json().data.state).toMatchObject({
+        liked: false
+      });
+      expect(getArticleStateRow(db, "article_recommended")).toMatchObject({
+        likedAt: null,
+        updatedAt: 5050
+      });
+      expect(listBehaviorEventTypes(db, "article_recommended")).toEqual([
+        "like",
+        "unlike"
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("records read later and remove read later article actions", async () => {
     const db = createFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 5100 });
@@ -3169,6 +3341,10 @@ describe("server API vertical slice", () => {
         type: "read_progress",
         value: 0.5
       });
+      const like = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "like",
+        value: false
+      });
 
       expect(favorite.statusCode, favorite.body).toBe(200);
       expect(favorite.json().data.state).toMatchObject({
@@ -3182,10 +3358,15 @@ describe("server API vertical slice", () => {
       expect(readProgress.json().data.state).toMatchObject({
         readingProgress: 0.5
       });
+      expect(like.statusCode, like.body).toBe(200);
+      expect(like.json().data.state).toMatchObject({
+        liked: false
+      });
       expect(listBehaviorEventTypes(db, "article_recommended")).toEqual([
         "favorite",
         "unfavorite",
-        "read_progress"
+        "read_progress",
+        "unlike"
       ]);
     } finally {
       await app.close();
@@ -3356,7 +3537,7 @@ describe("server API vertical slice", () => {
         error: {
           code: "VALIDATION_ERROR",
           message:
-            "type must be impression, open, mark_read, mark_unread, favorite, unfavorite, read_later, remove_read_later, hide, not_interested, or read_progress"
+            "type must be impression, open, mark_read, mark_unread, favorite, unfavorite, like, unlike, read_later, remove_read_later, hide, not_interested, or read_progress"
         }
       });
     } finally {
@@ -3504,6 +3685,44 @@ function createRankingFixtureDatabase(): DibaoDatabase {
   return db;
 }
 
+function createArticleSortDatabase(): DibaoDatabase {
+  const db = createEmptyDatabase();
+  const feeds = new SqliteFeedRepository(db);
+  const articles = new SqliteArticleRepository(db);
+
+  feeds.upsert({
+    id: "feed_sort",
+    title: "Sort Feed",
+    feedUrl: "https://example.com/sort.xml",
+    now: 1000
+  });
+
+  for (const [id, publishedAt] of [
+    ["article_read_later_active", 1000],
+    ["article_read_later_base", 2000],
+    ["article_read_later_unranked_new", 3000],
+    ["article_read_later_unranked_old", 4000],
+    ["article_favorite_old", 1000],
+    ["article_favorite_recent", 3000],
+    ["article_favorite_middle", 2000]
+  ] as const) {
+    articles.upsert({
+      id,
+      feedId: "feed_sort",
+      url: `https://example.com/${id}`,
+      canonicalUrl: `https://example.com/${id}`,
+      title: id,
+      summary: "Sort fixture article.",
+      publishedAt,
+      discoveredAt: publishedAt,
+      dedupeKey: id,
+      now: publishedAt
+    });
+  }
+
+  return db;
+}
+
 function createActiveEmbeddingDiagnosticsFixture(
   db: DibaoDatabase,
   input: { providerTestStatus: "success" | "failed" }
@@ -3591,6 +3810,45 @@ function insertRank(
     components.diversityScore ?? 0,
     components.penaltyScore ?? 0,
     calculatedAt
+  );
+}
+
+function insertRankForContext(
+  db: DibaoDatabase,
+  input: {
+    articleId: string;
+    rankContext: string;
+    embeddingIndexId?: string | null;
+    score: number;
+    calculatedAt: number;
+  }
+): void {
+  db.prepare(
+    `
+      insert into article_rank_scores (
+        article_id,
+        rank_context,
+        embedding_index_id,
+        score,
+        interest_score,
+        source_score,
+        freshness_score,
+        state_score,
+        diversity_score,
+        penalty_score,
+        calculated_at
+      )
+      values (?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?)
+      on conflict(article_id, rank_context) do update set
+        score = excluded.score,
+        calculated_at = excluded.calculated_at
+    `
+  ).run(
+    input.articleId,
+    input.rankContext,
+    input.embeddingIndexId ?? null,
+    input.score,
+    input.calculatedAt
   );
 }
 
@@ -3852,6 +4110,7 @@ function getArticleStateRow(db: DibaoDatabase, articleId: string) {
         select
           read_at as readAt,
           favorited_at as favoritedAt,
+          liked_at as likedAt,
           read_later_at as readLaterAt,
           hidden_at as hiddenAt,
           not_interested_at as notInterestedAt,

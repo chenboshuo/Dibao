@@ -196,6 +196,7 @@ type ArticleListItem = {
   state: {
     read: boolean;
     favorited: boolean;
+    liked: boolean;
     readLater: boolean;
     hidden: boolean;
     notInterested: boolean;
@@ -655,6 +656,8 @@ MVP 也接受 `application/xml` 请求体，便于本地自托管和自动化测
 - `latest` 始终按发布时间/发现时间排序。
 - `recommended` 在无 active embedding index 时使用 `rank_context = "base"`。
 - 存在 active embedding index 时使用 `rank_context = embeddingIndexId`，并在 active context 缺分数时 fallback 到 base rank，避免推荐列表为空。
+- `read_later` 使用 active rank context 个性化排序，缺 active 分数时 fallback 到 base rank，再 fallback 到 `read_later_at desc`。
+- `favorites` 不使用 rank 排序，默认按 `favorited_at desc`；可用 `sort` 显式切换。
 
 查询参数：
 
@@ -666,9 +669,12 @@ status=unread|read|all
 unreadOnly=true|false
 limit
 cursor
+sort=favorited_desc|favorited_asc|published_desc|published_asc
 ```
 
 `unreadOnly=true` 可用于 `latest` 与 `recommended`，只返回当前派生 `interactionStatus = "unseen"` 的文章。响应中的 `meta.unreadCount` 始终表示当前 view/source 条件下的真实未读总数，而不是当前分页返回数量。客户端可以在列表滚过产生 `impression`、点进文章产生 `open`、阅读进度产生 `read_progress` 后乐观更新该数字，同时保留当前已加载队列，避免用户在未读模式中误划过或点进后丢失当前文章。
+
+`sort` 仅定义 `favorites` view 的排序语义；非法值返回 `VALIDATION_ERROR`。
 
 响应：
 
@@ -688,6 +694,7 @@ cursor
       "state": {
         "read": false,
         "favorited": false,
+        "liked": false,
         "readLater": false,
         "hidden": false,
         "notInterested": false,
@@ -733,6 +740,7 @@ cursor
     "state": {
       "read": false,
       "favorited": false,
+      "liked": false,
       "readLater": false,
       "hidden": false,
       "notInterested": false,
@@ -768,6 +776,8 @@ mark_read
 mark_unread
 favorite
 unfavorite
+like
+unlike
 read_later
 remove_read_later
 hide
@@ -780,8 +790,8 @@ read_progress
 - `impression` 表示文章在列表中被滚过但未点进，是轻度负向的被动行为；当前 Web 仅对 `interactionStatus="unseen"` 的文章自动发送。
 - `open` 表示用户点进文章，是轻度正向行为。`open` 与 `impression` 互斥：若一篇已忽略文章之后被点进，服务端会把 `interactionStatus` 派生回 `opened`。
 - `read_progress` 是判断真实阅读深度的主要信号；前端不再提供“标记已读”按钮。
-- `favorite`、`read_later`、`mark_read` 支持 `value: false`，服务端会分别规范化为 `unfavorite`、`remove_read_later`、`mark_unread`。
-- 也可以直接发送 `unfavorite`、`remove_read_later`、`mark_unread`。
+- `favorite`、`like`、`read_later`、`mark_read` 支持 `value: false`，服务端会分别规范化为 `unfavorite`、`unlike`、`remove_read_later`、`mark_unread`。
+- 也可以直接发送 `unfavorite`、`unlike`、`remove_read_later`、`mark_unread`。
 - `mark_read` / `mark_unread` 仅作为兼容旧客户端或未来批量管理的 API 保留，不是当前 Web 的主行为入口。
 - `read_complete` 不作为 MVP 显式 API action；后续可由阅读进度或阅读时长派生。
 
@@ -805,6 +815,7 @@ read_progress
     "state": {
       "read": true,
       "favorited": true,
+      "liked": false,
       "readLater": false,
       "hidden": false,
       "notInterested": false,
@@ -816,6 +827,8 @@ read_progress
   }
 }
 ```
+
+响应只返回最新 `state`；行为事件 ID 保留在服务端内部，不暴露给客户端。
 
 ### GET /api/articles/:id/explanation
 
@@ -1365,6 +1378,7 @@ Planned / not implemented. 当前版本不提供 retry API。
     },
     "behaviorCounts": {
       "open": 9,
+      "like": 2,
       "favorite": 1,
       "read_later": 1,
       "not_interested": 1

@@ -22,6 +22,7 @@ type ArticleRankingCandidateDbRow = {
   feedNotInterestedRate: number;
   read: 0 | 1;
   favorited: 0 | 1;
+  liked: 0 | 1;
   readLater: 0 | 1;
   hidden: 0 | 1;
   notInterested: 0 | 1;
@@ -42,6 +43,7 @@ type ArticleRankExplanationSourceDbRow = {
   discoveredAt: number;
   read: 0 | 1;
   favorited: 0 | 1;
+  liked: 0 | 1;
   readLater: 0 | 1;
   hidden: 0 | 1;
   notInterested: 0 | 1;
@@ -131,6 +133,7 @@ export class SqliteRankingRepository implements RankingRepository {
             a.discovered_at as discoveredAt,
             case when s.read_at is not null then 1 else 0 end as read,
             case when s.favorited_at is not null then 1 else 0 end as favorited,
+            case when s.liked_at is not null then 1 else 0 end as liked,
             case when s.read_later_at is not null then 1 else 0 end as readLater,
             case when s.hidden_at is not null then 1 else 0 end as hidden,
             case when s.not_interested_at is not null then 1 else 0 end as notInterested,
@@ -235,6 +238,8 @@ export class SqliteRankingRepository implements RankingRepository {
                       end
                     when event_type = 'read_complete' then 0.10
                     when event_type = 'favorite' then 0.12
+                    when event_type = 'like' then 0.16
+                    when event_type = 'unlike' then -0.04
                     when event_type = 'read_later' then 0.08
                     when event_type = 'quick_bounce' then -0.04
                     else 0
@@ -257,6 +262,7 @@ export class SqliteRankingRepository implements RankingRepository {
               coalesce(fs.not_interested_rate, 0) as feedNotInterestedRate,
               case when s.read_at is not null then 1 else 0 end as read,
               case when s.favorited_at is not null then 1 else 0 end as favorited,
+              case when s.liked_at is not null then 1 else 0 end as liked,
               case when s.read_later_at is not null then 1 else 0 end as readLater,
               case when s.hidden_at is not null then 1 else 0 end as hidden,
               case when s.not_interested_at is not null then 1 else 0 end as notInterested,
@@ -372,6 +378,7 @@ function mapExplanationSource(
   const state = {
     read: row.read === 1,
     favorited: row.favorited === 1,
+    liked: row.liked === 1,
     readLater: row.readLater === 1,
     hidden: row.hidden === 1,
     notInterested: row.notInterested === 1,
@@ -430,6 +437,7 @@ function mapCandidate(row: ArticleRankingCandidateDbRow): ArticleRankingCandidat
     state: {
       read: row.read === 1,
       favorited: row.favorited === 1,
+      liked: row.liked === 1,
       readLater: row.readLater === 1,
       hidden: row.hidden === 1,
       notInterested: row.notInterested === 1,

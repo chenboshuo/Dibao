@@ -75,12 +75,14 @@ const PROFILE_EVENT_WEIGHTS = {
   read_progress_50: 2,
   read_progress_75: 3,
   read_complete: 4,
+  like: 8,
   favorite: 6,
   read_later: 3,
   mark_read: 1,
   quick_bounce: 0,
   hide: -3.5,
   not_interested: -6,
+  unlike: -1,
   unfavorite: -1.5,
   remove_read_later: -1,
   mark_unread: -0.5
@@ -90,6 +92,8 @@ type SourceEventKey =
   | "impression"
   | "open"
   | "read_complete"
+  | "like"
+  | "unlike"
   | "favorite"
   | "read_later"
   | "quick_bounce"
@@ -102,6 +106,8 @@ const SOURCE_EVENT_WEIGHTS: Record<SourceEventKey, SourceEventWeight> = {
   impression: { positive: 0, negative: 0.05, clear: false },
   open: { positive: 0.02, negative: 0, clear: false },
   read_complete: { positive: 1, negative: 0 },
+  like: { positive: 3, negative: 0 },
+  unlike: { positive: 0, negative: 0.4 },
   favorite: { positive: 2, negative: 0 },
   read_later: { positive: 1, negative: 0 },
   quick_bounce: { positive: 0, negative: 0.2 },
@@ -281,6 +287,9 @@ export class ProfileService {
     const now = this.now();
 
     if (!best) {
+      if (!forceCreate) {
+        return;
+      }
       this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
       return;
@@ -305,7 +314,7 @@ export class ProfileService {
       return;
     }
 
-    if (forceCreate || best.similarity >= thresholds.create) {
+    if (forceCreate || (polarity === "positive" && best.similarity >= thresholds.create)) {
       this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
     }
@@ -513,6 +522,10 @@ function impactForEvent(
   switch (event.eventType) {
     case "favorite":
       return { polarity: "positive", profileWeight: PROFILE_EVENT_WEIGHTS.favorite, forceCreate: true };
+    case "like":
+      return { polarity: "positive", profileWeight: PROFILE_EVENT_WEIGHTS.like, forceCreate: true };
+    case "unlike":
+      return { polarity: "negative", profileWeight: PROFILE_EVENT_WEIGHTS.unlike, forceCreate: false };
     case "read_later":
       return { polarity: "positive", profileWeight: PROFILE_EVENT_WEIGHTS.read_later, forceCreate: true };
     case "hide":

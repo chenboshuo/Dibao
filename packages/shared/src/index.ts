@@ -17,6 +17,7 @@ export type ArticleInteractionStatus = "unseen" | "ignored" | "opened" | "readin
 export type ArticleState = {
   read: boolean;
   favorited: boolean;
+  liked: boolean;
   readLater: boolean;
   hidden: boolean;
   notInterested: boolean;

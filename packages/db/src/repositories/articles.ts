@@ -38,6 +38,7 @@ type ArticleReadDbRow = ArticleDbRow & {
   feedTitle: string;
   read: 0 | 1;
   favorited: 0 | 1;
+  liked: 0 | 1;
   readLater: 0 | 1;
   hidden: 0 | 1;
   notInterested: 0 | 1;
@@ -293,7 +294,7 @@ export class SqliteArticleRepository implements ArticleRepository {
           ${baseArticleReadSelect()}
           ${baseArticleReadFrom()}
           where ${conditions.join(" and ")}
-          ${orderByForView(input.view)}
+          ${orderByForView(input.view, input.sort)}
           limit ?
           offset ?
         `
@@ -522,6 +523,7 @@ function baseArticleReadSelect(): string {
       f.title as feedTitle,
       case when s.read_at is not null then 1 else 0 end as read,
       case when s.favorited_at is not null then 1 else 0 end as favorited,
+      case when s.liked_at is not null then 1 else 0 end as liked,
       case when s.read_later_at is not null then 1 else 0 end as readLater,
       case when s.hidden_at is not null then 1 else 0 end as hidden,
       case when s.not_interested_at is not null then 1 else 0 end as notInterested,
@@ -552,7 +554,10 @@ function baseArticleReadFrom(): string {
   `;
 }
 
-function orderByForView(view: ArticleListInput["view"]): string {
+function orderByForView(
+  view: ArticleListInput["view"],
+  sort: ArticleListInput["sort"]
+): string {
   if (view === "recommended") {
     return `
       order by
@@ -564,17 +569,43 @@ function orderByForView(view: ArticleListInput["view"]): string {
   }
 
   if (view === "favorites") {
-    return `
-      order by
-        s.favorited_at desc,
-        coalesce(a.published_at, a.discovered_at) desc,
-        a.id desc
-    `;
+    switch (sort ?? "favorited_desc") {
+      case "favorited_asc":
+        return `
+          order by
+            s.favorited_at asc,
+            coalesce(a.published_at, a.discovered_at) desc,
+            a.id desc
+        `;
+      case "published_desc":
+        return `
+          order by
+            coalesce(a.published_at, a.discovered_at) desc,
+            s.favorited_at desc,
+            a.id desc
+        `;
+      case "published_asc":
+        return `
+          order by
+            coalesce(a.published_at, a.discovered_at) asc,
+            s.favorited_at desc,
+            a.id desc
+        `;
+      case "favorited_desc":
+        return `
+          order by
+            s.favorited_at desc,
+            coalesce(a.published_at, a.discovered_at) desc,
+            a.id desc
+        `;
+    }
   }
 
   if (view === "read_later") {
     return `
       order by
+        case when coalesce(rs.score, base_rs.score) is null then 1 else 0 end,
+        coalesce(rs.score, base_rs.score) desc,
         s.read_later_at desc,
         coalesce(a.published_at, a.discovered_at) desc,
         a.id desc
@@ -606,6 +637,7 @@ function mapArticleListItem(row: ArticleReadDbRow): ArticleListItemRow {
     state: {
       read: row.read === 1,
       favorited: row.favorited === 1,
+      liked: row.liked === 1,
       readLater: row.readLater === 1,
       hidden: row.hidden === 1,
       notInterested: row.notInterested === 1,
