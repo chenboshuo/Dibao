@@ -5,7 +5,7 @@ import type {
   FeedRepository,
   FeedRow
 } from "@dibao/db";
-import type { ArticleRankingRecalculator } from "./ranking-service.js";
+import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
 export const SOURCE_WEIGHT_MIN = -1;
 export const SOURCE_WEIGHT_MAX = 1;
@@ -25,7 +25,7 @@ export class FeedManagementServiceError extends Error {
 export type FeedManagementServiceOptions = {
   feeds: FeedRepository;
   folders: FeedFolderRepository;
-  ranking?: ArticleRankingRecalculator;
+  rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll">;
   now?: () => number;
 };
 
@@ -115,7 +115,7 @@ export class FeedManagementService {
     }
 
     if (sourceWeight !== undefined && sourceWeight !== existing.sourceWeight) {
-      this.options.ranking?.recalculateAll();
+      this.options.rankingJobs?.enqueueAll();
     }
 
     return updated;

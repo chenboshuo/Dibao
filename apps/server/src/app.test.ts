@@ -1968,6 +1968,9 @@ describe("server API vertical slice", () => {
           updatedAt: "1970-01-01T00:00:08.000Z"
         }
       });
+      expect(
+        new SqliteJobRepository(db).countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")
+      ).toBe(1);
 
       const missingFolder = await injectJson(app, "PATCH", "/api/feeds/feed_manage", {
         folderId: "folder_missing"

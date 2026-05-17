@@ -307,7 +307,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const feedManagementService = new FeedManagementService({
     feeds,
     folders,
-    ranking: rankingService,
+    rankingJobs: rankingJobService,
     now: options.now
   });
   const opmlService = new OpmlService({
