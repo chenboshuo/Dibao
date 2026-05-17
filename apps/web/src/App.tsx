@@ -2559,28 +2559,18 @@ export function FeedPanel(props: {
     <section
       className={classNames(styles.feedPanel, props.isOpen ? styles.feedPanelOpen : null)}
       data-testid="feed-scroll-container"
-      aria-labelledby="feeds-title"
+      aria-label={t.feeds.title}
     >
-      <div className={styles.panelHeader}>
-        <div>
-          <p className={styles.kicker}>{t.feeds.kicker}</p>
-          <h2 id="feeds-title">{t.feeds.title}</h2>
-        </div>
-        <div className={styles.panelHeaderActions}>
-          <button
-            className={styles.mobileSourceCloseButton}
-            onClick={props.onCloseSources}
-            type="button"
-          >
-            {t.feeds.closeSources}
-          </button>
-          <span className={styles.count}>{props.feeds.length}</span>
-        </div>
-      </div>
-
       {props.feedError ? <p className={styles.errorText}>{props.feedError}</p> : null}
 
       <div className={styles.feedList}>
+        <button
+          className={styles.mobileSourceCloseButton}
+          onClick={props.onCloseSources}
+          type="button"
+        >
+          {t.feeds.closeSources}
+        </button>
         <button
           className={
             props.sourceSelection.type === "all" ? styles.feedItemActive : styles.feedItem
