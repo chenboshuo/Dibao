@@ -620,11 +620,13 @@ describe("web API client", () => {
       folderId: "folder_design",
       limit: 20,
       cursor: "cursor_1",
-      unreadOnly: true
+      unreadOnly: true,
+      todayOnly: true
     });
     await api.listArticles({
       view: "latest",
-      unreadOnly: true
+      unreadOnly: true,
+      todayOnly: true
     });
     await api.listArticles({
       view: "favorites",
@@ -637,8 +639,8 @@ describe("web API client", () => {
     });
 
     expect(calls).toEqual([
-      "/api/articles?view=recommended&limit=20&folderId=folder_design&cursor=cursor_1&unreadOnly=true",
-      "/api/articles?view=latest&limit=50&unreadOnly=true",
+      "/api/articles?view=recommended&limit=20&folderId=folder_design&cursor=cursor_1&unreadOnly=true&todayOnly=true",
+      "/api/articles?view=latest&limit=50&unreadOnly=true&todayOnly=true",
       "/api/articles?view=favorites&limit=50&sort=favorited_asc",
       "/api/articles?view=read_later&limit=50"
     ]);

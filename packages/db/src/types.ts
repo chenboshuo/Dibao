@@ -206,6 +206,8 @@ export type ArticleListInput = {
   folderId?: string;
   status?: ArticleReadStatus;
   unreadOnly?: boolean;
+  todayStartAt?: number;
+  todayEndAt?: number;
   limit?: number;
   offset?: number;
   rankContext?: string;

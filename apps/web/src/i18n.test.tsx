@@ -293,6 +293,7 @@ describe("web i18n", () => {
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
           recommendationStatusError={null}
@@ -304,7 +305,8 @@ describe("web i18n", () => {
             sortOrder: 0
           }}
           showRecommendationStatus={false}
-          showUnreadOnlyFilter={true}
+          showQuickFilters={true}
+          todayOnly={false}
           unreadCount={12}
           unreadOnly={false}
         />
@@ -318,6 +320,7 @@ describe("web i18n", () => {
     expect(feedPanel).toContain("分组");
     expect(feedPanel).toContain('title="刷新 Design Feed"');
     expect(articlePanel).toContain("只看未读");
+    expect(articlePanel).toContain("今日");
     expect(articlePanel).toContain("加载更多");
     expect(articlePanel).toContain("设计");
   });
@@ -343,6 +346,7 @@ describe("web i18n", () => {
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={{
             mode: "embedding",
@@ -379,7 +383,8 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus
-          showUnreadOnlyFilter={true}
+          showQuickFilters={true}
+          todayOnly={false}
           unreadCount={3}
           unreadOnly={true}
         />
@@ -415,6 +420,7 @@ describe("web i18n", () => {
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
           recommendationStatusError={null}
@@ -422,7 +428,8 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus={false}
-          showUnreadOnlyFilter={true}
+          showQuickFilters={true}
+          todayOnly={false}
           unreadCount={1}
           unreadOnly={false}
         />
@@ -448,6 +455,7 @@ describe("web i18n", () => {
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
           recommendationStatusError={null}
@@ -455,7 +463,8 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus={false}
-          showUnreadOnlyFilter={true}
+          showQuickFilters={true}
+          todayOnly={false}
           unreadCount={1}
           unreadOnly={false}
         />
@@ -488,6 +497,7 @@ describe("web i18n", () => {
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
           recommendationStatusError={null}
@@ -495,7 +505,8 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus={false}
-          showUnreadOnlyFilter={false}
+          showQuickFilters={false}
+          todayOnly={false}
           unreadCount={1}
           unreadOnly={true}
         />
@@ -521,6 +532,7 @@ describe("web i18n", () => {
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
           recommendationStatusError={null}
@@ -528,7 +540,8 @@ describe("web i18n", () => {
           selectedFeed={null}
           selectedFolder={null}
           showRecommendationStatus={false}
-          showUnreadOnlyFilter={false}
+          showQuickFilters={false}
+          todayOnly={false}
           unreadCount={0}
           unreadOnly={true}
         />

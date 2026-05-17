@@ -265,6 +265,13 @@ export class SqliteArticleRepository implements ArticleRepository {
       params.push(input.folderId);
     }
 
+    if (typeof input.todayStartAt === "number" && typeof input.todayEndAt === "number") {
+      baseConditions.push("coalesce(a.published_at, a.discovered_at) >= ?");
+      params.push(input.todayStartAt);
+      baseConditions.push("coalesce(a.published_at, a.discovered_at) < ?");
+      params.push(input.todayEndAt);
+    }
+
     if (input.view === "favorites") {
       baseConditions.push("s.favorited_at is not null");
     } else if (input.view === "read_later") {

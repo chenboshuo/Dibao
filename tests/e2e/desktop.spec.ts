@@ -37,7 +37,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("button", { name: "登录" }).click();
 
     await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
-    await page.getByLabel("只看未读").check();
+    await page.getByRole("button", { name: "只看未读" }).click();
     await page.getByTestId("article-list-scroll-container").evaluate((element) => {
       element.scrollTop = 900;
       element.dispatchEvent(new Event("scroll"));
@@ -108,7 +108,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await readerPanel.getByRole("button", { name: "不再推荐类似文章" }).first().click();
     await expect(readerPanel.getByRole("button", { name: "已标记不感兴趣" }).first()).toBeVisible();
 
-    await page.getByLabel("只看未读").uncheck();
+    await page.getByRole("button", { name: "只看未读" }).click();
     await page.getByRole("link", { name: "推荐" }).click();
     await expect(page.getByRole("heading", { name: "推荐文章" })).toBeVisible();
     await expect(page.getByText("推荐状态")).toBeVisible();

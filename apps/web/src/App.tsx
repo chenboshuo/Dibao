@@ -168,6 +168,7 @@ export function App() {
   const [sourceSelection, setSourceSelection] = useState<SourceSelection>({ type: "all" });
   const [appPage, setAppPage] = useState<AppPage>({ type: "reader", view: "latest" });
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [todayOnly, setTodayOnly] = useState(false);
   const [favoriteSort, setFavoriteSort] = useState<FavoriteArticleSort>(
     defaultFavoriteArticleSort
   );
@@ -303,6 +304,13 @@ export function App() {
     setUnreadOnly(nextUnreadOnly);
   }
 
+  function handleTodayOnlyChange(nextTodayOnly: boolean) {
+    if (todayOnly !== nextTodayOnly) {
+      resetArticleListForPendingQuery();
+    }
+    setTodayOnly(nextTodayOnly);
+  }
+
   const resetReaderState = useCallback(() => {
     setFeedFolders([]);
     setFeeds([]);
@@ -312,6 +320,7 @@ export function App() {
     setSourceSelection({ type: "all" });
     setAppPage({ type: "reader", view: "latest" });
     setUnreadOnly(false);
+    setTodayOnly(false);
     setFavoriteSort(defaultFavoriteArticleSort);
     setSelectedArticleId(null);
     setArticleDetail(null);
@@ -565,7 +574,8 @@ export function App() {
     selection: SourceSelection,
     view: ArticleView,
     onlyUnread: boolean,
-    sort: FavoriteArticleSort = defaultFavoriteArticleSort
+    sort: FavoriteArticleSort = defaultFavoriteArticleSort,
+    onlyToday = false
   ) => {
     const requestVersion = articleRequestVersion.current + 1;
     articleRequestVersion.current = requestVersion;
@@ -591,6 +601,7 @@ export function App() {
         view,
         limit: 50,
         unreadOnly: supportsUnreadOnly(view) ? onlyUnread : false,
+        todayOnly: supportsQuickFilters(view) ? onlyToday : false,
         sort: view === "favorites" ? sort : undefined
       });
       if (requestVersion !== articleRequestVersion.current) {
@@ -633,8 +644,8 @@ export function App() {
       return;
     }
 
-    void loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort);
-  }, [appPage, appStage.type, favoriteSort, loadArticles, sourceSelection, unreadOnly]);
+    void loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, todayOnly);
+  }, [appPage, appStage.type, favoriteSort, loadArticles, sourceSelection, todayOnly, unreadOnly]);
 
   useEffect(() => {
     if (
@@ -897,7 +908,7 @@ export function App() {
       await Promise.all([
         loadFeeds(),
         appPage.type === "reader"
-          ? loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort)
+          ? loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, todayOnly)
           : Promise.resolve()
       ]);
     } catch (error) {
@@ -944,7 +955,7 @@ export function App() {
         loadFeedFolders(),
         loadFeeds(),
         appPage.type === "reader"
-          ? loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort)
+          ? loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, todayOnly)
           : Promise.resolve()
       ]);
     } catch (error) {
@@ -994,7 +1005,7 @@ export function App() {
     }
 
     if (appPage.type === "reader") {
-      await loadArticles(nextSourceSelection, appPage.view, unreadOnly, favoriteSort);
+      await loadArticles(nextSourceSelection, appPage.view, unreadOnly, favoriteSort, todayOnly);
     }
   }
 
@@ -1132,6 +1143,7 @@ export function App() {
         limit: 50,
         cursor: nextArticleCursor,
         unreadOnly: supportsUnreadOnly(currentArticleView) ? unreadOnly : false,
+        todayOnly: supportsQuickFilters(currentArticleView) ? todayOnly : false,
         sort: currentArticleView === "favorites" ? favoriteSort : undefined
       });
       if (requestVersion !== articleRequestVersion.current) {
@@ -1531,6 +1543,7 @@ export function App() {
                 handleOpenExplanation();
               }}
               onFavoriteSortChange={handleFavoriteSortChange}
+              onTodayOnlyChange={handleTodayOnlyChange}
               onUnreadOnlyChange={handleUnreadOnlyChange}
               favoriteSort={favoriteSort}
               pendingAction={pendingArticleAction}
@@ -1544,8 +1557,9 @@ export function App() {
               selectedFeed={selectedFeed}
               selectedFolder={selectedFolder}
               showRecommendationStatus={currentArticleView === "recommended"}
-              showUnreadOnlyFilter={supportsUnreadOnly(currentArticleView)}
+              showQuickFilters={supportsQuickFilters(currentArticleView)}
               isRecommendationStatusLoading={isRecommendationStatusLoading}
+              todayOnly={todayOnly}
               unreadCount={unreadCount}
               unreadOnly={unreadOnly}
             />
@@ -2724,6 +2738,7 @@ export function ArticleListPanel(props: {
   onOpenSources: () => void;
   onExplainArticle: (articleId: string) => void;
   onSelectArticle: (articleId: string) => void;
+  onTodayOnlyChange: (todayOnly: boolean) => void;
   onUnreadOnlyChange: (unreadOnly: boolean) => void;
   pendingAction?: PendingArticleAction | null;
   recommendationStatus: RecommendationStatus | null;
@@ -2732,7 +2747,8 @@ export function ArticleListPanel(props: {
   selectedFeed: Feed | null;
   selectedFolder: FeedFolder | null;
   showRecommendationStatus: boolean;
-  showUnreadOnlyFilter: boolean;
+  showQuickFilters: boolean;
+  todayOnly: boolean;
   unreadCount: number;
   unreadOnly: boolean;
 }) {
@@ -2787,16 +2803,27 @@ export function ArticleListPanel(props: {
               </select>
             </label>
           ) : null}
-          {props.showUnreadOnlyFilter ? (
-            <label className={styles.unreadOnlyToggle} htmlFor="article-unread-only">
-              <input
-                checked={props.unreadOnly}
-                id="article-unread-only"
-                onChange={(event) => props.onUnreadOnlyChange(event.target.checked)}
-                type="checkbox"
-              />
-              <span>{t.articles.unreadOnly}</span>
-            </label>
+          {props.showQuickFilters ? (
+            <div className={styles.articleFilterBar} aria-label={t.articles.filters.label}>
+              <button
+                aria-pressed={props.todayOnly}
+                className={props.todayOnly ? styles.articleFilterActive : styles.articleFilter}
+                onClick={() => props.onTodayOnlyChange(!props.todayOnly)}
+                title={t.articles.filters.todayTitle}
+                type="button"
+              >
+                {t.articles.filters.today}
+              </button>
+              <button
+                aria-pressed={props.unreadOnly}
+                className={props.unreadOnly ? styles.articleFilterActive : styles.articleFilter}
+                onClick={() => props.onUnreadOnlyChange(!props.unreadOnly)}
+                title={t.articles.filters.unreadTitle}
+                type="button"
+              >
+                {t.articles.unreadOnly}
+              </button>
+            </div>
           ) : null}
           <span className={styles.count}>{props.unreadCount}</span>
         </div>
@@ -2820,14 +2847,14 @@ export function ArticleListPanel(props: {
             title={
               props.feedCount === 0
                 ? t.articles.emptyNoFeedsTitle
-                : props.showUnreadOnlyFilter && props.unreadOnly
+                : props.showQuickFilters && props.unreadOnly
                   ? t.articles.emptyNoUnreadTitle
                 : t.articles.emptyNoArticlesTitle
             }
             body={
               props.feedCount === 0
                 ? t.articles.emptyNoFeedsBody
-                : props.showUnreadOnlyFilter && props.unreadOnly
+                : props.showQuickFilters && props.unreadOnly
                   ? t.articles.emptyNoUnreadBody
                 : t.articles.emptyNoArticlesBody
             }
@@ -4109,6 +4136,10 @@ function articleQueryFor(source: SourceSelection): { feedId?: string; folderId?:
 }
 
 function supportsUnreadOnly(view: ArticleView): boolean {
+  return view === "latest" || view === "recommended";
+}
+
+function supportsQuickFilters(view: ArticleView): boolean {
   return view === "latest" || view === "recommended";
 }
 

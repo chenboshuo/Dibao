@@ -337,6 +337,12 @@ export const zhCN = {
     emptyNoUnreadTitle: "暂时没有未读文章",
     emptyNoUnreadBody: "关闭只看未读，可以查看已读或已忽略文章。",
     unreadOnly: "只看未读",
+    filters: {
+      label: "文章筛选",
+      today: "今日",
+      todayTitle: "只看今日文章",
+      unreadTitle: "只看未读文章"
+    },
     itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
     state: {
       unseen: "新文章",
@@ -996,6 +1002,12 @@ export const enUS = {
     emptyNoUnreadTitle: "No unread articles",
     emptyNoUnreadBody: "Turn off Only unread to see read or ignored articles.",
     unreadOnly: "Only unread",
+    filters: {
+      label: "Article filters",
+      today: "Today",
+      todayTitle: "Only today's articles",
+      unreadTitle: "Only unread articles"
+    },
     itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
     state: {
       unseen: "New",

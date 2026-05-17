@@ -145,6 +145,7 @@ type ArticleQuery = {
   folderId?: string;
   status?: string;
   unreadOnly?: string;
+  todayOnly?: string;
   limit?: string;
   cursor?: string;
   sort?: string;
@@ -835,7 +836,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   );
 
   app.get<{ Querystring: ArticleQuery }>("/api/articles", async (request, reply) => {
-    const parsed = parseArticleQuery(request.query);
+    const parsed = parseArticleQuery(request.query, options.now);
     if (!parsed.ok) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
@@ -1440,7 +1441,10 @@ function parseJobQuery(query: JobQuery):
   };
 }
 
-function parseArticleQuery(query: ArticleQuery):
+function parseArticleQuery(
+  query: ArticleQuery,
+  now: (() => number) | undefined
+):
   | { ok: true; input: ArticleListInput }
   | { ok: false; message: string; details?: unknown } {
   const view = parseArticleView(query.view);
@@ -1464,6 +1468,14 @@ function parseArticleQuery(query: ArticleQuery):
     return {
       ok: false,
       message: "unreadOnly must be true or false"
+    };
+  }
+
+  const todayOnly = parseBooleanParam(query.todayOnly);
+  if (todayOnly === null) {
+    return {
+      ok: false,
+      message: "todayOnly must be true or false"
     };
   }
 
@@ -1513,11 +1525,28 @@ function parseArticleQuery(query: ArticleQuery):
   if (unreadOnly !== undefined) {
     input.unreadOnly = unreadOnly;
   }
+  if (todayOnly) {
+    const range = localDayRange(now?.() ?? Date.now());
+    input.todayStartAt = range.startAt;
+    input.todayEndAt = range.endAt;
+  }
   if (sort !== undefined) {
     input.sort = sort;
   }
 
   return { ok: true, input };
+}
+
+function localDayRange(timestamp: number): { startAt: number; endAt: number } {
+  const start = new Date(timestamp);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  return {
+    startAt: start.getTime(),
+    endAt: end.getTime()
+  };
 }
 
 function parseCreateFeedBody(body: CreateFeedBody | undefined):

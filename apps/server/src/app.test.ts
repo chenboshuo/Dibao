@@ -2896,6 +2896,57 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("filters latest and recommended lists to articles from today", async () => {
+    const db = createFixtureDatabase();
+    const articles = new SqliteArticleRepository(db);
+    const today = 86_400_000 + 5_000;
+    const app = buildServer({ db, logger: false, now: () => today });
+
+    articles.upsert({
+      id: "article_today",
+      feedId: "feed_design",
+      url: "https://example.com/today",
+      canonicalUrl: "https://example.com/today",
+      title: "Today only fixture",
+      summary: "Today filter article.",
+      publishedAt: today,
+      discoveredAt: today,
+      dedupeKey: "today",
+      now: today
+    });
+    insertRank(db, "article_today", 0.7, today);
+
+    try {
+      const latest = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&todayOnly=true"
+      });
+      const recommended = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended&todayOnly=true"
+      });
+      const invalid = await app.inject({
+        method: "GET",
+        url: "/api/articles?todayOnly=maybe"
+      });
+
+      expect(latest.statusCode, latest.body).toBe(200);
+      expect(recommended.statusCode, recommended.body).toBe(200);
+      expect(latest.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_today"
+      ]);
+      expect(recommended.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_today"
+      ]);
+      expect(latest.json().meta).toEqual({ unreadCount: 1 });
+      expect(invalid.statusCode, invalid.body).toBe(400);
+      expect(invalid.json().error.message).toBe("todayOnly must be true or false");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("returns baseline rank explanation reasons", async () => {
     const db = createFixtureDatabase();
     insertRank(db, "article_recommended", 1.2, 7000, {

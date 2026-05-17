@@ -667,6 +667,7 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
         limit?: number;
         cursor?: string | null;
         unreadOnly?: boolean;
+        todayOnly?: boolean;
         sort?: FavoriteArticleSort;
       } = {}
     ): Promise<ArticleListResponse> {
@@ -687,6 +688,9 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       const view = input.view ?? "latest";
       if (input.unreadOnly && (view === "latest" || view === "recommended")) {
         params.set("unreadOnly", "true");
+      }
+      if (input.todayOnly && (view === "latest" || view === "recommended")) {
+        params.set("todayOnly", "true");
       }
       if (input.sort && view === "favorites") {
         params.set("sort", input.sort);
