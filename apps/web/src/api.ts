@@ -334,6 +334,7 @@ export type RecommendationClusterItem = {
   id: string;
   polarity: "positive" | "negative";
   label: string | null;
+  displayIndex?: number;
   weight: number;
   sampleCount: number;
   lastMatchedAt: string | null;

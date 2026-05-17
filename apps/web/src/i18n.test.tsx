@@ -648,7 +648,7 @@ describe("web i18n", () => {
     expect(html).toContain("like: 2");
     expect(html).toContain("LOW_COVERAGE");
     expect(html).toContain("当前兴趣簇");
-    expect(html).toContain("兴趣簇 1 · cluster_");
+    expect(html).toContain("兴趣簇 1");
     expect(html).toContain("权重 8");
     expect(html).toContain("用户模型卡");
     expect(html).toContain("+8.0");

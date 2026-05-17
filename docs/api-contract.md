@@ -233,6 +233,7 @@ type RankExplanation = {
       id: string;
       polarity: "positive" | "negative";
       label: string | null;
+      displayIndex: number;
       weight: number;
       sampleCount: number;
       similarity: number;
@@ -248,6 +249,7 @@ type RankExplanation = {
 
 - `label` 是后端提供的轻量调试/辅助文本，不作为最终 UI 文案。
 - 前端应优先按 `type` 和 `impact` 使用本地化 dictionary 展示推荐理由。
+- `cluster.displayIndex` 是 v0 推荐解释中展示兴趣簇编号的稳定来源；当前不使用文章标题自动命名兴趣簇。
 
 ## Auth
 
@@ -865,6 +867,7 @@ read_progress
           "id": "cluster_01",
           "polarity": "positive",
           "label": null,
+          "displayIndex": 1,
           "weight": 8,
           "sampleCount": 3,
           "similarity": 0.82,
@@ -1422,6 +1425,7 @@ Planned / not implemented. 当前版本不提供 retry API。
           "id": "cluster_01",
           "polarity": "positive",
           "label": null,
+          "displayIndex": 1,
           "weight": 8,
           "sampleCount": 3,
           "lastMatchedAt": "2026-05-14T08:08:00.000Z",

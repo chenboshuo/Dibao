@@ -4618,16 +4618,16 @@ function explanationReasonText(reason: RankExplanationReason, t: Dictionary): st
 }
 
 function clusterDisplayName(
-  cluster: { label: string | null; polarity: "positive" | "negative"; id: string },
+  cluster: {
+    label: string | null;
+    polarity: "positive" | "negative";
+    id: string;
+    displayIndex?: number;
+  },
   index: number,
   t: Dictionary
 ): string {
-  if (cluster.label?.trim()) {
-    return cluster.label;
-  }
-
-  const fallback = t.algorithmTransparency.clusters.fallbackName(index + 1);
-  return `${fallback} · ${cluster.id.slice(0, 8)}`;
+  return t.algorithmTransparency.clusters.fallbackName(cluster.displayIndex ?? index + 1);
 }
 
 function formatCompactNumber(value: number): string {

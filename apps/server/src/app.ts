@@ -1197,7 +1197,7 @@ function getRecommendationStatus(options: {
       ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
     })
     .slice(0, 12)
-    .map(mapRecommendationCluster);
+    .map((cluster, index) => mapRecommendationCluster(cluster, index + 1));
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
@@ -1234,11 +1234,12 @@ function getRecommendationStatus(options: {
   };
 }
 
-function mapRecommendationCluster(cluster: InterestClusterRow) {
+function mapRecommendationCluster(cluster: InterestClusterRow, displayIndex: number) {
   return {
     id: cluster.id,
     polarity: cluster.polarity,
-    label: cluster.label,
+    label: null,
+    displayIndex,
     weight: cluster.weight,
     sampleCount: cluster.sampleCount,
     lastMatchedAt: timestampToIso(cluster.lastMatchedAt),

@@ -385,7 +385,8 @@ export const zhCN = {
     },
     clusters: {
       empty: "还没有形成兴趣簇。继续点赞、收藏、稍后读或读完文章后，系统会自动生成。",
-      generated: "兴趣簇不是系统预设的，而是根据你的行为自动生成和更新。",
+      generated:
+        "兴趣簇不是系统预设的，而是根据你的行为自动生成和更新。当前先用编号展示，避免把单篇文章标题误当成主题名。",
       positive: "正向",
       negative: "负向",
       fallbackName: (index: number) => `兴趣簇 ${index}`,
@@ -1067,7 +1068,8 @@ export const enUS = {
     },
     clusters: {
       empty: "No interest clusters have formed yet. Likes, favorites, read-later saves, and completed reads will generate them automatically.",
-      generated: "Interest clusters are not preset by the system. They are generated and updated from your behavior.",
+      generated:
+        "Interest clusters are not preset by the system. They are generated and updated from your behavior. They are numbered for now so a single article title is not mistaken for a topic name.",
       positive: "Positive",
       negative: "Negative",
       fallbackName: (index: number) => `Interest cluster ${index}`,

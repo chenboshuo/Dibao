@@ -47,6 +47,7 @@ export type RankExplanationClusterMatch = {
   id: string;
   polarity: InterestClusterPolarity;
   label: string | null;
+  displayIndex: number;
   weight: number;
   sampleCount: number;
   similarity: number;
@@ -147,10 +148,17 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       | {
           cluster: InterestClusterRow;
           similarity: number;
+          displayIndex: number;
         }
       | null = null;
 
-    for (const cluster of this.clusterVectorsFor(activeIndexId)) {
+    const clusters = this.clusterVectorsFor(activeIndexId);
+    for (let index = 0; index < clusters.length; index += 1) {
+      const cluster = clusters[index];
+      if (!cluster) {
+        continue;
+      }
+
       if (cluster.polarity !== "positive") {
         continue;
       }
@@ -159,7 +167,8 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       if (!best || similarity > best.similarity) {
         best = {
           cluster: cluster.cluster,
-          similarity
+          similarity,
+          displayIndex: index + 1
         };
       }
     }
@@ -171,7 +180,8 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     return {
       id: best.cluster.id,
       polarity: best.cluster.polarity,
-      label: best.cluster.label,
+      label: null,
+      displayIndex: best.displayIndex,
       weight: best.cluster.weight,
       sampleCount: best.cluster.sampleCount,
       similarity: best.similarity,
@@ -366,7 +376,7 @@ function rankReasonsFor(
   if (rank.interestScore > MIN_REASON_SCORE) {
     candidates.push({
       type: "interest",
-      label: clusterMatch?.label ?? "Interest match",
+      label: "Interest match",
       impact: "positive",
       ...(clusterMatch ? { cluster: clusterMatch } : {}),
       magnitude: rank.interestScore,
