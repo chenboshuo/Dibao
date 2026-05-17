@@ -2799,7 +2799,6 @@ export function ArticleListPanel(props: {
                 </span>
                 <strong>{article.title}</strong>
                 {article.summary ? <span className={styles.summary}>{article.summary}</span> : null}
-                <ArticleStateBadges state={article.state} />
               </button>
               <ArticleRowActions
                 article={article}
@@ -3079,34 +3078,6 @@ function ArticleDetailPanel(props: {
         </article>
       ) : null}
     </section>
-  );
-}
-
-function ArticleStateBadges(props: { state: ArticleState }) {
-  const { t } = useI18n();
-  const interactionStatus = articleInteractionStatusForState(props.state);
-
-  return (
-    <span className={styles.articleBadges}>
-      <span
-        className={
-          interactionStatus === "unseen" || interactionStatus === "opened"
-            ? styles.articleBadge
-            : styles.articleBadgeMuted
-        }
-      >
-        {t.articles.state[interactionStatus]}
-      </span>
-      {props.state.favorited ? (
-        <span className={styles.articleBadgeAccent}>{t.articles.state.favorited}</span>
-      ) : null}
-      {props.state.liked ? (
-        <span className={styles.articleBadgeAccent}>{t.articles.state.liked}</span>
-      ) : null}
-      {props.state.readLater ? (
-        <span className={styles.articleBadgeAccent}>{t.articles.state.readLater}</span>
-      ) : null}
-    </span>
   );
 }
 

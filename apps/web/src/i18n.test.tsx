@@ -459,7 +459,7 @@ describe("web i18n", () => {
 
     expect(favoriteHtml).toContain("排序");
     expect(favoriteHtml).toContain("最近收藏");
-    expect(favoriteHtml).toContain("已点赞");
+    expect(favoriteHtml).not.toContain("已点赞");
     expect(favoriteHtml).not.toContain("只看未读");
     expect(readLaterHtml).toContain("稍后读");
     expect(readLaterHtml).not.toContain("排序");
