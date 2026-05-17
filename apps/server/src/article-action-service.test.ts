@@ -63,10 +63,52 @@ describe("ArticleActionService", () => {
     expect(sourceChangedCalls.enqueueAllCount).toBe(1);
     expect(sourceChangedCalls.articleJobs).toEqual([]);
   });
+
+  it("can clear read-later state after a read-complete progress event without recording a new action", () => {
+    const service = new ArticleActionService({
+      actions: fixedActionRepository({
+        readLater: true,
+        clearReadLaterState: true
+      }),
+      removeReadLaterOnReadComplete: () => true
+    });
+
+    const result = service.record({
+      articleId: "article_1",
+      type: "read_progress",
+      progress: 0.9
+    });
+
+    expect(result.eventId).toBe("event_read_progress");
+    expect(result.state).toMatchObject({
+      readLater: false,
+      readingProgress: 0.9,
+      interactionStatus: "read"
+    });
+  });
 });
 
-function fixedActionRepository(): ArticleActionRepository {
+function fixedActionRepository(
+  options: {
+    readLater?: boolean;
+    clearReadLaterState?: boolean;
+  } = {}
+): ArticleActionRepository {
   return {
+    clearReadLater(_articleId: string): RecordArticleActionResult["state"] {
+      return {
+        read: false,
+        favorited: false,
+        liked: false,
+        readLater: !options.clearReadLaterState,
+        hidden: false,
+        notInterested: false,
+        readingProgress: 0.9,
+        interactionStatus: "read",
+        openedAt: null,
+        ignoredAt: null
+      };
+    },
     record(input: RecordArticleActionInput): RecordArticleActionResult {
       return {
         eventId: `event_${input.type}`,
@@ -74,11 +116,16 @@ function fixedActionRepository(): ArticleActionRepository {
           read: false,
           favorited: false,
           liked: false,
-          readLater: false,
+          readLater: options.readLater ?? false,
           hidden: false,
           notInterested: false,
           readingProgress: input.progress ?? 0,
-          interactionStatus: input.type === "impression" ? "ignored" : "opened",
+          interactionStatus:
+            input.type === "read_progress" && (input.progress ?? 0) >= 0.9
+              ? "read"
+              : input.type === "impression"
+                ? "ignored"
+                : "opened",
           openedAt: input.type === "open" ? input.now ?? 1000 : null,
           ignoredAt: input.type === "impression" ? input.now ?? 1000 : null
         }

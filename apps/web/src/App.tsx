@@ -1844,6 +1844,7 @@ export function SetupProviderPlaceholderPanel(props: { onContinue: () => void })
 type SettingsDraft = {
   locale: AppSettings["ui"]["locale"];
   markScrolledArticlesIgnored: boolean;
+  removeReadLaterOnReadComplete: boolean;
   fontSize: string;
   lineHeight: string;
   paragraphGap: string;
@@ -2037,6 +2038,23 @@ export function SettingsWorkspace(props: {
               type="checkbox"
             />
             <span>{t.settings.sections.behavior.markScrolledArticlesIgnored}</span>
+          </label>
+          <label
+            className={styles.managementCheckbox}
+            htmlFor="settings-remove-read-later-on-complete"
+          >
+            <input
+              checked={draft.removeReadLaterOnReadComplete}
+              id="settings-remove-read-later-on-complete"
+              onChange={(event) =>
+                applyDraft({
+                  ...draft,
+                  removeReadLaterOnReadComplete: event.target.checked
+                })
+              }
+              type="checkbox"
+            />
+            <span>{t.settings.sections.behavior.removeReadLaterOnReadComplete}</span>
           </label>
         </section>
 
@@ -3935,6 +3953,7 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
   return {
     locale: settings.ui.locale,
     markScrolledArticlesIgnored: settings.behavior.markScrolledArticlesIgnored,
+    removeReadLaterOnReadComplete: settings.behavior.removeReadLaterOnReadComplete,
     fontSize: String(settings.reader.fontSize),
     lineHeight: String(settings.reader.lineHeight),
     paragraphGap: String(settings.reader.paragraphGap),
@@ -4059,7 +4078,8 @@ function parseSettingsDraft(
     },
     behavior: {
       ...current.behavior,
-      markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored
+      markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored,
+      removeReadLaterOnReadComplete: draft.removeReadLaterOnReadComplete
     },
     retention: {
       ...current.retention,
@@ -4081,7 +4101,8 @@ function parseSettingsDraft(
         readerWidth
       },
       behavior: {
-        markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored
+        markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored,
+        removeReadLaterOnReadComplete: draft.removeReadLaterOnReadComplete
       },
       retention: {
         retentionDays

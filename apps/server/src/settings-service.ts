@@ -29,6 +29,7 @@ export type AppSettings = {
   reader: ReaderSettings;
   behavior: {
     markScrolledArticlesIgnored: boolean;
+    removeReadLaterOnReadComplete: boolean;
   };
   retention: {
     retentionDays: number;
@@ -57,7 +58,8 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
 
 const DEFAULT_LOCALE: SettingsLocale = "zh-CN";
 const DEFAULT_BEHAVIOR_SETTINGS = {
-  markScrolledArticlesIgnored: true
+  markScrolledArticlesIgnored: true,
+  removeReadLaterOnReadComplete: false
 } as const;
 const DEFAULT_RANKING_SETTINGS = {
   preferFreshness: 0.5,
@@ -86,6 +88,7 @@ type SettingsPatch = {
   };
   behavior?: {
     markScrolledArticlesIgnored?: boolean;
+    removeReadLaterOnReadComplete?: boolean;
   };
 };
 
@@ -161,12 +164,15 @@ export class SettingsService {
       );
     }
 
-    if (patch.behavior?.markScrolledArticlesIgnored !== undefined) {
+    if (
+      patch.behavior?.markScrolledArticlesIgnored !== undefined ||
+      patch.behavior?.removeReadLaterOnReadComplete !== undefined
+    ) {
       this.options.settings.setJson(
         BEHAVIOR_SETTINGS_KEY,
         {
           ...this.readBehaviorSettings(),
-          markScrolledArticlesIgnored: patch.behavior.markScrolledArticlesIgnored
+          ...patch.behavior
         },
         now
       );
@@ -230,7 +236,11 @@ export class SettingsService {
       markScrolledArticlesIgnored:
         typeof input.markScrolledArticlesIgnored === "boolean"
           ? input.markScrolledArticlesIgnored
-          : DEFAULT_BEHAVIOR_SETTINGS.markScrolledArticlesIgnored
+          : DEFAULT_BEHAVIOR_SETTINGS.markScrolledArticlesIgnored,
+      removeReadLaterOnReadComplete:
+        typeof input.removeReadLaterOnReadComplete === "boolean"
+          ? input.removeReadLaterOnReadComplete
+          : DEFAULT_BEHAVIOR_SETTINGS.removeReadLaterOnReadComplete
     };
   }
 }
@@ -262,21 +272,33 @@ function parseSettingsPatch(body: unknown): SettingsPatch {
 
 function parseBehaviorPatch(value: unknown): SettingsPatch["behavior"] {
   const input = readSectionObject(value, "behavior");
-  rejectUnknownKeys(input, ["markScrolledArticlesIgnored"], "behavior");
+  rejectUnknownKeys(
+    input,
+    ["markScrolledArticlesIgnored", "removeReadLaterOnReadComplete"],
+    "behavior"
+  );
 
-  if (!Object.hasOwn(input, "markScrolledArticlesIgnored")) {
-    return {};
+  const patch: NonNullable<SettingsPatch["behavior"]> = {};
+
+  if (Object.hasOwn(input, "markScrolledArticlesIgnored")) {
+    if (typeof input.markScrolledArticlesIgnored !== "boolean") {
+      throw validationError("behavior.markScrolledArticlesIgnored must be a boolean", {
+        field: "behavior.markScrolledArticlesIgnored"
+      });
+    }
+    patch.markScrolledArticlesIgnored = input.markScrolledArticlesIgnored;
   }
 
-  if (typeof input.markScrolledArticlesIgnored !== "boolean") {
-    throw validationError("behavior.markScrolledArticlesIgnored must be a boolean", {
-      field: "behavior.markScrolledArticlesIgnored"
-    });
+  if (Object.hasOwn(input, "removeReadLaterOnReadComplete")) {
+    if (typeof input.removeReadLaterOnReadComplete !== "boolean") {
+      throw validationError("behavior.removeReadLaterOnReadComplete must be a boolean", {
+        field: "behavior.removeReadLaterOnReadComplete"
+      });
+    }
+    patch.removeReadLaterOnReadComplete = input.removeReadLaterOnReadComplete;
   }
 
-  return {
-    markScrolledArticlesIgnored: input.markScrolledArticlesIgnored
-  };
+  return patch;
 }
 
 function parseUiPatch(value: unknown): SettingsPatch["ui"] {

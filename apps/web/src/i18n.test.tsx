@@ -747,6 +747,7 @@ describe("web i18n", () => {
     expect(html).toContain("设置");
     expect(html).toContain("界面语言");
     expect(html).toContain("查看算法透明说明");
+    expect(html).toContain("稍后读中的文章读完后，自动移出稍后读");
     expect(html).toContain("字号");
     expect(html).toContain("行高");
     expect(html).toContain("段距");

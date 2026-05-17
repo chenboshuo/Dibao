@@ -175,6 +175,7 @@ export type AppSettings = {
   reader: ReaderSettings;
   behavior: {
     markScrolledArticlesIgnored: boolean;
+    removeReadLaterOnReadComplete: boolean;
   };
   retention: {
     retentionDays: number;
@@ -197,6 +198,7 @@ export type UpdateSettingsInput = {
   >;
   behavior?: {
     markScrolledArticlesIgnored?: boolean;
+    removeReadLaterOnReadComplete?: boolean;
   };
   retention?: {
     retentionDays?: number;
@@ -357,7 +359,8 @@ export const defaultAppSettings: AppSettings = {
     theme: "paper"
   },
   behavior: {
-    markScrolledArticlesIgnored: true
+    markScrolledArticlesIgnored: true,
+    removeReadLaterOnReadComplete: false
   },
   retention: {
     retentionDays: 60,

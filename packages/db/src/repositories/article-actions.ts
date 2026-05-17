@@ -37,6 +37,7 @@ type ArticleStateDbRow = {
 };
 
 export interface ArticleActionRepository {
+  clearReadLater(articleId: string, now: number): ArticleStateSnapshot | null;
   record(input: RecordArticleActionInput): RecordArticleActionResult | null;
 }
 
@@ -69,6 +70,25 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
       now: input.now ?? Date.now(),
       eventId: input.eventId ?? randomUUID()
     });
+  }
+
+  clearReadLater(articleId: string, now: number): ArticleStateSnapshot | null {
+    if (!this.articleExists(articleId)) {
+      return null;
+    }
+
+    this.ensureStateRow(articleId, now);
+    this.db
+      .prepare(
+        `
+          update article_states
+          set read_later_at = null, updated_at = ?
+          where article_id = ?
+        `
+      )
+      .run(now, articleId);
+
+    return this.getState(articleId);
   }
 
   private articleExists(articleId: string): boolean {

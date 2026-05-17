@@ -1605,7 +1605,8 @@ describe("server API vertical slice", () => {
             theme: "paper"
           },
           behavior: {
-            markScrolledArticlesIgnored: true
+            markScrolledArticlesIgnored: true,
+            removeReadLaterOnReadComplete: false
           },
           retention: {
             retentionDays: 60,
@@ -1632,7 +1633,8 @@ describe("server API vertical slice", () => {
           retentionDays: 45
         },
         behavior: {
-          markScrolledArticlesIgnored: false
+          markScrolledArticlesIgnored: false,
+          removeReadLaterOnReadComplete: true
         }
       });
       expect(updated.statusCode, updated.body).toBe(200);
@@ -1653,7 +1655,8 @@ describe("server API vertical slice", () => {
               retentionDays: 45
             },
             behavior: {
-              markScrolledArticlesIgnored: false
+              markScrolledArticlesIgnored: false,
+              removeReadLaterOnReadComplete: true
             }
           }
         }
@@ -1685,7 +1688,8 @@ describe("server API vertical slice", () => {
               retentionDays: 45
             },
             behavior: {
-              markScrolledArticlesIgnored: false
+              markScrolledArticlesIgnored: false,
+              removeReadLaterOnReadComplete: true
             }
           }
         }
@@ -1715,6 +1719,11 @@ describe("server API vertical slice", () => {
         {
           behavior: {
             markScrolledArticlesIgnored: "yes"
+          }
+        },
+        {
+          behavior: {
+            removeReadLaterOnReadComplete: "yes"
           }
         },
         {
@@ -3449,6 +3458,57 @@ describe("server API vertical slice", () => {
           eventWeight: 0.1,
           metadataJson: JSON.stringify({ durationMs: 42000, progress: 0.72 })
         }
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("can auto-remove completed articles from read later without recording removal behavior", async () => {
+    const db = createFixtureDatabase();
+    db.prepare(
+      `
+        insert into app_settings (key, value_json, updated_at)
+        values (?, ?, ?)
+        on conflict(key) do update set value_json = excluded.value_json
+      `
+    ).run(
+      "behavior.settings",
+      JSON.stringify({
+        markScrolledArticlesIgnored: true,
+        removeReadLaterOnReadComplete: true
+      }),
+      5400
+    );
+    const app = buildServer({ db, logger: false, now: () => 5400 });
+
+    try {
+      const readLater = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "read_later"
+      });
+      const complete = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "read_progress",
+        progress: 0.9
+      });
+
+      expect(readLater.statusCode, readLater.body).toBe(200);
+      expect(readLater.json().data.state).toMatchObject({
+        readLater: true
+      });
+      expect(complete.statusCode, complete.body).toBe(200);
+      expect(complete.json().data.state).toMatchObject({
+        readLater: false,
+        readingProgress: 0.9,
+        interactionStatus: "read"
+      });
+      expect(getArticleStateRow(db, "article_recommended")).toMatchObject({
+        readLaterAt: null,
+        readingProgress: 0.9
+      });
+      expect(listBehaviorEventTypes(db, "article_recommended")).toEqual([
+        "read_later",
+        "read_progress"
       ]);
     } finally {
       await app.close();

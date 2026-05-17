@@ -188,9 +188,10 @@ export const zhCN = {
       },
       behavior: {
         title: "行为记录",
-        body: "控制列表浏览时如何记录轻量行为。该设置只影响最新和推荐列表。",
+        body: "控制列表浏览和稍后读队列中的自动行为记录。",
         algorithmTransparencyLink: "查看算法透明说明",
-        markScrolledArticlesIgnored: "滚过未打开文章后，将其标记为已忽略并移出未读"
+        markScrolledArticlesIgnored: "滚过未打开文章后，将其标记为已忽略并移出未读",
+        removeReadLaterOnReadComplete: "稍后读中的文章读完后，自动移出稍后读"
       },
       reader: {
         title: "阅读",
@@ -856,9 +857,10 @@ export const enUS = {
       },
       behavior: {
         title: "Behavior tracking",
-        body: "Control lightweight behavior capture while browsing lists. This only applies to Latest and Recommended.",
+        body: "Control automatic behavior capture for browsing lists and the read-later queue.",
         algorithmTransparencyLink: "View algorithm transparency",
-        markScrolledArticlesIgnored: "Mark unopened scrolled-past articles as ignored and remove them from unread"
+        markScrolledArticlesIgnored: "Mark unopened scrolled-past articles as ignored and remove them from unread",
+        removeReadLaterOnReadComplete: "Remove read-later articles after completed reading"
       },
       reader: {
         title: "Reading",

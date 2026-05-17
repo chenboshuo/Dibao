@@ -245,6 +245,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     ranking: rankingService,
     now: options.now
   });
+  const settingsService = new SettingsService({
+    settings,
+    now: options.now
+  });
   const embeddingJobService = new EmbeddingJobService({
     articles,
     embeddings,
@@ -285,6 +289,8 @@ export function buildServer(options: BuildServerOptions = {}) {
     actions: articleActions,
     profile: profileService,
     rankingJobs: rankingJobService,
+    removeReadLaterOnReadComplete: () =>
+      settingsService.getSettings().behavior.removeReadLaterOnReadComplete,
     now: options.now
   });
   const feedManagementService = new FeedManagementService({
@@ -308,10 +314,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     settings,
     articles,
     vectorStore,
-    now: options.now
-  });
-  const settingsService = new SettingsService({
-    settings,
     now: options.now
   });
   const retentionCleanupJobService = new RetentionCleanupJobService({

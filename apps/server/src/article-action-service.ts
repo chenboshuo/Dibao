@@ -29,6 +29,7 @@ export type ArticleActionServiceOptions = {
   actions: ArticleActionRepository;
   profile?: Pick<ProfileService, "processEvent">;
   rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll" | "enqueueArticles">;
+  removeReadLaterOnReadComplete?: () => boolean;
   now?: () => number;
 };
 
@@ -49,6 +50,21 @@ export class ArticleActionService {
       throw new ArticleActionServiceError(404, "NOT_FOUND", "Article not found");
     }
 
+    let finalResult = result;
+    if (
+      result.state.readLater &&
+      isReadCompleteAction(input) &&
+      this.options.removeReadLaterOnReadComplete?.()
+    ) {
+      const nextState = this.options.actions.clearReadLater(input.articleId, this.now());
+      if (nextState) {
+        finalResult = {
+          ...result,
+          state: nextState
+        };
+      }
+    }
+
     const profileResult = this.options.profile?.processEvent(result.eventId);
     if (
       profileResult?.profileChanged ||
@@ -59,10 +75,22 @@ export class ArticleActionService {
       this.options.rankingJobs?.enqueueArticles([input.articleId]);
     }
 
-    return result;
+    return finalResult;
   }
 }
 
 function isHighVolumeArticleOnlyAction(type: ArticleActionType): boolean {
   return type === "impression" || type === "open" || type === "read_progress";
+}
+
+function isReadCompleteAction(input: RecordArticleActionServiceInput): boolean {
+  if (input.type === "mark_read") {
+    return true;
+  }
+
+  return (
+    input.type === "read_progress" &&
+    typeof input.progress === "number" &&
+    input.progress >= 0.9
+  );
 }
