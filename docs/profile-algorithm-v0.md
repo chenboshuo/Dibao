@@ -201,16 +201,20 @@ max_cluster_weight: 100
 使用 cosine similarity。
 
 ```text
-positive_merge_threshold: 0.72
-positive_create_threshold: 0.48
-negative_merge_threshold: 0.76
-negative_create_threshold: 0.55
+positive_merge_threshold: 0.82
+positive_create_threshold: 0.62
+positive_interest_match_threshold: 0.76
+negative_merge_threshold: 0.84
+negative_create_threshold: 0.65
+cluster_compaction_similarity_threshold: 0.92
 ```
 
 解释：
 
-- 正向兴趣可以更宽一些，方便学习新主题。
+- 正向兴趣的建簇和合并都保持较高阈值，避免把语义跨度很大的文章合并成一个“超级簇”。
+- `positive_interest_match_threshold` 是展示“命中兴趣簇”和给出兴趣加分的最低阈值。低于该值的相似度不会产生兴趣解释，也不会获得兴趣匹配分。
 - 负向兴趣更谨慎，避免误伤。
+- `cluster_compaction_similarity_threshold` 高于 merge threshold，只合并非常相近的旧簇。
 - 低于 create threshold 的行为不创建新簇，只记录行为统计。
 
 ### 更新流程
@@ -225,6 +229,34 @@ negative_create_threshold: 0.55
 7. similarity < merge_threshold 且 similarity >= create_threshold -> 创建新簇。
 8. similarity < create_threshold -> 只记录来源统计，不更新兴趣簇。
 ```
+
+## 兴趣簇过拟合诊断
+
+推荐状态接口会基于最近一批画像相关行为，为每个展示中的兴趣簇计算一组只读诊断指标，用来判断某个簇是否可能是过拟合产物。诊断只读取会影响画像的强信号和高阅读进度，不把 `open`、`impression` 等轻量行为当作支撑证据。
+
+```text
+support_article_count: 命中该簇的支撑文章数
+support_event_count: 命中该簇的支撑行为数
+source_count: 支撑文章覆盖的来源数量
+strong_signal_ratio: 强行为占比，like/favorite/read_later/read_complete/not_interested/hide 计为强行为
+top_source_share: 最大来源在支撑行为中的占比
+average_similarity: 支撑文章与簇中心的平均相似度
+max_similarity: 支撑文章与簇中心的最高相似度
+overfit_risk: low | medium | high
+```
+
+风险提示：
+
+```text
+HIGH_WEIGHT_LOW_SUPPORT: 权重很高，但支撑文章不足
+SINGLE_SOURCE_DOMINANT: 支撑文章主要来自单一来源
+TOP_SOURCE_DOMINANT: 最大来源占比过高
+WEAK_SIGNAL_HEAVY: 支撑行为中强信号占比偏低
+LOW_INTERNAL_SIMILARITY: 支撑文章与簇中心的平均相似度偏低
+OVERFIT_RISK_HIGH: 多个风险因素叠加，建议观察或后续拆分/降权
+```
+
+这些指标不直接改变用户画像，只用于解释和排查。当前的第一层缓解是：收紧建簇/合并阈值，并要求文章达到 `positive_interest_match_threshold` 后才显示“命中兴趣簇”或获得兴趣匹配加分。
 
 ### Centroid 更新公式
 

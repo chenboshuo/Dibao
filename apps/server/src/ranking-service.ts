@@ -173,7 +173,7 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       }
     }
 
-    if (!best || best.similarity <= 0) {
+    if (!best || best.similarity < profileAlgorithmDefaults.positiveInterestMatchThreshold) {
       return null;
     }
 
@@ -340,7 +340,9 @@ function interestMatchesFor(
     const weightedMatch = Math.max(0, similarity) * cluster.weightNorm;
 
     if (cluster.polarity === "positive") {
-      positiveInterestMatch = Math.max(positiveInterestMatch, weightedMatch);
+      if (similarity >= profileAlgorithmDefaults.positiveInterestMatchThreshold) {
+        positiveInterestMatch = Math.max(positiveInterestMatch, weightedMatch);
+      }
     } else {
       negativeInterestMatch = Math.max(negativeInterestMatch, weightedMatch);
       if (weightedMatch === negativeInterestMatch) {

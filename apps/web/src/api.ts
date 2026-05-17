@@ -305,6 +305,9 @@ export type RecommendationStatus = {
   activeRankContext: string;
   coverage: {
     candidateCount: number;
+    eligibleArticleCount?: number;
+    missingEmbeddingCount?: number;
+    staleEmbeddingCount?: number;
     embeddingCount: number;
     coverageRatio: number;
     pendingJobs: number;
@@ -337,6 +340,18 @@ export type RecommendationClusterItem = {
   displayIndex?: number;
   weight: number;
   sampleCount: number;
+  diagnostics?: {
+    supportArticleCount: number;
+    supportEventCount: number;
+    sourceCount: number;
+    strongSignalCount: number;
+    strongSignalRatio: number;
+    topSourceShare: number;
+    averageSimilarity: number;
+    maxSimilarity: number;
+    overfitRisk: "low" | "medium" | "high";
+    warnings: string[];
+  };
   lastMatchedAt: string | null;
   updatedAt: string;
 };

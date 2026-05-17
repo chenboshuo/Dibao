@@ -392,6 +392,19 @@ export const zhCN = {
       fallbackName: (index: number) => `兴趣簇 ${index}`,
       details: (weight: string, sampleCount: number, updatedAt: string) =>
         `权重 ${weight} · 样本 ${sampleCount} · 更新 ${updatedAt}`,
+      diagnostics: (
+        supportArticleCount: number,
+        sourceCount: number,
+        strongSignalRatio: string,
+        topSourceShare: string,
+        averageSimilarity: string
+      ) =>
+        `诊断：支撑文章 ${supportArticleCount} · 来源 ${sourceCount} · 强信号 ${strongSignalRatio} · 最大来源占比 ${topSourceShare} · 平均相似度 ${averageSimilarity}`,
+      risk: {
+        low: "过拟合风险低",
+        medium: "过拟合风险中",
+        high: "过拟合风险高"
+      },
       matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
         `命中「${name}」，相似度 ${similarity}，簇权重 ${weight}，样本 ${sampleCount}。`
     },
@@ -1075,6 +1088,19 @@ export const enUS = {
       fallbackName: (index: number) => `Interest cluster ${index}`,
       details: (weight: string, sampleCount: number, updatedAt: string) =>
         `Weight ${weight} · samples ${sampleCount} · updated ${updatedAt}`,
+      diagnostics: (
+        supportArticleCount: number,
+        sourceCount: number,
+        strongSignalRatio: string,
+        topSourceShare: string,
+        averageSimilarity: string
+      ) =>
+        `Diagnostics: support articles ${supportArticleCount} · sources ${sourceCount} · strong signals ${strongSignalRatio} · top-source share ${topSourceShare} · average similarity ${averageSimilarity}`,
+      risk: {
+        low: "Low overfit risk",
+        medium: "Medium overfit risk",
+        high: "High overfit risk"
+      },
       matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
         `Matched "${name}" with similarity ${similarity}, cluster weight ${weight}, samples ${sampleCount}.`
     },

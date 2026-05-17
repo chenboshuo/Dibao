@@ -345,6 +345,18 @@ export type InterestClusterRow = {
   updatedAt: number;
 };
 
+export type InterestClusterEvidenceRow = {
+  articleId: string;
+  feedId: string;
+  feedTitle: string;
+  eventType: BehaviorEventType;
+  metadataJson: string | null;
+  readingProgress: number;
+  title: string;
+  vectorBlob: Buffer;
+  createdAt: number;
+};
+
 export type UpsertInterestClusterInput = {
   id: string;
   embeddingIndexId: string;

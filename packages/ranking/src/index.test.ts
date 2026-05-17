@@ -17,6 +17,15 @@ describe("ranking package", () => {
     expect(profileAlgorithmDefaults.negativeMergeThreshold).toBeGreaterThan(
       profileAlgorithmDefaults.positiveMergeThreshold
     );
+    expect(profileAlgorithmDefaults.positiveMergeThreshold).toBeGreaterThan(
+      profileAlgorithmDefaults.positiveCreateThreshold
+    );
+    expect(profileAlgorithmDefaults.positiveInterestMatchThreshold).toBeGreaterThan(
+      profileAlgorithmDefaults.positiveCreateThreshold
+    );
+    expect(profileAlgorithmDefaults.clusterCompactionSimilarityThreshold).toBeGreaterThan(
+      profileAlgorithmDefaults.positiveMergeThreshold
+    );
   });
 
   it("clamps values", () => {

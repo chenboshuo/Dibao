@@ -1267,6 +1267,27 @@ describe("server API vertical slice", () => {
       contentHash: "article_recommended:2000",
       now: 6100
     });
+    new SqliteProfileRepository(db).upsertCluster({
+      id: "cluster_overfit_probe",
+      embeddingIndexId: index.id,
+      polarity: "positive",
+      centroidVectorBlob: toVectorBlob([1, 0, 0]),
+      weight: 24,
+      sampleCount: 1,
+      now: 6150
+    });
+    db.prepare(
+      `
+        insert into behavior_events (
+          id,
+          article_id,
+          event_type,
+          event_weight,
+          created_at
+        )
+        values (?, ?, ?, ?, ?)
+      `
+    ).run("event_cluster_favorite", "article_recommended", "favorite", 6, 6160);
     db.prepare(
       `
         insert into article_states (
@@ -1338,6 +1359,27 @@ describe("server API vertical slice", () => {
             failedJobs: 0,
             lastFailedAt: null,
             lastError: null
+          },
+          clusters: {
+            positive: 1,
+            negative: 0,
+            items: [
+              {
+                id: "cluster_overfit_probe",
+                diagnostics: {
+                  supportArticleCount: 1,
+                  supportEventCount: 1,
+                  sourceCount: 1,
+                  strongSignalCount: 1,
+                  strongSignalRatio: 1,
+                  topSourceShare: 1,
+                  averageSimilarity: 1,
+                  maxSimilarity: 1,
+                  overfitRisk: "medium",
+                  warnings: ["HIGH_WEIGHT_LOW_SUPPORT"]
+                }
+              }
+            ]
           },
           warnings: expect.arrayContaining([
             {

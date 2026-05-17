@@ -4,6 +4,7 @@ import type {
   DibaoDatabase,
   FeedBehaviorEventRow,
   FeedStatsInput,
+  InterestClusterEvidenceRow,
   InterestClusterPolarity,
   InterestClusterRow,
   ProfileBehaviorEventRow,
@@ -53,6 +54,7 @@ export interface ProfileRepository {
     embeddingIndexId?: string;
     polarity?: InterestClusterPolarity;
   }): InterestClusterRow[];
+  listClusterEvidence(input: { embeddingIndexId: string; limit?: number }): InterestClusterEvidenceRow[];
   listEventsForArticles(input: {
     articleIds: string[];
     embeddingIndexId: string;
@@ -250,6 +252,49 @@ export class SqliteProfileRepository implements ProfileRepository {
         )
         .all(...params) as InterestClusterDbRow[]
     ).map(mapCluster);
+  }
+
+  listClusterEvidence(input: { embeddingIndexId: string; limit?: number }): InterestClusterEvidenceRow[] {
+    const limit = Math.max(1, Math.min(5000, input.limit ?? 2000));
+    return this.db
+      .prepare(
+        `
+          select
+            a.id as articleId,
+            a.feed_id as feedId,
+            f.title as feedTitle,
+            be.event_type as eventType,
+            be.metadata_json as metadataJson,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            a.title,
+            ae.vector_blob as vectorBlob,
+            be.created_at as createdAt
+          from behavior_events be
+          join articles a on a.id = be.article_id
+          join feeds f on f.id = a.feed_id
+          join article_embeddings ae
+            on ae.article_id = a.id
+           and ae.embedding_index_id = ?
+          left join article_states s on s.article_id = a.id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and ae.vector_blob is not null
+            and be.event_type in (
+              'favorite',
+              'like',
+              'read_later',
+              'read_complete',
+              'read_progress',
+              'hide',
+              'not_interested'
+            )
+          order by be.created_at desc, be.id
+          limit ?
+        `
+      )
+      .all(input.embeddingIndexId, limit) as InterestClusterEvidenceRow[];
   }
 
   upsertCluster(input: UpsertInterestClusterInput): InterestClusterRow {

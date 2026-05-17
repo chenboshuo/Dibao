@@ -22,6 +22,7 @@ import {
   SqliteRankingRepository,
   SqliteSessionRepository,
   SqliteVecVectorStore,
+  fromVectorBlob,
   type ArticleActionType,
   type ArticleDetailRow,
   type ArticleListInput,
@@ -34,11 +35,13 @@ import {
   type FeedFolderRow,
   type FeedListInput,
   type FeedRow,
+  type InterestClusterEvidenceRow,
   type InterestClusterRow,
   type JobRow,
   type JobStatus,
   type JobType
 } from "@dibao/db";
+import { cosineSimilarity, profileAlgorithmDefaults } from "@dibao/ranking";
 import { dibaoVersion, type ApiError } from "@dibao/shared";
 import {
   ArticleActionService,
@@ -1204,12 +1207,15 @@ function getRecommendationStatus(options: {
   const clusters = options.profiles.countClusters({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
+  const clusterEvidence = activeIndex
+    ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 2000 })
+    : [];
   const clusterItems = options.profiles
     .listClusters({
       ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
     })
     .slice(0, 12)
-    .map((cluster, index) => mapRecommendationCluster(cluster, index + 1));
+    .map((cluster, index) => mapRecommendationCluster(cluster, index + 1, clusterEvidence));
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
@@ -1246,7 +1252,12 @@ function getRecommendationStatus(options: {
   };
 }
 
-function mapRecommendationCluster(cluster: InterestClusterRow, displayIndex: number) {
+function mapRecommendationCluster(
+  cluster: InterestClusterRow,
+  displayIndex: number,
+  evidence: InterestClusterEvidenceRow[]
+) {
+  const diagnostics = clusterDiagnostics(cluster, evidence);
   return {
     id: cluster.id,
     polarity: cluster.polarity,
@@ -1254,8 +1265,82 @@ function mapRecommendationCluster(cluster: InterestClusterRow, displayIndex: num
     displayIndex,
     weight: cluster.weight,
     sampleCount: cluster.sampleCount,
+    diagnostics,
     lastMatchedAt: timestampToIso(cluster.lastMatchedAt),
     updatedAt: timestampToIso(cluster.updatedAt)
+  };
+}
+
+function clusterDiagnostics(cluster: InterestClusterRow, evidence: InterestClusterEvidenceRow[]) {
+  const centroid = fromVectorBlob(cluster.centroidVectorBlob);
+  const similarityThreshold =
+    cluster.polarity === "positive"
+      ? profileAlgorithmDefaults.positiveCreateThreshold
+      : profileAlgorithmDefaults.negativeCreateThreshold;
+  const matches = evidence
+    .map((item) => ({
+      item,
+      similarity: cosineSimilarity(centroid, fromVectorBlob(item.vectorBlob))
+    }))
+    .filter(({ item, similarity }) => {
+      if (similarity < similarityThreshold) {
+        return false;
+      }
+      const polarity = profilePolarityForEvent(item);
+      return polarity === cluster.polarity;
+    });
+
+  const articleIds = new Set(matches.map(({ item }) => item.articleId));
+  const sourceCounts = new Map<string, number>();
+  let strongSignalCount = 0;
+  let similarityTotal = 0;
+  let maxSimilarity = 0;
+
+  for (const match of matches) {
+    sourceCounts.set(match.item.feedId, (sourceCounts.get(match.item.feedId) ?? 0) + 1);
+    if (isStrongProfileSignal(match.item)) {
+      strongSignalCount += 1;
+    }
+    similarityTotal += match.similarity;
+    maxSimilarity = Math.max(maxSimilarity, match.similarity);
+  }
+
+  const supportEventCount = matches.length;
+  const sourceCount = sourceCounts.size;
+  const topSourceEventCount = Math.max(0, ...sourceCounts.values());
+  const topSourceShare = supportEventCount > 0 ? topSourceEventCount / supportEventCount : 0;
+  const strongSignalRatio =
+    supportEventCount > 0 ? strongSignalCount / supportEventCount : 0;
+  const averageSimilarity =
+    supportEventCount > 0 ? similarityTotal / supportEventCount : 0;
+  const risk = overfitRisk({
+    supportArticleCount: articleIds.size,
+    sourceCount,
+    strongSignalRatio,
+    topSourceShare,
+    averageSimilarity,
+    weight: cluster.weight
+  });
+
+  return {
+    supportArticleCount: articleIds.size,
+    supportEventCount,
+    sourceCount,
+    strongSignalCount,
+    strongSignalRatio: roundMetric(strongSignalRatio),
+    topSourceShare: roundMetric(topSourceShare),
+    averageSimilarity: roundMetric(averageSimilarity),
+    maxSimilarity: roundMetric(maxSimilarity),
+    overfitRisk: risk,
+    warnings: overfitWarnings({
+      supportArticleCount: articleIds.size,
+      sourceCount,
+      strongSignalRatio,
+      topSourceShare,
+      averageSimilarity,
+      weight: cluster.weight,
+      risk
+    })
   };
 }
 
@@ -1428,6 +1513,136 @@ function mapCoverage(coverage: RecommendationCoverage) {
     lastFailedAt: timestampToIso(coverage.lastFailedAt),
     lastError: coverage.lastError
   };
+}
+
+function profilePolarityForEvent(
+  event: Pick<InterestClusterEvidenceRow, "eventType" | "metadataJson" | "readingProgress">
+): "positive" | "negative" | null {
+  switch (event.eventType) {
+    case "favorite":
+    case "like":
+    case "read_later":
+    case "read_complete":
+      return "positive";
+    case "read_progress":
+      return readProgressForEvidence(event) >= profileAlgorithmDefaults.readCompleteProgressThreshold
+        ? "positive"
+        : null;
+    case "hide":
+    case "not_interested":
+      return "negative";
+    default:
+      return null;
+  }
+}
+
+function isStrongProfileSignal(
+  event: Pick<InterestClusterEvidenceRow, "eventType" | "metadataJson" | "readingProgress">
+): boolean {
+  return (
+    event.eventType === "favorite" ||
+    event.eventType === "like" ||
+    event.eventType === "read_later" ||
+    event.eventType === "read_complete" ||
+    event.eventType === "hide" ||
+    event.eventType === "not_interested" ||
+    (event.eventType === "read_progress" &&
+      readProgressForEvidence(event) >= profileAlgorithmDefaults.readCompleteProgressThreshold)
+  );
+}
+
+function readProgressForEvidence(
+  event: Pick<InterestClusterEvidenceRow, "metadataJson" | "readingProgress">
+): number {
+  if (event.metadataJson) {
+    try {
+      const metadata = JSON.parse(event.metadataJson) as unknown;
+      const progress =
+        typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
+          ? (metadata as { progress?: unknown }).progress
+          : undefined;
+      if (typeof progress === "number" && Number.isFinite(progress)) {
+        return progress;
+      }
+    } catch {
+      // Fall back to persisted state.
+    }
+  }
+
+  return event.readingProgress;
+}
+
+function overfitRisk(input: {
+  supportArticleCount: number;
+  sourceCount: number;
+  strongSignalRatio: number;
+  topSourceShare: number;
+  averageSimilarity: number;
+  weight: number;
+}): "low" | "medium" | "high" {
+  let riskScore = 0;
+  if (input.weight >= 20 && input.supportArticleCount < 5) {
+    riskScore += 2;
+  } else if (input.supportArticleCount < 3) {
+    riskScore += 2;
+  } else if (input.supportArticleCount < 6) {
+    riskScore += 1;
+  }
+  if (input.sourceCount <= 1 && input.supportArticleCount >= 3) {
+    riskScore += 1;
+  }
+  if (input.topSourceShare >= 0.75 && input.supportArticleCount >= 4) {
+    riskScore += 1;
+  }
+  if (input.strongSignalRatio < 0.35) {
+    riskScore += 1;
+  }
+  if (input.averageSimilarity < profileAlgorithmDefaults.positiveMergeThreshold) {
+    riskScore += 1;
+  }
+
+  if (riskScore >= 3) {
+    return "high";
+  }
+  if (riskScore >= 1) {
+    return "medium";
+  }
+  return "low";
+}
+
+function overfitWarnings(input: {
+  supportArticleCount: number;
+  sourceCount: number;
+  strongSignalRatio: number;
+  topSourceShare: number;
+  averageSimilarity: number;
+  weight: number;
+  risk: "low" | "medium" | "high";
+}): string[] {
+  const warnings: string[] = [];
+  if (input.risk === "high") {
+    warnings.push("OVERFIT_RISK_HIGH");
+  }
+  if (input.weight >= 20 && input.supportArticleCount < 5) {
+    warnings.push("HIGH_WEIGHT_LOW_SUPPORT");
+  }
+  if (input.sourceCount <= 1 && input.supportArticleCount >= 3) {
+    warnings.push("SINGLE_SOURCE_DOMINANT");
+  }
+  if (input.topSourceShare >= 0.75 && input.supportArticleCount >= 4) {
+    warnings.push("TOP_SOURCE_DOMINANT");
+  }
+  if (input.strongSignalRatio < 0.35) {
+    warnings.push("WEAK_SIGNAL_HEAVY");
+  }
+  if (input.averageSimilarity < profileAlgorithmDefaults.positiveMergeThreshold) {
+    warnings.push("LOW_INTERNAL_SIMILARITY");
+  }
+  return warnings;
+}
+
+function roundMetric(value: number): number {
+  return Number(value.toFixed(4));
 }
 
 function parseJobQuery(query: JobQuery):

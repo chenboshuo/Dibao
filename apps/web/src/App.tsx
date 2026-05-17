@@ -2623,6 +2623,26 @@ export function AlgorithmTransparencyPage(props: {
                       formatDate(cluster.updatedAt)
                     )}
                   </p>
+                  {cluster.diagnostics ? (
+                    <p>
+                      <strong>
+                        {t.algorithmTransparency.clusters.risk[
+                          cluster.diagnostics.overfitRisk
+                        ]}
+                      </strong>
+                      <br />
+                      {t.algorithmTransparency.clusters.diagnostics(
+                        cluster.diagnostics.supportArticleCount,
+                        cluster.diagnostics.sourceCount,
+                        formatPercent(cluster.diagnostics.strongSignalRatio),
+                        formatPercent(cluster.diagnostics.topSourceShare),
+                        formatPercent(cluster.diagnostics.averageSimilarity)
+                      )}
+                      {cluster.diagnostics.warnings.length > 0
+                        ? ` · ${cluster.diagnostics.warnings.join(" / ")}`
+                        : ""}
+                    </p>
+                  ) : null}
                 </article>
               ))}
             </div>

@@ -619,6 +619,18 @@ describe("web i18n", () => {
                   label: null,
                   weight: 8,
                   sampleCount: 3,
+                  diagnostics: {
+                    supportArticleCount: 2,
+                    supportEventCount: 3,
+                    sourceCount: 1,
+                    strongSignalCount: 1,
+                    strongSignalRatio: 0.3333,
+                    topSourceShare: 1,
+                    averageSimilarity: 0.71,
+                    maxSimilarity: 0.92,
+                    overfitRisk: "high",
+                    warnings: ["OVERFIT_RISK_HIGH", "SINGLE_SOURCE_DOMINANT"]
+                  },
                   lastMatchedAt: "2026-05-14T08:08:00.000Z",
                   updatedAt: "2026-05-14T08:09:00.000Z"
                 }
@@ -650,6 +662,9 @@ describe("web i18n", () => {
     expect(html).toContain("当前兴趣簇");
     expect(html).toContain("兴趣簇 1");
     expect(html).toContain("权重 8");
+    expect(html).toContain("过拟合风险高");
+    expect(html).toContain("支撑文章 2");
+    expect(html).toContain("SINGLE_SOURCE_DOMINANT");
     expect(html).toContain("用户模型卡");
     expect(html).toContain("+8.0");
     expect(html).toContain("排序流程图");

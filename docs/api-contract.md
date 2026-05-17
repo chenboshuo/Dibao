@@ -1403,6 +1403,9 @@ Planned / not implemented. 当前版本不提供 retry API。
     "activeRankContext": "index_01",
     "coverage": {
       "candidateCount": 120,
+      "eligibleArticleCount": 120,
+      "missingEmbeddingCount": 78,
+      "staleEmbeddingCount": 0,
       "embeddingCount": 42,
       "coverageRatio": 0.35,
       "pendingJobs": 2,
@@ -1428,6 +1431,18 @@ Planned / not implemented. 当前版本不提供 retry API。
           "displayIndex": 1,
           "weight": 8,
           "sampleCount": 3,
+          "diagnostics": {
+            "supportArticleCount": 3,
+            "supportEventCount": 4,
+            "sourceCount": 2,
+            "strongSignalCount": 3,
+            "strongSignalRatio": 0.75,
+            "topSourceShare": 0.5,
+            "averageSimilarity": 0.83,
+            "maxSimilarity": 0.94,
+            "overfitRisk": "low",
+            "warnings": []
+          },
           "lastMatchedAt": "2026-05-14T08:08:00.000Z",
           "updatedAt": "2026-05-14T08:09:00.000Z"
         }
@@ -1457,6 +1472,18 @@ personalized
 embedding
 degraded
 ```
+
+`clusters.items[].diagnostics` 基于最近一批画像相关行为计算，用于排查兴趣簇是否可能过拟合：
+
+- `supportArticleCount` / `supportEventCount`: 支撑该簇的文章与行为数量。
+- `sourceCount`: 支撑文章覆盖的来源数量。
+- `strongSignalRatio`: 强行为占比，`like`、`favorite`、`read_later`、`read_complete`、`hide`、`not_interested` 和高完成度 `read_progress` 计为强行为。
+- `topSourceShare`: 最大来源在支撑行为中的占比。
+- `averageSimilarity` / `maxSimilarity`: 支撑文章与簇中心的相似度。
+- `overfitRisk`: `low`、`medium`、`high`。
+- `warnings`: 机器码数组，可能包含 `OVERFIT_RISK_HIGH`、`HIGH_WEIGHT_LOW_SUPPORT`、`SINGLE_SOURCE_DOMINANT`、`TOP_SOURCE_DOMINANT`、`WEAK_SIGNAL_HEAVY`、`LOW_INTERNAL_SIMILARITY`。
+
+诊断字段只用于解释与 QA，不直接修改兴趣簇。实际推荐命中仍要求文章与正向簇达到算法文档中的 `positive_interest_match_threshold`。
 
 判定顺序：
 
