@@ -324,6 +324,7 @@ export type ArticleRankExplanationSourceRow = {
   publishedAt: number | null;
   discoveredAt: number;
   state: ArticleStateSnapshot;
+  vectorBlob: Buffer | null;
   rank: ArticleRankScoreComponentsRow | null;
   rankingStatus: ArticleRankingEmbeddingStatus | "rank_pending";
 };

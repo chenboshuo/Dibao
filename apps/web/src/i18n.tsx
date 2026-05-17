@@ -367,6 +367,7 @@ export const zhCN = {
     noWarnings: "暂无警告",
     sections: {
       currentStatus: "当前推荐状态",
+      currentClusters: "当前兴趣簇",
       terms: "先解释几个词",
       scoreTable: "行为积分表",
       rankingFlow: "排序流程图",
@@ -381,6 +382,17 @@ export const zhCN = {
       clusters: "兴趣簇",
       lastUpdates: "最近更新",
       warnings: "Warnings"
+    },
+    clusters: {
+      empty: "还没有形成兴趣簇。继续点赞、收藏、稍后读或读完文章后，系统会自动生成。",
+      generated: "兴趣簇不是系统预设的，而是根据你的行为自动生成和更新。",
+      positive: "正向",
+      negative: "负向",
+      fallbackName: (index: number) => `兴趣簇 ${index}`,
+      details: (weight: string, sampleCount: number, updatedAt: string) =>
+        `权重 ${weight} · 样本 ${sampleCount} · 更新 ${updatedAt}`,
+      matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
+        `命中「${name}」，相似度 ${similarity}，簇权重 ${weight}，样本 ${sampleCount}。`
     },
     terms: [
       {
@@ -602,6 +614,7 @@ export const zhCN = {
     },
     reasons: {
       interest: "与你近期的正向兴趣相似，因此排序更靠前。",
+      interestCluster: (summary: string) => `与你近期的正向兴趣相似，因此排序更靠前。${summary}`,
       sourcePositive: (label: string) => `来源 ${label} 对排序有正向影响。`,
       sourceNegative: (label: string) => `来源 ${label} 当前权重偏低。`,
       freshness: "文章较新，获得新鲜度加分。",
@@ -1036,6 +1049,7 @@ export const enUS = {
     noWarnings: "No warnings",
     sections: {
       currentStatus: "Current recommendation status",
+      currentClusters: "Current interest clusters",
       terms: "Terms",
       scoreTable: "Behavior score table",
       rankingFlow: "Ranking flow",
@@ -1050,6 +1064,17 @@ export const enUS = {
       clusters: "Clusters",
       lastUpdates: "Last updates",
       warnings: "Warnings"
+    },
+    clusters: {
+      empty: "No interest clusters have formed yet. Likes, favorites, read-later saves, and completed reads will generate them automatically.",
+      generated: "Interest clusters are not preset by the system. They are generated and updated from your behavior.",
+      positive: "Positive",
+      negative: "Negative",
+      fallbackName: (index: number) => `Interest cluster ${index}`,
+      details: (weight: string, sampleCount: number, updatedAt: string) =>
+        `Weight ${weight} · samples ${sampleCount} · updated ${updatedAt}`,
+      matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
+        `Matched "${name}" with similarity ${similarity}, cluster weight ${weight}, samples ${sampleCount}.`
     },
     terms: [
       {
@@ -1271,6 +1296,8 @@ export const enUS = {
     },
     reasons: {
       interest: "This is similar to recent positive interests, so it ranks higher.",
+      interestCluster: (summary: string) =>
+        `This is similar to recent positive interests, so it ranks higher. ${summary}`,
       sourcePositive: (label: string) => `Source ${label} is helping this rank higher.`,
       sourceNegative: (label: string) => `Source ${label} currently has a lower weight.`,
       freshness: "The article is recent and receives a freshness boost.",

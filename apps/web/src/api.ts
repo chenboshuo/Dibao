@@ -106,6 +106,9 @@ export type RankExplanationReason = {
   type: RankExplanationReasonType;
   label: string;
   impact: "positive" | "negative" | "neutral";
+  cluster?: RecommendationClusterItem & {
+    similarity: number;
+  };
 };
 
 export type RankExplanation = {
@@ -313,6 +316,7 @@ export type RecommendationStatus = {
   clusters: {
     positive: number;
     negative: number;
+    items?: RecommendationClusterItem[];
   };
   rankedArticles: {
     base: number;
@@ -324,6 +328,16 @@ export type RecommendationStatus = {
     code: string;
     message: string;
   }>;
+};
+
+export type RecommendationClusterItem = {
+  id: string;
+  polarity: "positive" | "negative";
+  label: string | null;
+  weight: number;
+  sampleCount: number;
+  lastMatchedAt: string | null;
+  updatedAt: string;
 };
 
 export type AuthOkResponse = {

@@ -58,6 +58,7 @@ type ArticleRankExplanationSourceDbRow = {
   diversityScore: number | null;
   penaltyScore: number | null;
   calculatedAt: number | null;
+  vectorBlob: Buffer | null;
   rankingStatus: ArticleRankExplanationSourceRow["rankingStatus"];
 };
 
@@ -153,6 +154,7 @@ export class SqliteRankingRepository implements RankingRepository {
             coalesce(rs.diversity_score, base_rs.diversity_score) as diversityScore,
             coalesce(rs.penalty_score, base_rs.penalty_score) as penaltyScore,
             coalesce(rs.calculated_at, base_rs.calculated_at) as calculatedAt,
+            ae.vector_blob as vectorBlob,
             case
               when ? is null then 'no_provider'
               when ae.vector_blob is null then 'embedding_pending'
@@ -398,6 +400,7 @@ function mapExplanationSource(
     publishedAt: row.publishedAt,
     discoveredAt: row.discoveredAt,
     state,
+    vectorBlob: row.vectorBlob,
     rankingStatus: row.rankingStatus,
     rank:
       row.score === null ||

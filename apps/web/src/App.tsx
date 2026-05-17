@@ -2599,6 +2599,40 @@ export function AlgorithmTransparencyPage(props: {
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
+            <h3>{t.algorithmTransparency.sections.currentClusters}</h3>
+            <p>{t.algorithmTransparency.clusters.generated}</p>
+          </div>
+          {props.status?.clusters.items && props.status.clusters.items.length > 0 ? (
+            <div className={styles.algorithmClusterGrid}>
+              {props.status.clusters.items.map((cluster, index) => (
+                <article
+                  className={styles.algorithmClusterCard}
+                  data-polarity={cluster.polarity}
+                  key={cluster.id}
+                >
+                  <span>
+                    {cluster.polarity === "positive"
+                      ? t.algorithmTransparency.clusters.positive
+                      : t.algorithmTransparency.clusters.negative}
+                  </span>
+                  <strong>{clusterDisplayName(cluster, index, t)}</strong>
+                  <p>
+                    {t.algorithmTransparency.clusters.details(
+                      formatCompactNumber(cluster.weight),
+                      cluster.sampleCount,
+                      formatDate(cluster.updatedAt)
+                    )}
+                  </p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p>{t.algorithmTransparency.clusters.empty}</p>
+          )}
+        </section>
+
+        <section className={classNames(styles.settingsSection, "algorithm-card")}>
+          <div>
             <h3>{t.algorithmTransparency.sections.terms}</h3>
           </div>
           <dl className={styles.algorithmTermList}>
@@ -4553,6 +4587,16 @@ function actionErrorMessageFor(intent: ArticleActionIntent, t: Dictionary) {
 function explanationReasonText(reason: RankExplanationReason, t: Dictionary): string {
   switch (reason.type) {
     case "interest":
+      if (reason.cluster) {
+        return t.explanation.reasons.interestCluster(
+          t.algorithmTransparency.clusters.matched(
+            clusterDisplayName(reason.cluster, 0, t),
+            formatPercent(Math.max(0, reason.cluster.similarity)),
+            formatCompactNumber(reason.cluster.weight),
+            reason.cluster.sampleCount
+          )
+        );
+      }
       return t.explanation.reasons.interest;
     case "source":
       return reason.impact === "negative"
@@ -4571,6 +4615,23 @@ function explanationReasonText(reason: RankExplanationReason, t: Dictionary): st
     case "penalty":
       return t.explanation.reasons.penalty;
   }
+}
+
+function clusterDisplayName(
+  cluster: { label: string | null; polarity: "positive" | "negative"; id: string },
+  index: number,
+  t: Dictionary
+): string {
+  if (cluster.label?.trim()) {
+    return cluster.label;
+  }
+
+  const fallback = t.algorithmTransparency.clusters.fallbackName(index + 1);
+  return `${fallback} · ${cluster.id.slice(0, 8)}`;
+}
+
+function formatCompactNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
 function sanitizeArticleHtml(html: string): string {

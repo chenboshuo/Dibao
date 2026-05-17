@@ -34,6 +34,7 @@ import {
   type FeedFolderRow,
   type FeedListInput,
   type FeedRow,
+  type InterestClusterRow,
   type JobRow,
   type JobStatus,
   type JobType
@@ -1191,6 +1192,12 @@ function getRecommendationStatus(options: {
   const clusters = options.profiles.countClusters({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
+  const clusterItems = options.profiles
+    .listClusters({
+      ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
+    })
+    .slice(0, 12)
+    .map(mapRecommendationCluster);
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
@@ -1216,11 +1223,26 @@ function getRecommendationStatus(options: {
     activeRankContext,
     coverage: mapCoverage(coverage),
     behaviorCounts,
-    clusters,
+    clusters: {
+      ...clusters,
+      items: clusterItems
+    },
     rankedArticles,
     lastProfileUpdate: timestampToIso(lastProfileUpdate),
     lastRankingUpdate: timestampToIso(lastRankingUpdate),
     warnings
+  };
+}
+
+function mapRecommendationCluster(cluster: InterestClusterRow) {
+  return {
+    id: cluster.id,
+    polarity: cluster.polarity,
+    label: cluster.label,
+    weight: cluster.weight,
+    sampleCount: cluster.sampleCount,
+    lastMatchedAt: timestampToIso(cluster.lastMatchedAt),
+    updatedAt: timestampToIso(cluster.updatedAt)
   };
 }
 

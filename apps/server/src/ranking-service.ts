@@ -40,6 +40,18 @@ export type RankExplanationReason = {
   type: RankExplanationReasonType;
   label: string;
   impact: "positive" | "negative" | "neutral";
+  cluster?: RankExplanationClusterMatch;
+};
+
+export type RankExplanationClusterMatch = {
+  id: string;
+  polarity: InterestClusterPolarity;
+  label: string | null;
+  weight: number;
+  sampleCount: number;
+  similarity: number;
+  lastMatchedAt: number | null;
+  updatedAt: number;
 };
 
 export type RankExplanationResult = {
@@ -112,11 +124,59 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       return null;
     }
 
+    const clusterMatch = this.explanationClusterMatch(source);
+
     return {
       articleId,
       status: source.rankingStatus,
-      reasons: rankReasonsFor(source),
+      reasons: rankReasonsFor(source, clusterMatch),
       generatedAt: source.rank?.calculatedAt ?? this.now()
+    };
+  }
+
+  private explanationClusterMatch(
+    source: ArticleRankExplanationSourceRow
+  ): RankExplanationClusterMatch | null {
+    const activeIndexId = this.activeEmbeddingIndexId();
+    if (!activeIndexId || !source.vectorBlob || source.rankingStatus !== "ready") {
+      return null;
+    }
+
+    const articleVector = fromVectorBlob(source.vectorBlob);
+    let best:
+      | {
+          cluster: InterestClusterRow;
+          similarity: number;
+        }
+      | null = null;
+
+    for (const cluster of this.clusterVectorsFor(activeIndexId)) {
+      if (cluster.polarity !== "positive") {
+        continue;
+      }
+
+      const similarity = cosineSimilarity(articleVector, cluster.vector);
+      if (!best || similarity > best.similarity) {
+        best = {
+          cluster: cluster.cluster,
+          similarity
+        };
+      }
+    }
+
+    if (!best || best.similarity <= 0) {
+      return null;
+    }
+
+    return {
+      id: best.cluster.id,
+      polarity: best.cluster.polarity,
+      label: best.cluster.label,
+      weight: best.cluster.weight,
+      sampleCount: best.cluster.sampleCount,
+      similarity: best.similarity,
+      lastMatchedAt: best.cluster.lastMatchedAt,
+      updatedAt: best.cluster.updatedAt
     };
   }
 
@@ -286,7 +346,10 @@ function interestMatchesFor(
   };
 }
 
-function rankReasonsFor(source: ArticleRankExplanationSourceRow): RankExplanationReason[] {
+function rankReasonsFor(
+  source: ArticleRankExplanationSourceRow,
+  clusterMatch: RankExplanationClusterMatch | null
+): RankExplanationReason[] {
   const rank = source.rank;
   if (!rank) {
     return [
@@ -303,8 +366,9 @@ function rankReasonsFor(source: ArticleRankExplanationSourceRow): RankExplanatio
   if (rank.interestScore > MIN_REASON_SCORE) {
     candidates.push({
       type: "interest",
-      label: "Interest match",
+      label: clusterMatch?.label ?? "Interest match",
       impact: "positive",
+      ...(clusterMatch ? { cluster: clusterMatch } : {}),
       magnitude: rank.interestScore,
       priority: 1
     });

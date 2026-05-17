@@ -226,9 +226,19 @@ type ArticleDetail = ArticleListItem & {
 type RankExplanation = {
   articleId: string;
   reasons: Array<{
-    type: "source" | "freshness" | "state" | "fallback" | "negative" | "penalty";
+    type: "interest" | "source" | "freshness" | "state" | "fallback" | "negative" | "penalty";
     label: string;
     impact: "positive" | "negative" | "neutral";
+    cluster?: {
+      id: string;
+      polarity: "positive" | "negative";
+      label: string | null;
+      weight: number;
+      sampleCount: number;
+      similarity: number;
+      lastMatchedAt: string | null;
+      updatedAt: string;
+    };
   }>;
   generatedAt: string;
 };
@@ -850,7 +860,17 @@ read_progress
       {
         "type": "interest",
         "label": "Interest match",
-        "impact": "positive"
+        "impact": "positive",
+        "cluster": {
+          "id": "cluster_01",
+          "polarity": "positive",
+          "label": null,
+          "weight": 8,
+          "sampleCount": 3,
+          "similarity": 0.82,
+          "lastMatchedAt": "2026-05-14T08:08:00.000Z",
+          "updatedAt": "2026-05-14T08:09:00.000Z"
+        }
       },
       {
         "type": "source",
@@ -1396,7 +1416,18 @@ Planned / not implemented. 当前版本不提供 retry API。
     },
     "clusters": {
       "positive": 2,
-      "negative": 1
+      "negative": 1,
+      "items": [
+        {
+          "id": "cluster_01",
+          "polarity": "positive",
+          "label": null,
+          "weight": 8,
+          "sampleCount": 3,
+          "lastMatchedAt": "2026-05-14T08:08:00.000Z",
+          "updatedAt": "2026-05-14T08:09:00.000Z"
+        }
+      ]
     },
     "rankedArticles": {
       "base": 120,

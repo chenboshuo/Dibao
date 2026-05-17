@@ -611,7 +611,18 @@ describe("web i18n", () => {
             },
             clusters: {
               positive: 2,
-              negative: 1
+              negative: 1,
+              items: [
+                {
+                  id: "cluster_positive_design",
+                  polarity: "positive",
+                  label: null,
+                  weight: 8,
+                  sampleCount: 3,
+                  lastMatchedAt: "2026-05-14T08:08:00.000Z",
+                  updatedAt: "2026-05-14T08:09:00.000Z"
+                }
+              ]
             },
             rankedArticles: {
               base: 10,
@@ -636,6 +647,9 @@ describe("web i18n", () => {
     expect(html).toContain("8 / 10 · 80%");
     expect(html).toContain("like: 2");
     expect(html).toContain("LOW_COVERAGE");
+    expect(html).toContain("当前兴趣簇");
+    expect(html).toContain("兴趣簇 1 · cluster_");
+    expect(html).toContain("权重 8");
     expect(html).toContain("用户模型卡");
     expect(html).toContain("+8.0");
     expect(html).toContain("排序流程图");

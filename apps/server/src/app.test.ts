@@ -637,7 +637,8 @@ describe("server API vertical slice", () => {
           behaviorCounts: {},
           clusters: {
             positive: 0,
-            negative: 0
+            negative: 0,
+            items: []
           },
           rankedArticles: {
             base: 0,
