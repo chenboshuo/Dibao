@@ -1535,6 +1535,7 @@
 }
 
 .articleRowActions {
+  gap: var(--space-1);
   justify-content: flex-start;
 }
 
@@ -1583,6 +1584,22 @@
 .actionExplain {
   border-color: var(--color-line-subtle);
   color: var(--color-faint);
+}
+
+.articleRowActions .actionButton,
+.articleRowActions .actionButtonSelected,
+.articleRowActions .actionButtonDanger {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+}
+
+.articleRowActions .actionButton svg,
+.articleRowActions .actionButtonSelected svg,
+.articleRowActions .actionButtonDanger svg {
+  width: 15px;
+  height: 15px;
 }
 
 .actionButton:disabled,
@@ -1730,8 +1747,7 @@
 .explanationPopover {
   width: min(420px, calc(100vw - 32px));
   border: var(--border-default);
-  border-left: 4px solid var(--color-pine);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   background: var(--color-surface);
   box-shadow: var(--shadow-popover);
   padding: var(--space-4);
@@ -2252,17 +2268,17 @@
   .articleRowActions .actionButton,
   .articleRowActions .actionButtonSelected,
   .articleRowActions .actionButtonDanger {
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
-    min-height: 28px;
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    min-height: 26px;
   }
 
   .articleRowActions .actionButton svg,
   .articleRowActions .actionButtonSelected svg,
   .articleRowActions .actionButtonDanger svg {
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
   }
 
   .reasonInline {
@@ -2313,7 +2329,7 @@
     border-right: 0;
     border-bottom: 0;
     border-left: 0;
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    border-radius: 0;
     padding: var(--space-4);
   }
 
