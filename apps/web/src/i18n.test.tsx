@@ -4,6 +4,7 @@ import {
   App,
   AlgorithmTransparencyPage,
   ArticleActionControls,
+  ArticleExplanationEntry,
   ArticleListPanel,
   AuthGatePanel,
   FeedPanel,
@@ -290,6 +291,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
@@ -339,6 +341,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={{
@@ -390,6 +393,79 @@ describe("web i18n", () => {
     expect(html).toContain("兴趣簇 +1 / -0");
   });
 
+  it("only renders row recommendation explain actions for personalized views", () => {
+    const article = articleListItem("article_fixture", "unseen");
+    const latestHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleListPanel
+          articleError={null}
+          articleView="latest"
+          articles={[article]}
+          favoriteSort="favorited_desc"
+          feedCount={1}
+          isIgnoreTelemetryEnabled={false}
+          isArticlesLoading={false}
+          isLoadingMore={false}
+          isRecommendationStatusLoading={false}
+          loadMoreError={null}
+          nextCursor={null}
+          onFavoriteSortChange={() => undefined}
+          onIgnoreArticle={() => undefined}
+          onLoadMore={() => undefined}
+          onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
+          onSelectArticle={() => undefined}
+          onUnreadOnlyChange={() => undefined}
+          recommendationStatus={null}
+          recommendationStatusError={null}
+          selectedArticleId={null}
+          selectedFeed={null}
+          selectedFolder={null}
+          showRecommendationStatus={false}
+          showUnreadOnlyFilter={true}
+          unreadCount={1}
+          unreadOnly={false}
+        />
+      </DibaoI18nProvider>
+    );
+    const recommendedHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleListPanel
+          articleError={null}
+          articleView="recommended"
+          articles={[article]}
+          favoriteSort="favorited_desc"
+          feedCount={1}
+          isIgnoreTelemetryEnabled={false}
+          isArticlesLoading={false}
+          isLoadingMore={false}
+          isRecommendationStatusLoading={false}
+          loadMoreError={null}
+          nextCursor={null}
+          onFavoriteSortChange={() => undefined}
+          onIgnoreArticle={() => undefined}
+          onLoadMore={() => undefined}
+          onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
+          onSelectArticle={() => undefined}
+          onUnreadOnlyChange={() => undefined}
+          recommendationStatus={null}
+          recommendationStatusError={null}
+          selectedArticleId={null}
+          selectedFeed={null}
+          selectedFolder={null}
+          showRecommendationStatus={false}
+          showUnreadOnlyFilter={true}
+          unreadCount={1}
+          unreadOnly={false}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(latestHtml).not.toContain("为什么推荐");
+    expect(recommendedHtml).toContain("为什么推荐");
+  });
+
   it("renders favorites sorting and read-later without unread-only controls", () => {
     const likedArticle = articleListItem("liked_article", "unseen");
     const favoriteHtml = renderToStaticMarkup(
@@ -410,6 +486,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
@@ -442,6 +519,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
           onUnreadOnlyChange={() => undefined}
           recommendationStatus={null}
@@ -813,6 +891,69 @@ describe("web i18n", () => {
     expect(html).toContain("新鲜度");
     expect(html).toContain("文章较新");
     expect(html).toContain("来源 Fixture Feed");
+  });
+
+  it("renders sorting notes for non-personalized article detail views", () => {
+    const latestHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="latest"
+          error={null}
+          explanation={null}
+          isLoading={false}
+          isOpen={false}
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+    const favoriteHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="favorites"
+          error={null}
+          explanation={null}
+          isLoading={false}
+          isOpen={false}
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(latestHtml).toContain("当前视图正按照发布时间排序");
+    expect(latestHtml).not.toContain("查看完整理由");
+    expect(favoriteHtml).toContain("收藏视图默认按收藏时间排序");
+  });
+
+  it("renders personalized explanation entry as a popover trigger", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="recommended"
+          error={null}
+          explanation={{
+            articleId: "article_fixture",
+            generatedAt: "2026-05-14T08:10:00.000Z",
+            reasons: [
+              {
+                type: "interest",
+                label: "AI",
+                impact: "positive"
+              }
+            ]
+          }}
+          isLoading={false}
+          isOpen
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("查看完整理由");
+    expect(html).toContain("与你近期的正向兴趣相似");
+    expect(html).toContain("关闭");
   });
 });
 

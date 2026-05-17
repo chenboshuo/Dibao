@@ -1591,7 +1591,6 @@
 .explanationBox {
   display: grid;
   gap: var(--space-2);
-  margin-top: var(--space-6);
   border: var(--border-subtle);
   border-left: 3px solid var(--color-pine);
   border-radius: 0;
@@ -1601,7 +1600,6 @@
 }
 
 .explanationInlineCard {
-  margin-top: var(--space-4);
   border-left-width: 2px;
   background: var(--color-surface);
 }
@@ -1653,6 +1651,86 @@
   color: var(--color-danger);
   font-size: var(--text-sm);
   line-height: 1.5;
+}
+
+.reasonInline,
+.sortExplanationCard {
+  margin-top: var(--space-8);
+  border: var(--border-subtle);
+  border-left: 3px solid var(--color-pine);
+  border-radius: 0;
+  padding: var(--space-4);
+  background: var(--color-paper);
+  font-family: var(--font-ui);
+}
+
+.reasonInline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.reasonInline h3,
+.reasonInline p,
+.sortExplanationCard h3,
+.sortExplanationCard p {
+  margin: 0;
+}
+
+.reasonInline h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.reasonInline h3,
+.sortExplanationCard h3 {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.reasonInline p,
+.sortExplanationCard p {
+  margin-top: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.mobileExplainAnchor {
+  display: none;
+}
+
+.explanationOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(32 36 33 / 0.18);
+}
+
+.explanationPopover {
+  width: min(420px, calc(100vw - 32px));
+  border: var(--border-default);
+  border-left: 4px solid var(--color-pine);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+  padding: var(--space-4);
+}
+
+.sheetHandle {
+  display: none;
+}
+
+.overlayActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-4);
 }
 
 .readerBody {
@@ -2090,7 +2168,8 @@
 
   .reader {
     width: calc(100% - 24px);
-    padding: var(--space-3) 0 var(--space-10);
+    min-height: 100%;
+    padding: var(--space-3) 0 154px;
   }
 
   .readerHeader {
@@ -2114,6 +2193,22 @@
   .readerActions {
     justify-content: stretch;
     gap: 6px;
+  }
+
+  .readerActionsTop {
+    display: none;
+  }
+
+  .readerActionsBottom {
+    position: sticky;
+    bottom: 74px;
+    z-index: 2;
+    margin-top: var(--space-5);
+    border: var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-2);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-popover);
   }
 
   .actionButtonRow {
@@ -2154,10 +2249,73 @@
     height: 15px;
   }
 
-  .explanationBox {
-    gap: 6px;
-    margin-top: var(--space-3);
+  .reasonInline {
+    display: none;
+  }
+
+  .sortExplanationCard {
+    margin-top: var(--space-5);
     padding: var(--space-3);
+  }
+
+  .mobileExplainAnchor {
+    position: sticky;
+    bottom: 8px;
+    z-index: 3;
+    width: 100%;
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+    border: var(--border-subtle);
+    border-left: 3px solid var(--color-pine);
+    border-radius: 0;
+    padding: 0 var(--space-3);
+    background: var(--color-pine-soft);
+    color: var(--color-pine);
+    text-align: left;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+
+  .mobileExplainAnchor svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .explanationOverlay {
+    align-items: end;
+    padding: 0;
+    background: rgb(32 36 33 / 0.28);
+  }
+
+  .explanationPopover {
+    width: 100%;
+    max-height: min(82dvh, 620px);
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: var(--space-4);
+  }
+
+  .sheetHandle {
+    width: 42px;
+    height: 4px;
+    display: block;
+    justify-self: center;
+    margin: 0 auto var(--space-3);
+    border-radius: 999px;
+    background: var(--color-line);
+  }
+
+  .explanationBox {
+    gap: var(--space-3);
+    padding: 0;
+    border: 0;
+    background: transparent;
   }
 
   .explanationHeader {

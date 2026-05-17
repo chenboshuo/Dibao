@@ -11,6 +11,7 @@ export const zhCN = {
     brandMark: "邸",
     brandName: "邸报",
     brandSubtitle: "Dibao",
+    close: "关闭",
     version: (version: string) => `v${version}`
   },
   navigation: {
@@ -566,9 +567,20 @@ export const zhCN = {
   },
   explanation: {
     title: "为什么推荐",
+    entryTitle: "推荐解释",
+    open: "查看完整理由",
+    teaser: "只展示可理解的理由，不暴露内部原始分数。",
+    sortLabel: "当前排序说明",
+    sortTitle: "当前视图排序",
     loading: "正在生成推荐解释",
     empty: "当前没有明确的推荐信号。",
     generatedAt: (date: string) => `生成于 ${date}`,
+    sorting: {
+      latest: "当前视图正按照发布时间排序。",
+      recommended: "推荐视图会综合用户模型卡、来源偏好、新鲜度和文章状态排序。",
+      favorites: "收藏视图默认按收藏时间排序，不使用个性化推荐分。",
+      read_later: "稍后读视图仍使用个性化排序，帮助你优先处理更可能值得阅读的文章。"
+    },
     types: {
       interest: "兴趣匹配",
       source: "来源",
@@ -658,6 +670,7 @@ export const enUS = {
     brandMark: "D",
     brandName: "Dibao",
     brandSubtitle: "Reader",
+    close: "Close",
     version: (version: string) => `v${version}`
   },
   navigation: {
@@ -1213,9 +1226,20 @@ export const enUS = {
   },
   explanation: {
     title: "Why recommended",
+    entryTitle: "Recommendation explanation",
+    open: "View full reasons",
+    teaser: "Shows understandable reasons without exposing raw internal scores.",
+    sortLabel: "Current sorting note",
+    sortTitle: "Current view sorting",
     loading: "Generating recommendation explanation",
     empty: "No clear recommendation signal yet.",
     generatedAt: (date: string) => `Generated ${date}`,
+    sorting: {
+      latest: "This view is currently sorted by published time.",
+      recommended: "Recommended combines your profile card, source preference, freshness, and article state.",
+      favorites: "Favorites are sorted by saved time by default and do not use personalized ranking.",
+      read_later: "Read later still uses personalized ranking so likely useful items can rise first."
+    },
     types: {
       interest: "Interest",
       source: "Source",

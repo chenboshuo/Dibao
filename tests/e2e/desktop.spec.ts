@@ -49,7 +49,8 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("button", { name: /E2E Article Beta/ }).click();
     await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
     await expect(page.getByRole("heading", { name: "E2E Article Beta" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
+    await expect(page.getByText("当前视图正按照发布时间排序")).toBeVisible();
+    await expect(readerExplainButtons(page)).toHaveCount(0);
 
     const scrollMetrics = await page.evaluate(() => {
       function panelMetrics(testId: string) {
@@ -116,7 +117,10 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByText(/Coverage \d+%/)).toBeVisible();
     await expect(page.getByRole("button", { name: /E2E Article Alpha/ })).toBeVisible();
     await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
+    await expect(page.getByRole("button", { name: "查看完整理由" })).toBeVisible();
+    await page.getByRole("button", { name: "查看完整理由" }).click();
     await expect(page.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
+    await page.getByTestId("reader-scroll-container").getByRole("button", { name: "关闭" }).click();
 
     await page.getByRole("link", { name: "最新" }).click();
     await page.getByRole("button", { name: "打开来源" }).click();
@@ -197,6 +201,12 @@ function latestReadProgressEvent(articleTitle: string):
   } finally {
     db.close();
   }
+}
+
+function readerExplainButtons(page: import("@playwright/test").Page) {
+  return page.getByTestId("reader-scroll-container").getByRole("button", {
+    name: "查看完整理由"
+  });
 }
 
 function latestBehaviorEvent(articleTitle: string, eventType: string): { metadata: unknown } | null {

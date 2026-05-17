@@ -175,6 +175,7 @@ export function App() {
   const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
   const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(null);
   const [rankExplanation, setRankExplanation] = useState<RankExplanation | null>(null);
+  const [isExplanationOpen, setIsExplanationOpen] = useState(false);
   const [recommendationStatus, setRecommendationStatus] = useState<RecommendationStatus | null>(
     null
   );
@@ -209,7 +210,9 @@ export function App() {
   const articleRequestVersion = useRef(0);
   const hasLoadedSettingsForSession = useRef(false);
   const mobileArticleHistoryDepth = useRef(0);
+  const mobileExplanationHistoryDepth = useRef(0);
   const selectedArticleIdRef = useRef<string | null>(null);
+  const isExplanationOpenRef = useRef(false);
 
   const selectedFeed = useMemo(
     () =>
@@ -254,6 +257,7 @@ export function App() {
     setSelectedArticleId(null);
     setArticleDetail(null);
     setRankExplanation(null);
+    setIsExplanationOpen(false);
     setDetailError(null);
     setExplanationError(null);
   }
@@ -652,7 +656,17 @@ export function App() {
   }, [selectedArticleId]);
 
   useEffect(() => {
+    isExplanationOpenRef.current = isExplanationOpen;
+  }, [isExplanationOpen]);
+
+  useEffect(() => {
     function handlePopState() {
+      if (mobileExplanationHistoryDepth.current > 0 && isExplanationOpenRef.current) {
+        mobileExplanationHistoryDepth.current -= 1;
+        setIsExplanationOpen(false);
+        return;
+      }
+
       if (mobileArticleHistoryDepth.current <= 0) {
         return;
       }
@@ -677,6 +691,7 @@ export function App() {
       setDetailError(null);
       setRankExplanation(null);
       setExplanationError(null);
+      setIsExplanationOpen(false);
 
       try {
         const detail = await dibaoApi.getArticle(articleId);
@@ -703,7 +718,7 @@ export function App() {
             }
           }
         }
-        if (!cancelled) {
+        if (!cancelled && shouldLoadRankExplanation(currentArticleView)) {
           await refreshArticleExplanation(articleId);
         }
       } catch (error) {
@@ -721,6 +736,7 @@ export function App() {
     if (!selectedArticleId) {
       setArticleDetail(null);
       setRankExplanation(null);
+      setIsExplanationOpen(false);
       setIsDetailLoading(false);
       setIsExplanationLoading(false);
       setDetailError(null);
@@ -733,7 +749,13 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [refreshArticleExplanation, selectedArticleId, t.actions.errors.open, t.errors.api]);
+  }, [
+    currentArticleView,
+    refreshArticleExplanation,
+    selectedArticleId,
+    t.actions.errors.open,
+    t.errors.api
+  ]);
 
   async function handleAuthSubmit(mode: AuthMode, password: string) {
     if (!password.trim()) {
@@ -1216,6 +1238,7 @@ export function App() {
   }
 
   function handleSelectArticle(articleId: string) {
+    setIsExplanationOpen(false);
     if (isMobileArticleHistoryEnabled() && selectedArticleId !== articleId) {
       window.history.pushState({ dibaoArticleId: articleId }, "", window.location.href);
       mobileArticleHistoryDepth.current += 1;
@@ -1224,7 +1247,34 @@ export function App() {
     setIsSourceDrawerOpen(false);
   }
 
+  function handleOpenExplanation() {
+    if (!shouldLoadRankExplanation(currentArticleView)) {
+      return;
+    }
+
+    if (isMobileArticleHistoryEnabled() && !isExplanationOpen) {
+      window.history.pushState({ dibaoExplanation: true }, "", window.location.href);
+      mobileExplanationHistoryDepth.current += 1;
+    }
+
+    setIsExplanationOpen(true);
+  }
+
+  function handleCloseExplanation() {
+    if (isMobileArticleHistoryEnabled() && mobileExplanationHistoryDepth.current > 0) {
+      window.history.back();
+      return;
+    }
+
+    setIsExplanationOpen(false);
+  }
+
   function handleBackToArticleList() {
+    if (isExplanationOpen) {
+      handleCloseExplanation();
+      return;
+    }
+
     if (isMobileArticleHistoryEnabled() && mobileArticleHistoryDepth.current > 0) {
       window.history.back();
       return;
@@ -1476,6 +1526,10 @@ export function App() {
               onOpenSources={() => setIsSourceDrawerOpen(true)}
               onArticleAction={handleArticleAction}
               onSelectArticle={handleSelectArticle}
+              onExplainArticle={(articleId) => {
+                handleSelectArticle(articleId);
+                handleOpenExplanation();
+              }}
               onFavoriteSortChange={handleFavoriteSortChange}
               onUnreadOnlyChange={handleUnreadOnlyChange}
               favoriteSort={favoriteSort}
@@ -1499,6 +1553,7 @@ export function App() {
             <ArticleDetailPanel
               actionError={articleActionError}
               article={articleDetail}
+              articleView={currentArticleView}
               detailError={detailError}
               explanation={
                 articleDetail && rankExplanation?.articleId === articleDetail.id
@@ -1507,9 +1562,12 @@ export function App() {
               }
               explanationError={explanationError}
               isDetailLoading={isDetailLoading}
+              isExplanationOpen={isExplanationOpen}
               isExplanationLoading={isExplanationLoading}
               onArticleAction={handleArticleAction}
               onBackToList={handleBackToArticleList}
+              onCloseExplanation={handleCloseExplanation}
+              onOpenExplanation={handleOpenExplanation}
               onReadProgress={handleReadProgress}
               pendingAction={
                 articleDetail && pendingArticleAction?.articleId === articleDetail.id
@@ -2664,6 +2722,7 @@ export function ArticleListPanel(props: {
   onIgnoreArticle: (articleId: string) => void;
   onLoadMore: () => void;
   onOpenSources: () => void;
+  onExplainArticle: (articleId: string) => void;
   onSelectArticle: (articleId: string) => void;
   onUnreadOnlyChange: (unreadOnly: boolean) => void;
   pendingAction?: PendingArticleAction | null;
@@ -2803,7 +2862,8 @@ export function ArticleListPanel(props: {
               <ArticleRowActions
                 article={article}
                 onAction={(intent) => props.onArticleAction?.(article, intent)}
-                onExplain={() => props.onSelectArticle(article.id)}
+                canExplain={shouldLoadRankExplanation(props.articleView)}
+                onExplain={() => props.onExplainArticle(article.id)}
                 pendingAction={
                   props.pendingAction?.articleId === article.id
                     ? props.pendingAction.intent
@@ -2973,13 +3033,17 @@ function articleItemClassName(article: ArticleListItem, selectedArticleId: strin
 function ArticleDetailPanel(props: {
   actionError: string | null;
   article: ArticleDetail | null;
+  articleView: ArticleView;
   detailError: string | null;
   explanation: RankExplanation | null;
   explanationError: string | null;
+  isExplanationOpen: boolean;
   isDetailLoading: boolean;
   isExplanationLoading: boolean;
   onArticleAction: (article: ArticleDetail, intent: ArticleActionIntent) => void;
   onBackToList: () => void;
+  onCloseExplanation: () => void;
+  onOpenExplanation: () => void;
   onReadProgress: (
     articleId: string,
     progress: number,
@@ -3051,11 +3115,6 @@ function ArticleDetailPanel(props: {
               pendingAction={props.pendingAction}
               placement="top"
             />
-            <RankExplanationPanel
-              error={props.explanationError}
-              explanation={props.explanation}
-              isLoading={props.isExplanationLoading}
-            />
           </header>
 
           {safeHtml ? (
@@ -3075,6 +3134,15 @@ function ArticleDetailPanel(props: {
             pendingAction={props.pendingAction}
             placement="bottom"
           />
+          <ArticleExplanationEntry
+            articleView={props.articleView}
+            error={props.explanationError}
+            explanation={props.explanation}
+            isOpen={props.isExplanationOpen}
+            isLoading={props.isExplanationLoading}
+            onClose={props.onCloseExplanation}
+            onOpen={props.onOpenExplanation}
+          />
         </article>
       ) : null}
     </section>
@@ -3083,6 +3151,7 @@ function ArticleDetailPanel(props: {
 
 function ArticleRowActions(props: {
   article: ArticleActionTarget;
+  canExplain: boolean;
   onAction: (intent: ArticleActionIntent) => void;
   onExplain: () => void;
   pendingAction: ArticleActionIntent | null;
@@ -3132,15 +3201,17 @@ function ArticleRowActions(props: {
         onClick={() => props.onAction("notInterested")}
         selected={state.notInterested}
       />
-      <button
-        aria-label={t.explanation.title}
-        className={classNames(styles.actionButton, styles.actionExplain)}
-        onClick={props.onExplain}
-        title={t.explanation.title}
-        type="button"
-      >
-        <ActionIcon name="sparkle" />
-      </button>
+      {props.canExplain ? (
+        <button
+          aria-label={t.explanation.title}
+          className={classNames(styles.actionButton, styles.actionExplain)}
+          onClick={props.onExplain}
+          title={t.explanation.title}
+          type="button"
+        >
+          <ActionIcon name="sparkle" />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -3260,6 +3331,84 @@ export function RankExplanationPanel(props: {
         )
       ) : null}
     </section>
+  );
+}
+
+export function ArticleExplanationEntry(props: {
+  articleView: ArticleView;
+  error: string | null;
+  explanation: RankExplanation | null;
+  isOpen: boolean;
+  isLoading: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+}) {
+  const { t } = useI18n();
+
+  if (!shouldLoadRankExplanation(props.articleView)) {
+    return (
+      <section className={styles.sortExplanationCard} aria-label={t.explanation.sortLabel}>
+        <div>
+          <h3>{t.explanation.sortTitle}</h3>
+          <p>{sortExplanationForView(props.articleView, t)}</p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className={styles.reasonInline} aria-label={t.explanation.title}>
+        <div>
+          <h3>
+            <ActionIcon name="sparkle" /> {t.explanation.entryTitle}
+          </h3>
+          <p>{t.explanation.teaser}</p>
+        </div>
+        <button className={styles.primaryButton} onClick={props.onOpen} type="button">
+          {t.explanation.open}
+        </button>
+      </section>
+
+      <button
+        className={styles.mobileExplainAnchor}
+        onClick={props.onOpen}
+        type="button"
+        aria-label={t.explanation.open}
+        title={t.explanation.open}
+      >
+        <ActionIcon name="sparkle" />
+        <span>{t.explanation.title}</span>
+      </button>
+
+      {props.isOpen ? (
+        <div
+          className={styles.explanationOverlay}
+          onClick={props.onClose}
+          role="presentation"
+        >
+          <div
+            className={styles.explanationPopover}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rank-explanation-title"
+          >
+            <div className={styles.sheetHandle} aria-hidden="true" />
+            <RankExplanationPanel
+              error={props.error}
+              explanation={props.explanation}
+              isLoading={props.isLoading}
+            />
+            <div className={styles.overlayActions}>
+              <button className={styles.secondaryButton} onClick={props.onClose} type="button">
+                {t.common.close}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -3961,6 +4110,23 @@ function articleQueryFor(source: SourceSelection): { feedId?: string; folderId?:
 
 function supportsUnreadOnly(view: ArticleView): boolean {
   return view === "latest" || view === "recommended";
+}
+
+function shouldLoadRankExplanation(view: ArticleView): boolean {
+  return view === "recommended" || view === "read_later";
+}
+
+function sortExplanationForView(view: ArticleView, t: Dictionary): string {
+  switch (view) {
+    case "latest":
+      return t.explanation.sorting.latest;
+    case "favorites":
+      return t.explanation.sorting.favorites;
+    case "read_later":
+      return t.explanation.sorting.read_later;
+    case "recommended":
+      return t.explanation.sorting.recommended;
+  }
 }
 
 function isMobileArticleHistoryEnabled(): boolean {

@@ -77,10 +77,15 @@ test("mobile recommended article exposes algorithm transparency details", async 
   await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
 
   await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看完整理由" })).toBeVisible();
+  await page.getByRole("button", { name: "查看完整理由" }).click();
   await expect(page.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
   await expect(
-    page.getByTestId("reader-scroll-container").getByText("新鲜度", { exact: true })
+    page.getByRole("dialog").getByText("新鲜度", { exact: true })
   ).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "为什么推荐" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
 });
 
 test("mobile article actions expose selected favorite and read-later state", async ({ page }) => {
