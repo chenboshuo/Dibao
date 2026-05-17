@@ -84,6 +84,10 @@ import {
   ProfileDecayJobService,
   ProfileDecayScheduler
 } from "./profile-decay-job-service.js";
+import {
+  PROFILE_EVENT_PROCESS_JOB_TYPE,
+  ProfileEventProcessJobService
+} from "./profile-event-job-service.js";
 import { ProfileService } from "./profile-service.js";
 import {
   RankingRecalculateJobService,
@@ -286,9 +290,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     refresher: feedRefreshCoordinator,
     now: options.now
   });
+  const profileEventJobService = new ProfileEventProcessJobService({
+    jobs,
+    profile: profileService,
+    rankingJobs: rankingJobService,
+    now: options.now
+  });
   const articleActionService = new ArticleActionService({
     actions: articleActions,
-    profile: profileService,
+    profileJobs: profileEventJobService,
     rankingJobs: rankingJobService,
     removeReadLaterOnReadComplete: () =>
       settingsService.getSettings().behavior.removeReadLaterOnReadComplete,
@@ -344,6 +354,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       feed_refresh: (job) => feedRefreshJobService.handleFeedRefreshJob(job),
       retention_cleanup: (job) => retentionCleanupJobService.handleRetentionCleanupJob(job),
       profile_decay: (job) => profileDecayJobService.handleProfileDecayJob(job),
+      [PROFILE_EVENT_PROCESS_JOB_TYPE]: (job) =>
+        profileEventJobService.handleProfileEventProcessJob(job),
       [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
         rankingJobService.handleRankingRecalculateJob(job),
       [EMBEDDING_GENERATE_JOB_TYPE]: (job) =>
@@ -1442,7 +1454,7 @@ function parseJobQuery(query: JobQuery):
     return {
       ok: false,
       message:
-        "type must be feed_refresh, content_extract, embedding_generate, ranking_recalculate, profile_decay, retention_cleanup, or vector_index_rebuild",
+        "type must be feed_refresh, content_extract, embedding_generate, profile_event_process, ranking_recalculate, profile_decay, retention_cleanup, or vector_index_rebuild",
       details: { field: "type" }
     };
   }
@@ -1860,6 +1872,7 @@ function parseJobType(value: string | undefined): JobType | undefined | null {
     value === "feed_refresh" ||
     value === "content_extract" ||
     value === "embedding_generate" ||
+    value === "profile_event_process" ||
     value === "ranking_recalculate" ||
     value === "profile_decay" ||
     value === "retention_cleanup" ||

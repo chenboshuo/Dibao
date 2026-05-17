@@ -50,6 +50,7 @@ export type JobType =
   | "feed_refresh"
   | "content_extract"
   | "embedding_generate"
+  | "profile_event_process"
   | "ranking_recalculate"
   | "profile_decay"
   | "retention_cleanup"

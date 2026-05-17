@@ -2,66 +2,88 @@ import { describe, expect, it } from "vitest";
 import type {
   ArticleActionRepository,
   ArticleActionType,
+  JobRow,
   RecordArticleActionInput,
   RecordArticleActionResult
 } from "@dibao/db";
 import { ArticleActionService } from "./article-action-service.js";
+import {
+  ProfileEventProcessJobService,
+  parseProfileEventProcessPayload
+} from "./profile-event-job-service.js";
 
 describe("ArticleActionService", () => {
-  it("keeps high-volume weak actions to article-level ranking jobs", () => {
+  it("keeps action requests to article-level ranking jobs and defers profile work", () => {
     const calls = createRankingCallRecorder();
+    const profileJobs = createProfileJobRecorder();
     const service = new ArticleActionService({
       actions: fixedActionRepository(),
-      profile: {
-        processEvent: () => ({
-          articleIds: ["article_1"],
-          feedStatsChanged: true,
-          profileChanged: false
-        })
-      },
+      profileJobs,
       rankingJobs: calls
     });
 
-    for (const type of ["impression", "open", "read_progress"] satisfies ArticleActionType[]) {
+    for (const type of ["favorite", "impression", "open", "read_progress"] satisfies ArticleActionType[]) {
       service.record({ articleId: "article_1", type });
     }
 
     expect(calls.enqueueAllCount).toBe(0);
-    expect(calls.articleJobs).toEqual([["article_1"], ["article_1"], ["article_1"]]);
+    expect(calls.articleJobs).toEqual([
+      ["article_1"],
+      ["article_1"],
+      ["article_1"],
+      ["article_1"]
+    ]);
+    expect(profileJobs.events).toEqual([
+      { actionType: "favorite", articleId: "article_1", eventId: "event_favorite" },
+      { actionType: "impression", articleId: "article_1", eventId: "event_impression" },
+      { actionType: "open", articleId: "article_1", eventId: "event_open" },
+      { actionType: "read_progress", articleId: "article_1", eventId: "event_read_progress" }
+    ]);
   });
 
-  it("uses full ranking jobs for clear profile or source preference changes", () => {
-    const profileChangedCalls = createRankingCallRecorder();
-    new ArticleActionService({
-      actions: fixedActionRepository(),
+  it("processes deferred profile events and enqueues full ranking only when needed", () => {
+    const jobs = createJobRecorder();
+    const rankingJobs = createRankingCallRecorder();
+    const service = new ProfileEventProcessJobService({
+      jobs,
       profile: {
-        processEvent: () => ({
+        processEvent: (eventId: string) => ({
           articleIds: ["article_1"],
           feedStatsChanged: true,
-          profileChanged: true
+          profileChanged: eventId === "event_profile"
         })
       },
-      rankingJobs: profileChangedCalls
-    }).record({ articleId: "article_1", type: "favorite" });
+      rankingJobs,
+      jobIdFactory: () => `job_${jobs.enqueued.length + 1}`,
+      now: () => 1000
+    });
 
-    expect(profileChangedCalls.enqueueAllCount).toBe(1);
-    expect(profileChangedCalls.articleJobs).toEqual([]);
+    const profileJob = service.enqueueEvent({
+      eventId: "event_profile",
+      articleId: "article_1",
+      actionType: "favorite"
+    });
+    service.enqueueEvent({
+      eventId: "event_profile",
+      articleId: "article_1",
+      actionType: "favorite"
+    });
+    const passiveJob = service.enqueueEvent({
+      eventId: "event_passive",
+      articleId: "article_1",
+      actionType: "read_progress"
+    });
 
-    const sourceChangedCalls = createRankingCallRecorder();
-    new ArticleActionService({
-      actions: fixedActionRepository(),
-      profile: {
-        processEvent: () => ({
-          articleIds: ["article_1"],
-          feedStatsChanged: true,
-          profileChanged: false
-        })
-      },
-      rankingJobs: sourceChangedCalls
-    }).record({ articleId: "article_1", type: "favorite" });
+    expect(jobs.enqueued).toHaveLength(2);
+    expect(parseProfileEventProcessPayload(profileJob.payloadJson)).toMatchObject({
+      eventId: "event_profile"
+    });
 
-    expect(sourceChangedCalls.enqueueAllCount).toBe(1);
-    expect(sourceChangedCalls.articleJobs).toEqual([]);
+    service.handleProfileEventProcessJob(profileJob);
+    service.handleProfileEventProcessJob(passiveJob);
+
+    expect(rankingJobs.enqueueAllCount).toBe(1);
+    expect(rankingJobs.articleJobs).toEqual([]);
   });
 
   it("can clear read-later state after a read-complete progress event without recording a new action", () => {
@@ -145,6 +167,49 @@ function createRankingCallRecorder() {
     enqueueArticles(articleIds: string[]) {
       this.articleJobs.push(articleIds);
       return {} as never;
+    }
+  };
+}
+
+function createProfileJobRecorder() {
+  return {
+    events: [] as Array<{ eventId: string; articleId: string; actionType: ArticleActionType }>,
+    enqueueEvent(input: { eventId: string; articleId: string; actionType: ArticleActionType }) {
+      this.events.push(input);
+      return {} as never;
+    }
+  };
+}
+
+function createJobRecorder() {
+  const enqueued: JobRow[] = [];
+
+  return {
+    enqueued,
+    enqueue(input: {
+      id: string;
+      type: "profile_event_process";
+      payloadJson: string | null;
+    }) {
+      const job = {
+        id: input.id,
+        type: input.type,
+        payloadJson: input.payloadJson ?? "",
+        status: "queued" as const,
+        attempts: 0,
+        maxAttempts: 2,
+        runAfter: 1000,
+        createdAt: 1000,
+        updatedAt: 1000,
+        startedAt: null,
+        finishedAt: null,
+        error: null
+      };
+      enqueued.push(job);
+      return job;
+    },
+    listOpenByType() {
+      return enqueued;
     }
   };
 }

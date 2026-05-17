@@ -143,7 +143,7 @@ describe("db package", () => {
     }
   });
 
-  it("applies migration 002 to old databases and permits like events", () => {
+  it("applies later migrations to old databases and permits new action and job types", () => {
     const db = openDatabase(":memory:", { loadSqliteVec: false });
     try {
       const initialMigration = loadDefaultMigrations().slice(0, 1);
@@ -153,7 +153,8 @@ describe("db package", () => {
       expect(hasColumn(db, "article_states", "liked_at")).toBe(false);
 
       expect(runMigrations(db, loadDefaultMigrations(), () => 2000).map((migration) => migration.version)).toEqual([
-        "002"
+        "002",
+        "003"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
@@ -204,6 +205,24 @@ describe("db package", () => {
       expect(
         db.prepare("select event_type as eventType from behavior_events").get()
       ).toEqual({ eventType: "like" });
+      db.prepare(
+        `
+          insert into jobs (
+            id,
+            type,
+            status,
+            attempts,
+            max_attempts,
+            run_after,
+            created_at,
+            updated_at
+          )
+          values ('job_profile_event', 'profile_event_process', 'queued', 0, 2, 2000, 2000, 2000)
+        `
+      ).run();
+      expect(db.prepare("select type from jobs where id = 'job_profile_event'").get()).toEqual({
+        type: "profile_event_process"
+      });
     } finally {
       db.close();
     }

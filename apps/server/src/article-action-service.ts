@@ -3,7 +3,7 @@ import type {
   ArticleActionType,
   RecordArticleActionResult
 } from "@dibao/db";
-import type { ProfileService } from "./profile-service.js";
+import type { ProfileEventProcessJobService } from "./profile-event-job-service.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
 export class ArticleActionServiceError extends Error {
@@ -27,7 +27,7 @@ export type RecordArticleActionServiceInput = {
 
 export type ArticleActionServiceOptions = {
   actions: ArticleActionRepository;
-  profile?: Pick<ProfileService, "processEvent">;
+  profileJobs?: Pick<ProfileEventProcessJobService, "enqueueEvent">;
   rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll" | "enqueueArticles">;
   removeReadLaterOnReadComplete?: () => boolean;
   now?: () => number;
@@ -65,22 +65,15 @@ export class ArticleActionService {
       }
     }
 
-    const profileResult = this.options.profile?.processEvent(result.eventId);
-    if (
-      profileResult?.profileChanged ||
-      (profileResult?.feedStatsChanged && !isHighVolumeArticleOnlyAction(input.type))
-    ) {
-      this.options.rankingJobs?.enqueueAll();
-    } else {
-      this.options.rankingJobs?.enqueueArticles([input.articleId]);
-    }
+    this.options.rankingJobs?.enqueueArticles([input.articleId]);
+    this.options.profileJobs?.enqueueEvent({
+      eventId: result.eventId,
+      articleId: input.articleId,
+      actionType: input.type
+    });
 
     return finalResult;
   }
-}
-
-function isHighVolumeArticleOnlyAction(type: ArticleActionType): boolean {
-  return type === "impression" || type === "open" || type === "read_progress";
 }
 
 function isReadCompleteAction(input: RecordArticleActionServiceInput): boolean {

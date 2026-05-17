@@ -1305,7 +1305,7 @@ API key 存储说明：MVP 单用户本地/自托管版本会把 key 保存在�
 
 ```text
 status=queued|running|succeeded|failed|cancelled
-type=feed_refresh|content_extract|embedding_generate|ranking_recalculate|profile_decay|retention_cleanup|vector_index_rebuild
+type=feed_refresh|content_extract|embedding_generate|profile_event_process|ranking_recalculate|profile_decay|retention_cleanup|vector_index_rebuild
 limit
 ```
 

@@ -18,6 +18,10 @@ import {
 } from "@dibao/db";
 import { JobRunner } from "./job-runner.js";
 import { ProfileDecayJobService } from "./profile-decay-job-service.js";
+import {
+  PROFILE_EVENT_PROCESS_JOB_TYPE,
+  ProfileEventProcessJobService
+} from "./profile-event-job-service.js";
 import { ProfileService } from "./profile-service.js";
 import {
   RankingRecalculateJobService,
@@ -237,7 +241,7 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
       expect(activeScore(db, "article_similar")).toBeNull();
 
-      await drainRankingJobs(db, 5000);
+      await drainProfileAndRankingJobs(db, 5000);
 
       expect(activeScore(db, "article_similar")).not.toBeNull();
       const recommended = await app.inject({
@@ -825,6 +829,18 @@ function feedStats(db: DibaoDatabase, feedId: string): {
 }
 
 async function drainRankingJobs(db: DibaoDatabase, now: number): Promise<void> {
+  await drainJobs(db, now, false);
+}
+
+async function drainProfileAndRankingJobs(db: DibaoDatabase, now: number): Promise<void> {
+  await drainJobs(db, now, true);
+}
+
+async function drainJobs(
+  db: DibaoDatabase,
+  now: number,
+  includeProfileEvents: boolean
+): Promise<void> {
   const jobs = new SqliteJobRepository(db);
   const embeddings = new SqliteEmbeddingRepository(db);
   const profiles = new SqliteProfileRepository(db);
@@ -840,9 +856,26 @@ async function drainRankingJobs(db: DibaoDatabase, now: number): Promise<void> {
     ranking,
     now: () => now
   });
+  const profile = new ProfileService({
+    embeddings,
+    profiles,
+    now: () => now
+  });
+  const profileEventJobs = new ProfileEventProcessJobService({
+    jobs,
+    profile,
+    rankingJobs,
+    now: () => now
+  });
   const runner = new JobRunner({
     jobs,
     handlers: {
+      ...(includeProfileEvents
+        ? {
+            [PROFILE_EVENT_PROCESS_JOB_TYPE]: (job) =>
+              profileEventJobs.handleProfileEventProcessJob(job)
+          }
+        : {}),
       [RANKING_RECALCULATE_JOB_TYPE]: (job) => rankingJobs.handleRankingRecalculateJob(job)
     },
     now: () => now

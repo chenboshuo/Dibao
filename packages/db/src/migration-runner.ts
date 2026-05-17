@@ -9,6 +9,9 @@ const initialSchemaPath = fileURLToPath(
 const articleStateLikesPath = fileURLToPath(
   new URL("../migrations/002_article_state_likes.sql", import.meta.url)
 );
+const profileEventJobsPath = fileURLToPath(
+  new URL("../migrations/003_profile_event_jobs.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -21,6 +24,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "002",
       name: "article_state_likes",
       sql: readFileSync(articleStateLikesPath, "utf8")
+    },
+    {
+      version: "003",
+      name: "profile_event_jobs",
+      sql: readFileSync(profileEventJobsPath, "utf8")
     }
   ];
 }

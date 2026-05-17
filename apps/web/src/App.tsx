@@ -1227,7 +1227,7 @@ export function App() {
         requestForArticleAction(intent, article.state)
       );
       applyArticleState(article.id, result.state);
-      await refreshArticleExplanation(article.id);
+      void refreshArticleExplanation(article.id);
     } catch {
       setArticleActionError(actionErrorMessageFor(intent, t));
     } finally {
