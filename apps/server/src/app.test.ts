@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   openDatabase,
+  SqliteAppSettingsRepository,
   SqliteArticleActionRepository,
   SqliteArticleRepository,
   SqliteEmbeddingRepository,
@@ -480,6 +481,24 @@ describe("server API vertical slice", () => {
           code: "UNAUTHORIZED"
         }
       });
+      for (const url of [
+        "/api/recommendation/recalculate",
+        "/api/recommendation/backfill/fingerprints",
+        "/api/recommendation/rebuild-duplicates",
+        "/api/recommendation/rebuild-keywords",
+        "/api/recommendation/rebuild-recent-intent",
+        "/api/recommendation/evaluate",
+        "/api/recommendation/ftrl/reset",
+        "/api/recommendation/ftrl/promote"
+      ]) {
+        const response = await app.inject({ method: "POST", url });
+        expect(response.statusCode, `${url}: ${response.body}`).toBe(401);
+        expect(response.json()).toMatchObject({
+          error: {
+            code: "UNAUTHORIZED"
+          }
+        });
+      }
     } finally {
       await app.close();
       db.close();
@@ -1912,6 +1931,129 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("labels lightweight evaluation runs as diagnostic in transparency", async () => {
+    const db = createEmptyDatabase();
+    new SqliteAppSettingsRepository(db).setJson(
+      "recommendation.settings",
+      {
+        preferFreshness: 0.5,
+        preferSource: 0.5,
+        preferDiversity: 0.5,
+        cocoonLevel: 5,
+        localLearningEnabled: false,
+        localLearningShadowMode: true,
+        explorationEnabled: true,
+        evaluationEnabled: true
+      },
+      1000
+    );
+    db.prepare(
+      `
+        insert into ranking_eval_runs (
+          id,
+          algorithm_version,
+          rank_context,
+          status,
+          metrics_json,
+          error,
+          created_at,
+          started_at,
+          finished_at
+        )
+        values ('eval_diagnostic', 'rec_v2', 'diagnostic', 'succeeded', ?, null, 1000, 1000, 1000)
+      `
+    ).run(
+      JSON.stringify({
+        evaluationMode: "lightweight_replay_diagnostic",
+        diagnosticOnly: true,
+        strictReplay: false,
+        cutoffCount: 1,
+        labelCount: 1,
+        hitAt10: 0,
+        ndcgAt10: 0,
+        mrr: 0
+      })
+    );
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          transparency: {
+            moduleStatus: {
+              evaluation: "lightweight_replay_diagnostic"
+            }
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("shows FTRL insufficient sample state honestly in transparency", async () => {
+    const db = createEmptyDatabase();
+    new SqliteAppSettingsRepository(db).setJson(
+      "recommendation.settings",
+      {
+        preferFreshness: 0.5,
+        preferSource: 0.5,
+        preferDiversity: 0.5,
+        cocoonLevel: 5,
+        localLearningEnabled: true,
+        localLearningShadowMode: false,
+        explorationEnabled: true,
+        evaluationEnabled: false
+      },
+      1000
+    );
+    db.prepare(
+      `
+        insert into rank_model_versions (
+          id,
+          algorithm_version,
+          feature_schema_version,
+          status,
+          sample_count,
+          blend_alpha,
+          metrics_json,
+          created_at,
+          updated_at
+        )
+        values ('ftrl_insufficient', 'rec_v2', 2, 'shadow', 12, 0, ?, 1000, 1000)
+      `
+    ).run(JSON.stringify({ highQualitySamples: 12 }));
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          transparency: {
+            moduleStatus: {
+              ftrl: "insufficient_samples"
+            }
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("queues ranking recalculation only when ranking settings actually change", async () => {
     const db = createEmptyDatabase();
     const app = buildServer({ db, logger: false, now: () => 5000 });
@@ -1966,6 +2108,92 @@ describe("server API vertical slice", () => {
       });
       expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
       expect(jobs.countByTypeAndStatus("embedding_generate", "queued")).toBe(0);
+
+      const shadowModeChanged = await injectJson(app, "PATCH", "/api/settings", {
+        ranking: {
+          localLearningShadowMode: false
+        }
+      });
+      expect(shadowModeChanged.statusCode, shadowModeChanged.body).toBe(200);
+      expect(shadowModeChanged.json()).toMatchObject({
+        data: {
+          rankingRecalculateQueued: true,
+          rankingRecalculateJobId: changed.json().data.rankingRecalculateJobId
+        }
+      });
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
+      expect(jobs.countByTypeAndStatus("embedding_generate", "queued")).toBe(0);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("dedupes recommendation maintenance jobs and exposes safe FTRL promotion", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 10_000 });
+
+    try {
+      for (const url of [
+        "/api/recommendation/recalculate",
+        "/api/recommendation/backfill/fingerprints",
+        "/api/recommendation/rebuild-duplicates",
+        "/api/recommendation/rebuild-keywords",
+        "/api/recommendation/rebuild-recent-intent",
+        "/api/recommendation/evaluate"
+      ]) {
+        const first = await app.inject({ method: "POST", url });
+        const second = await app.inject({ method: "POST", url });
+        expect(first.statusCode, `${url}: ${first.body}`).toBe(200);
+        expect(second.statusCode, `${url}: ${second.body}`).toBe(200);
+        expect(second.json()).toMatchObject({
+          data: {
+            jobId: first.json().data.jobId,
+            existing: true
+          }
+        });
+      }
+
+      const insufficient = await app.inject({ method: "POST", url: "/api/recommendation/ftrl/promote" });
+      expect(insufficient.statusCode, insufficient.body).toBe(409);
+      expect(insufficient.json()).toMatchObject({
+        error: {
+          code: "INSUFFICIENT_FTRL_SAMPLES"
+        }
+      });
+
+      db.prepare(
+        `
+          insert into rank_model_versions (
+            id,
+            algorithm_version,
+            feature_schema_version,
+            status,
+            sample_count,
+            blend_alpha,
+            metrics_json,
+            created_at,
+            updated_at
+          )
+          values ('ftrl_promote_test', 'rec_v2', 2, 'shadow', 60, 0.1, ?, 10_000, 10_000)
+        `
+      ).run(JSON.stringify({ highQualitySamples: 55 }));
+
+      const promoted = await app.inject({ method: "POST", url: "/api/recommendation/ftrl/promote" });
+      expect(promoted.statusCode, promoted.body).toBe(200);
+      expect(promoted.json()).toMatchObject({
+        data: {
+          ok: true,
+          modelVersionId: "ftrl_promote_test",
+          sampleCount: 60,
+          highQualitySampleCount: 55,
+          blendAlpha: 0.1
+        }
+      });
+      const model = db
+        .prepare("select status from rank_model_versions where id = 'ftrl_promote_test'")
+        .get() as { status: string } | undefined;
+      expect(model?.status).toBe("active");
     } finally {
       await app.close();
       db.close();

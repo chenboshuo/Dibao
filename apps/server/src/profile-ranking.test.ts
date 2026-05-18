@@ -584,9 +584,58 @@ describe("profile algorithm and recommendation ranking", () => {
         dedupeKey: "article_unmatched_keyword",
         now: 1350
       });
+      articles.upsert({
+        id: "article_negative_keyword",
+        feedId: "feed_profile",
+        url: "https://example.com/article_negative_keyword",
+        canonicalUrl: "https://example.com/article_negative_keyword",
+        title: "Blocked politics digest",
+        summary: "A profile topic with a negative term.",
+        publishedAt: 1400,
+        discoveredAt: 1400,
+        contentHash: "hash_negative_keyword",
+        dedupeKey: "article_negative_keyword",
+        now: 1400
+      });
+      articles.upsert({
+        id: "article_malicious_keyword",
+        feedId: "feed_profile",
+        url: "https://example.com/article_malicious_keyword",
+        canonicalUrl: "https://example.com/article_malicious_keyword",
+        title: "Foo bar profile digest",
+        summary: "A term that should survive sanitized FTS syntax.",
+        publishedAt: 1450,
+        discoveredAt: 1450,
+        contentHash: "hash_malicious_keyword",
+        dedupeKey: "article_malicious_keyword",
+        now: 1450
+      });
+      const rankingBeforeTerms = new RecommendationRankingService({
+        db,
+        embeddings: new SqliteEmbeddingRepository(db),
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        now: () => 5000
+      });
+      rankingBeforeTerms.recalculateAll();
+      expect(bm25ScoreForContext(db, "article_keyword", rankingBeforeTerms.getActiveRankContext())).toBe(0);
+
       actions.record({ articleId: "article_liked", type: "favorite", now: 2000 });
       const maintenance = createMaintenanceService(db, 5000);
       maintenance.handleJob(maintenanceJob(KEYWORD_PROFILE_REBUILD_JOB_TYPE));
+      db.prepare(
+        `
+          insert into profile_terms (term, polarity, scope, weight, evidence_count, last_event_at, updated_at)
+          values
+            ('blocked', 'negative', 'long', 8, 1, 2000, 5000),
+            ('foo" OR bar', 'positive', 'recent', 8, 1, 2000, 5000)
+          on conflict(term, polarity, scope) do update set
+            weight = excluded.weight,
+            evidence_count = excluded.evidence_count,
+            last_event_at = excluded.last_event_at,
+            updated_at = excluded.updated_at
+        `
+      ).run();
       const rankingWithDb = new RecommendationRankingService({
         db,
         embeddings: new SqliteEmbeddingRepository(db),
@@ -598,9 +647,22 @@ describe("profile algorithm and recommendation ranking", () => {
 
       const keywordScore = bm25ScoreForContext(db, "article_keyword", rankingWithDb.getActiveRankContext());
       const otherScore = bm25ScoreForContext(db, "article_unmatched_keyword", rankingWithDb.getActiveRankContext());
+      const maliciousScore = bm25ScoreForContext(db, "article_malicious_keyword", rankingWithDb.getActiveRankContext());
+      const negative = db
+        .prepare(
+          `
+            select negative_penalty as negativePenalty
+            from article_rank_scores
+            where article_id = 'article_negative_keyword'
+              and rank_context = ?
+          `
+        )
+        .get(rankingWithDb.getActiveRankContext()) as { negativePenalty: number | null } | undefined;
 
       expect(keywordScore).toBeGreaterThanOrEqual(0);
       expect(keywordScore).toBeGreaterThan(otherScore ?? -1);
+      expect(maliciousScore).toBeGreaterThan(0);
+      expect(negative?.negativePenalty ?? 0).toBeLessThan(0);
       expect(countRows(db, "profile_terms")).toBeGreaterThan(0);
     } finally {
       db.close();
@@ -754,7 +816,239 @@ describe("profile algorithm and recommendation ranking", () => {
     }
   });
 
-  it("writes strict replay-style evaluation metrics without blocking recommendations", () => {
+  it("uses FTRL only after explicit active promotion conditions are met", () => {
+    const fixture = createProfileFixture();
+    const { actions, db, profile } = fixture;
+
+    try {
+      const event = actions.record({ articleId: "article_liked", type: "favorite", now: 2000 });
+      profile.processEvent(event!.eventId);
+      const baseRanking = new RecommendationRankingService({
+        db,
+        embeddings: new SqliteEmbeddingRepository(db),
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        now: () => 5000
+      });
+      baseRanking.recalculateAll();
+      const before = db
+        .prepare(
+          `
+            select score
+            from article_rank_scores
+            where article_id = 'article_similar'
+              and rank_context = ?
+          `
+        )
+        .get(baseRanking.getActiveRankContext()) as { score: number } | undefined;
+
+      db.prepare(
+        `
+          insert into rank_model_versions (
+            id,
+            algorithm_version,
+            feature_schema_version,
+            status,
+            sample_count,
+            blend_alpha,
+            metrics_json,
+            created_at,
+            updated_at
+          )
+          values ('ftrl_active_test', 'rec_v2', 2, 'active', 60, 0.25, ?, 5000, 5000)
+        `
+      ).run(JSON.stringify({ highQualitySamples: 60 }));
+      db.prepare(
+        `
+          insert into rank_model_weights (
+            model_version_id,
+            feature_name,
+            weight,
+            accumulator,
+            z,
+            n,
+            updated_at
+          )
+          values ('ftrl_active_test', 'freshness', -5, 0, 0, 0, 5000)
+        `
+      ).run();
+
+      const activeRanking = new RecommendationRankingService({
+        db,
+        embeddings: new SqliteEmbeddingRepository(db),
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        getRankingSettings: () => ({
+          cocoonLevel: 5,
+          localLearningEnabled: true,
+          localLearningShadowMode: false,
+          explorationEnabled: false,
+          evaluationEnabled: false
+        }),
+        now: () => 5000
+      });
+      activeRanking.recalculateAll();
+      const after = db
+        .prepare(
+          `
+            select score, ftrl_score as ftrlScore
+            from article_rank_scores
+            where article_id = 'article_similar'
+              and rank_context = ?
+          `
+        )
+        .get(activeRanking.getActiveRankContext()) as
+        | { score: number; ftrlScore: number | null }
+        | undefined;
+
+      expect(after?.ftrlScore ?? 0).toBeGreaterThan(0);
+      expect(after?.score).not.toBe(before?.score);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps micro-exploration bounded, local, and disabled when configured off", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const actions = new SqliteArticleActionRepository(db);
+    const embeddings = new SqliteEmbeddingRepository(db);
+
+    try {
+      feeds.upsert({
+        id: "feed_explore",
+        title: "Explore Feed",
+        feedUrl: "https://example.com/explore.xml",
+        now: 1000
+      });
+      embeddings.upsertProvider({
+        id: "provider_explore",
+        type: "openai_compatible",
+        name: "Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture",
+        dimension: 3,
+        enabled: true,
+        now: 1000
+      });
+      embeddings.createIndex({
+        id: "index_explore",
+        providerId: "provider_explore",
+        model: "fixture",
+        dimension: 3,
+        now: 1000
+      });
+      for (let index = 0; index < 30; index += 1) {
+        insertArticleForFeed(
+          articles,
+          `explore_${index}`,
+          "feed_explore",
+          `Exploration candidate ${index}`,
+          `hash_explore_${index}`,
+          1000 + index
+        );
+      }
+      actions.record({ articleId: "explore_25", type: "hide", now: 2000 });
+
+      const rankingLevel1 = new RecommendationRankingService({
+        db,
+        embeddings,
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        getRankingSettings: () => ({
+          cocoonLevel: 1,
+          localLearningEnabled: false,
+          localLearningShadowMode: true,
+          explorationEnabled: true,
+          evaluationEnabled: false
+        }),
+        now: () => 3000
+      });
+      rankingLevel1.recalculateAll();
+      const level1Exploration = top20ExplorationRows(db, rankingLevel1.getActiveRankContext());
+      expect(level1Exploration.length).toBeGreaterThan(0);
+      expect(level1Exploration.length).toBeLessThanOrEqual(2);
+      expect(
+        db
+          .prepare("select 1 from article_rank_scores where article_id = 'explore_25' and rank_context = ?")
+          .get(rankingLevel1.getActiveRankContext())
+      ).toBeUndefined();
+
+      const explanation = db
+        .prepare(
+          `
+            select payload_json as payloadJson
+            from article_rank_explanations
+            where article_id = ?
+              and rank_context = ?
+          `
+        )
+        .get(level1Exploration[0]!.articleId, rankingLevel1.getActiveRankContext()) as
+        | { payloadJson: string }
+        | undefined;
+      const payload = JSON.parse(explanation?.payloadJson ?? "{}") as {
+        components?: {
+          wasExploration?: boolean;
+          explorationBucket?: string | null;
+          explorationReason?: string | null;
+        };
+      };
+      expect(payload.components?.wasExploration).toBe(true);
+      expect(payload.components?.explorationBucket).toEqual(expect.any(String));
+      expect(payload.components?.explorationReason).toEqual(expect.any(String));
+
+      const rankingLevel10 = new RecommendationRankingService({
+        db,
+        embeddings,
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        getRankingSettings: () => ({
+          cocoonLevel: 10,
+          localLearningEnabled: false,
+          localLearningShadowMode: true,
+          explorationEnabled: true,
+          evaluationEnabled: false
+        }),
+        now: () => 3000
+      });
+      rankingLevel10.recalculateAll();
+      expect(top20ExplorationRows(db, rankingLevel10.getActiveRankContext()).length).toBeLessThan(
+        level1Exploration.length
+      );
+
+      const rankingDisabled = new RecommendationRankingService({
+        db,
+        embeddings,
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        getRankingSettings: () => ({
+          cocoonLevel: 1,
+          localLearningEnabled: false,
+          localLearningShadowMode: true,
+          explorationEnabled: false,
+          evaluationEnabled: false
+        }),
+        now: () => 3000
+      });
+      rankingDisabled.recalculateAll();
+      const disabledRows = db
+        .prepare(
+          `
+            select count(*) as count
+            from article_rank_scores
+            where rank_context = ?
+              and coalesce(exploration_bonus, 0) > 0
+          `
+        )
+        .get(rankingDisabled.getActiveRankContext()) as { count: number };
+      expect(disabledRows.count).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("writes lightweight replay diagnostic metrics without blocking recommendations", () => {
     const db = openDatabase(tempDatabasePath(), { migrate: true });
     const feeds = new SqliteFeedRepository(db);
     const articles = new SqliteArticleRepository(db);
@@ -770,8 +1064,21 @@ describe("profile algorithm and recommendation ranking", () => {
       const run = db
         .prepare("select metrics_json as metricsJson from ranking_eval_runs order by created_at desc limit 1")
         .get() as { metricsJson: string } | undefined;
-      const metrics = JSON.parse(run?.metricsJson ?? "{}") as { hitAt10?: number; ndcgAt10?: number; mrr?: number; cutoffCount?: number };
+      const metrics = JSON.parse(run?.metricsJson ?? "{}") as {
+        evaluationMode?: string;
+        strictReplay?: boolean;
+        diagnosticOnly?: boolean;
+        hitAt10?: number;
+        ndcgAt10?: number;
+        mrr?: number;
+        cutoffCount?: number;
+        labelCount?: number;
+      };
+      expect(metrics.evaluationMode).toBe("lightweight_replay_diagnostic");
+      expect(metrics.strictReplay).toBe(false);
+      expect(metrics.diagnosticOnly).toBe(true);
       expect(metrics.cutoffCount).toBeGreaterThan(0);
+      expect(metrics.labelCount).toBeGreaterThanOrEqual(0);
       expect(metrics.hitAt10).toBeGreaterThanOrEqual(0);
       expect(metrics.ndcgAt10).toBeGreaterThanOrEqual(0);
       expect(metrics.mrr).toBeGreaterThanOrEqual(0);
@@ -1147,6 +1454,24 @@ function activeScoreForContext(
     .get(articleId, ...contexts) as { score: number } | undefined;
 
   return row?.score ?? null;
+}
+
+function top20ExplorationRows(
+  db: DibaoDatabase,
+  rankContext: string
+): Array<{ articleId: string; explorationBonus: number }> {
+  return db
+    .prepare(
+      `
+        select article_id as articleId, exploration_bonus as explorationBonus
+        from article_rank_scores
+        where rank_context = ?
+          and rerank_position <= 20
+          and coalesce(exploration_bonus, 0) > 0
+        order by rerank_position asc
+      `
+    )
+    .all(rankContext) as Array<{ articleId: string; explorationBonus: number }>;
 }
 
 function feedStats(db: DibaoDatabase, feedId: string): {

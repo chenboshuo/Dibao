@@ -764,6 +764,8 @@ idx_article_rank_scores_calculated_at(calculated_at)
 - V2 context 形如 `rec_v2:embedding:cocoon_<level>:schema_2`。
 - `rerank_position` 是 recommended canonical order；`latest` 不使用该字段排序。
 - `bm25_score` 只能表示真实 `profile_terms + FTS5 bm25()` 分数；P0 阶段未激活时应为 0/null。
+- `ftrl_score` 可在 shadow 模式下写入，但只有本地模型已 promote 为 `active`、样本数足够且 settings 允许 active learning 时才参与 `score`。
+- `exploration_bonus` 目前表示本地探索加分/槽位诊断；在 bucket alpha/beta 参与 selection 前，透明页不得把它描述成完整 bucket bandit。
 
 ### article_rank_explanations
 
@@ -811,6 +813,12 @@ content_text
 - FTS5 是可重建索引。
 - 标题、摘要、正文的权重由查询时设置。
 - 文章删除或正文清理时同步删除 FTS row。
+
+## 本地学习与评估派生表
+
+`rank_model_versions` / `rank_model_weights` / `rank_training_examples` 存储本地 FTRL shadow/active 模型、低维特征权重和训练样本。默认模型是 shadow；`POST /api/recommendation/ftrl/promote` 只在高质量样本足够且 `blend_alpha > 0` 时把模型标记为 active。
+
+`ranking_eval_runs.metrics_json` 当前存储 `lightweight_replay_diagnostic` 指标，例如 `cutoffCount`、`labelCount`、`hitAt10`、`ndcgAt10`、`mrr`。该表不是因果 A/B 结果；在没有完整 strict time-travel profile 前，文档和透明页都不得称为 full strict replay。
 
 ## 任务系统
 

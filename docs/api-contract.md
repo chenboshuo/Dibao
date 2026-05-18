@@ -1546,9 +1546,9 @@ PROFILE_WARMUP
     moduleStatus: {
       bm25ProfileTerms: "not_active" | "empty" | "stale" | "active"
       recentIntent: "missing" | "stale" | "active"
-      ftrl: "disabled" | "shadow_no_samples" | "shadow_trained" | "active" | "failed"
+      ftrl: "disabled" | "shadow_no_samples" | "insufficient_samples" | "shadow_trained" | "active" | "failed"
       exploration: "disabled" | "enabled_bonus_only" | "enabled_slots_active"
-      evaluation: "unavailable" | "diagnostic_only" | "strict_replay"
+      evaluation: "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" | "strict_replay"
       duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active"
       evidence: "dynamic_fallback" | "reconstructed" | "live_evidence"
     }
@@ -1571,9 +1571,10 @@ POST /api/recommendation/rebuild-keywords
 POST /api/recommendation/rebuild-recent-intent
 POST /api/recommendation/evaluate
 POST /api/recommendation/ftrl/reset
+POST /api/recommendation/ftrl/promote
 ```
 
-除 `ftrl/reset` 外的维护接口响应：
+除 `ftrl/reset` 和 `ftrl/promote` 外的维护接口响应：
 
 ```json
 {
@@ -1593,6 +1594,22 @@ POST /api/recommendation/ftrl/reset
   }
 }
 ```
+
+`POST /api/recommendation/ftrl/promote` 响应：
+
+```json
+{
+  "data": {
+    "ok": true,
+    "modelVersionId": "ftrl_schema_2",
+    "sampleCount": 60,
+    "highQualitySampleCount": 55,
+    "blendAlpha": 0.1
+  }
+}
+```
+
+如果高质量样本不足、`blendAlpha` 仍为 `0`，返回 `409` / `INSUFFICIENT_FTRL_SAMPLES`。该接口只切换本地 SQLite 中的模型状态，不调用外部服务。
 
 维护任务只操作本地 SQLite 派生数据，不调用远程 LLM、reranker、classifier 或外部搜索服务。
 

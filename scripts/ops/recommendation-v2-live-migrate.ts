@@ -36,6 +36,9 @@ try {
     .prepare("select id from embedding_indexes where status = 'active' order by updated_at desc limit 1")
     .get() as { id: string } | undefined;
   const appliedNow = runMigrations(db);
+  const postActiveIndex = db
+    .prepare("select id from embedding_indexes where status = 'active' order by updated_at desc limit 1")
+    .get() as { id: string } | undefined;
   const migrations = db
     .prepare("select version, name, checksum from schema_migrations order by version")
     .all() as Array<{ version: string; name: string; checksum: string | null }>;
@@ -61,6 +64,8 @@ try {
     appliedNow,
     postMigration: {
       counts: postCounts,
+      activeEmbeddingIndexId: postActiveIndex?.id ?? null,
+      activeEmbeddingIndexUnchanged: (activeIndex?.id ?? null) === (postActiveIndex?.id ?? null),
       newTablesExist: hasRankContexts,
       legacyRankContextReadable: legacyRankReadable,
       embeddingCountUnchanged:

@@ -104,7 +104,8 @@ import {
   RANKING_EVAL_RUN_JOB_TYPE,
   RECOMMENDATION_BACKFILL_JOB_TYPE,
   RECENT_INTENT_REBUILD_JOB_TYPE,
-  RecommendationMaintenanceService
+  RecommendationMaintenanceService,
+  RecommendationMaintenanceServiceError
 } from "./recommendation-maintenance-service.js";
 import { RecommendationRankingService } from "./ranking-service.js";
 import {
@@ -650,6 +651,16 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.post("/api/recommendation/ftrl/reset", async () => ({
     data: recommendationMaintenanceService.resetFtrl()
   }));
+
+  app.post("/api/recommendation/ftrl/promote", async (_request, reply) => {
+    try {
+      return {
+        data: recommendationMaintenanceService.promoteFtrl()
+      };
+    } catch (error) {
+      return sendRecommendationMaintenanceError(reply, error);
+    }
+  });
 
   app.get("/api/settings", async () => ({
     data: settingsService.getSettings()
@@ -1724,11 +1735,13 @@ function recommendationModuleStatus(
         ? "failed"
         : model?.status === "active"
           ? "active"
-          : model && model.sampleCount > 0
-            ? "shadow_trained"
+          : model && model.sampleCount > 0 && model.sampleCount < 50
+            ? "insufficient_samples"
+            : model && model.sampleCount > 0
+              ? "shadow_trained"
             : "shadow_no_samples",
     exploration: algorithm.exploration.enabled
-      ? "enabled_slots_active"
+      ? "enabled_bonus_only"
       : "disabled",
     evaluation: !algorithm.evaluation.enabled ? "unavailable" : evalMode,
     duplicate: nearDuplicateActive ? "near_duplicate_active" : duplicateBuilt ? "exact_scaffold" : "not_built",
@@ -1736,13 +1749,20 @@ function recommendationModuleStatus(
   };
 }
 
-function evaluationModeFromMetrics(metricsJson: string | null): "unavailable" | "diagnostic_only" | "strict_replay" {
+function evaluationModeFromMetrics(
+  metricsJson: string | null
+): "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" {
   if (!metricsJson) {
     return "unavailable";
   }
   try {
-    const metrics = JSON.parse(metricsJson) as { strictReplay?: unknown };
-    return metrics.strictReplay === true ? "strict_replay" : "diagnostic_only";
+    const metrics = JSON.parse(metricsJson) as {
+      evaluationMode?: unknown;
+      diagnosticOnly?: unknown;
+    };
+    return metrics.evaluationMode === "lightweight_replay_diagnostic" || metrics.diagnosticOnly === true
+      ? "lightweight_replay_diagnostic"
+      : "diagnostic_only";
   } catch {
     return "diagnostic_only";
   }
@@ -2679,6 +2699,14 @@ function sendOpmlServiceError(reply: FastifyReply, error: unknown) {
 
 function sendSettingsError(reply: FastifyReply, error: unknown) {
   if (error instanceof SettingsServiceError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendRecommendationMaintenanceError(reply: FastifyReply, error: unknown) {
+  if (error instanceof RecommendationMaintenanceServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 

@@ -34,6 +34,18 @@ export type RecommendationMaintenanceServiceOptions = {
   jobIdFactory?: () => string;
 };
 
+export class RecommendationMaintenanceServiceError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly code: string,
+    message: string,
+    public readonly details?: unknown
+  ) {
+    super(message);
+    this.name = "RecommendationMaintenanceServiceError";
+  }
+}
+
 export class RecommendationMaintenanceService {
   private readonly now: () => number;
   private readonly jobIdFactory: () => string;
@@ -44,8 +56,15 @@ export class RecommendationMaintenanceService {
   }
 
   enqueueRecalculate(): RecommendationMaintenanceResult {
+    const existing = this.options.jobs.listOpenByType("ranking_recalculate").find((job) => {
+      try {
+        return job.payloadJson === null || JSON.stringify(JSON.parse(job.payloadJson)) === "{}";
+      } catch {
+        return false;
+      }
+    });
     const job = this.options.rankingJobs.enqueueAll();
-    return { jobId: job.id, existing: job.status === "queued" || job.status === "running" };
+    return { jobId: job.id, existing: existing !== undefined };
   }
 
   enqueueFingerprintBackfill(): RecommendationMaintenanceResult {
@@ -77,6 +96,71 @@ export class RecommendationMaintenanceService {
         .run(this.now());
     })();
     return { ok: true };
+  }
+
+  promoteFtrl(): {
+    ok: true;
+    modelVersionId: string;
+    sampleCount: number;
+    highQualitySampleCount: number;
+    blendAlpha: number;
+  } {
+    const model = this.options.db
+      .prepare(
+        `
+          select
+            id,
+            status,
+            sample_count as sampleCount,
+            blend_alpha as blendAlpha,
+            metrics_json as metricsJson
+          from rank_model_versions
+          where status in ('shadow', 'active')
+          order by case when status = 'active' then 0 else 1 end, updated_at desc
+          limit 1
+        `
+      )
+      .get() as
+      | {
+          id: string;
+          status: "shadow" | "active";
+          sampleCount: number;
+          blendAlpha: number;
+          metricsJson: string | null;
+        }
+      | undefined;
+
+    const highQualitySampleCount = highQualitySampleCountFor(model?.metricsJson ?? null);
+    if (!model || model.sampleCount < 50 || highQualitySampleCount < 50 || model.blendAlpha <= 0) {
+      throw new RecommendationMaintenanceServiceError(
+        409,
+        "INSUFFICIENT_FTRL_SAMPLES",
+        "FTRL model cannot be promoted until it has at least 50 high-quality local samples.",
+        {
+          sampleCount: model?.sampleCount ?? 0,
+          highQualitySampleCount,
+          blendAlpha: model?.blendAlpha ?? 0
+        }
+      );
+    }
+
+    const now = this.now();
+    this.options.db.transaction(() => {
+      this.options.db
+        .prepare("update rank_model_versions set status = 'retired', updated_at = ? where status = 'active' and id != ?")
+        .run(now, model.id);
+      this.options.db
+        .prepare("update rank_model_versions set status = 'active', updated_at = ? where id = ?")
+        .run(now, model.id);
+    })();
+
+    return {
+      ok: true,
+      modelVersionId: model.id,
+      sampleCount: model.sampleCount,
+      highQualitySampleCount,
+      blendAlpha: model.blendAlpha
+    };
   }
 
   handleJob(job: JobRow): void {
@@ -782,9 +866,11 @@ export class RecommendationMaintenanceService {
       .run(
         runId,
         JSON.stringify({
-          strictReplay: metrics.cutoffCount > 0 && metrics.labelCount > 0,
-          diagnosticOnly: metrics.cutoffCount === 0 || metrics.labelCount === 0,
-          note: "Local offline replay estimate; not a causal A/B test.",
+          evaluationMode: "lightweight_replay_diagnostic",
+          strictReplay: false,
+          diagnosticOnly: true,
+          note:
+            "Lightweight local replay diagnostic; not a full strict replay and not a causal A/B test.",
           ...metrics
         }),
         now,
@@ -1151,6 +1237,18 @@ function existingModelStatus(
     .prepare("select status from rank_model_versions where id = ?")
     .get(modelId) as { status: "shadow" | "active" | "retired" | "failed" } | undefined;
   return row?.status ?? null;
+}
+
+function highQualitySampleCountFor(metricsJson: string | null): number {
+  if (!metricsJson) {
+    return 0;
+  }
+  try {
+    const metrics = JSON.parse(metricsJson) as { highQualitySamples?: unknown };
+    return typeof metrics.highQualitySamples === "number" ? metrics.highQualitySamples : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function replayMetricsFor(

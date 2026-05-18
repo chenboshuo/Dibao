@@ -24,16 +24,16 @@ This document records the phased V2/V3 recommendation architecture and the curre
 - Duplicate rebuild includes exact keys and bounded simhash near-duplicate grouping; ranking reads persisted duplicate groups for penalties.
 - Feed source normalization writes Bayesian smoothing fields and ranking prefers them when available.
 - Recent intent rebuild uses existing embeddings only and does not call an embedding provider.
-- Offline evaluation writes local replay-style metrics from sampled cutoffs and labels; it is still not causal A/B evidence.
+- Offline evaluation writes `lightweight_replay_diagnostic` metrics from sampled cutoffs and labels; it is not full strict replay and not causal A/B evidence.
 
 ### Implemented but shadow or disabled
 
-- FTRL training generates examples and weights locally. It writes non-zero shadow `ftrl_score`, but final ranking uses it only when the model is active, sample count is sufficient, and settings allow active blend.
-- Micro-exploration uses deterministic slots in canonical rerank when exploration is enabled. It remains bounded by top10/top20 slot caps.
+- FTRL training generates examples and weights locally. Transparency distinguishes `disabled`, `shadow_no_samples`, `insufficient_samples`, `shadow_trained`, `active`, and `failed`. It writes non-zero shadow `ftrl_score`, but final ranking uses it only after explicit local promotion, sufficient samples, `localLearningEnabled=true`, and `localLearningShadowMode=false`.
+- Micro-exploration currently exposes bounded local exploration bonus/slot state. It must be shown as `enabled_bonus_only` until bucket alpha/beta statistics are used for slot selection.
 
 ### Planned / disabled
 
-- A stricter historical replay can still improve embedding-time leakage handling. Current evaluation is a local replay estimate and must not be described as an A/B test.
+- Full strict replay remains planned. Current evaluation is `lightweight_replay_diagnostic`; it uses local bounded replay terms and may approximate historical table state.
 
 ## Rank Context
 
@@ -85,7 +85,7 @@ V2 score combines:
 
 - long-term semantic interest from `interest_clusters`
 - top-k weighted positive and negative cluster matching instead of single max cosine
-- local keyword/BM25 score when P1 activates `profile_terms + FTS5 bm25()`
+- local keyword/BM25 score from active `profile_terms + FTS5 bm25()`
 - freshness
 - source normalization
 - article state
@@ -173,7 +173,7 @@ V3 features are local and feature-flagged:
 
 FTRL is shadow-mode by default. It is trained locally from low-dimensional normalized ranking features, not raw embedding dimensions.
 
-Offline replay evaluation is a local replay estimate. It must not be described as causal A/B proof.
+Offline evaluation is currently `lightweight_replay_diagnostic`. It stores subset metrics such as cutoff count, label count, hit@10, nDCG@10, and MRR, but it is not full strict replay and must not be described as causal A/B proof.
 
 ## Migration And Backfill
 
@@ -207,5 +207,6 @@ All endpoints require authentication and dedupe queued/running work:
 - `POST /api/recommendation/rebuild-keywords`
 - `POST /api/recommendation/evaluate`
 - `POST /api/recommendation/ftrl/reset`
+- `POST /api/recommendation/ftrl/promote`
 
-The first five return a job id. FTRL reset is immediate and local.
+The background maintenance endpoints return a job id and dedupe queued/running work. FTRL reset is immediate and local. FTRL promote is immediate, local, and returns `409` until the shadow model has at least 50 high-quality samples and a positive blend alpha.

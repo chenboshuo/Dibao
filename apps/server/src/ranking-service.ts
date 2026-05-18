@@ -150,6 +150,10 @@ type V2Score = {
   duplicatePenalty: number;
   diversityPenalty: number;
   explorationBonus: number;
+  explorationEligible: boolean;
+  explorationBucket: string | null;
+  explorationReason: string | null;
+  wasExploration: boolean;
   pendingEmbeddingScore: number;
   exposurePenalty: number;
   preRerankScore: number;
@@ -1188,7 +1192,8 @@ function calculateV2Score(input: {
         )
       : 0;
   const exposurePenalty = candidate.state.interactionStatus === "ignored" ? -0.04 : 0;
-  const explorationBonus = explorationBonusFor(candidate, input.settings, ageHours);
+  const exploration = explorationEligibilityFor(candidate, input.settings, ageHours);
+  const explorationBonus = 0;
   const preRerankScore =
     semanticScore +
     bm25Score +
@@ -1248,6 +1253,10 @@ function calculateV2Score(input: {
     duplicatePenalty: roundScore(duplicatePenalty),
     diversityPenalty: 0,
     explorationBonus: roundScore(explorationBonus),
+    explorationEligible: exploration.eligible,
+    explorationBucket: exploration.bucket,
+    explorationReason: exploration.reason,
+    wasExploration: false,
     pendingEmbeddingScore: roundScore(pendingEmbeddingScore),
     exposurePenalty: roundScore(exposurePenalty),
     preRerankScore: roundScore(preRerankScore)
@@ -1287,16 +1296,6 @@ function stateScoreForV2(candidate: ArticleRankingCandidateRow): number {
     (candidate.state.interactionStatus === "opened" && !read ? 0.012 : 0) +
     clamp(candidate.state.readingProgress, 0, 1) * 0.08
   );
-}
-
-function lexicalPreferenceScore(candidate: ArticleRankingCandidateRow): number {
-  const title = tokenize(candidate.title);
-  const summary = tokenize(candidate.summary ?? "");
-  const content = tokenize((candidate.contentText ?? "").slice(0, 2000));
-  const titleScore = Math.min(1, title.length / 8) * 0.55;
-  const summaryScore = Math.min(1, summary.length / 28) * 0.3;
-  const contentScore = Math.min(1, content.length / 100) * 0.15;
-  return clamp(titleScore + summaryScore + contentScore, 0, 1);
 }
 
 function tokenize(text: string): string[] {
@@ -1345,18 +1344,29 @@ function emptySourceFeature(): SourceFeature {
   };
 }
 
-function explorationBonusFor(
+function explorationEligibilityFor(
   candidate: ArticleRankingCandidateRow,
   settings: RankingSettingsSnapshot,
   ageHours: number
-): number {
+): { eligible: boolean; bucket: string | null; reason: string | null } {
   if (!settings.explorationEnabled || candidate.state.hidden || candidate.state.notInterested) {
-    return 0;
+    return { eligible: false, bucket: null, reason: null };
   }
-  const params = cocoonParameters(settings.cocoonLevel);
-  const pending = candidate.embeddingStatus === "embedding_pending" ? params.explorationRatio : 0;
-  const lowExposure = candidate.behaviorEventCount === 0 && ageHours <= 48 ? params.explorationRatio / 2 : 0;
-  return clamp(pending + lowExposure, 0, 0.08);
+  if (candidate.embeddingStatus === "embedding_pending" && ageHours <= 72) {
+    return {
+      eligible: true,
+      bucket: "pending_embedding",
+      reason: "Embedding is pending, so this item can use a bounded local exploration slot."
+    };
+  }
+  if (candidate.behaviorEventCount === 0 && ageHours <= 48) {
+    return {
+      eligible: true,
+      bucket: `feed:${candidate.feedId}`,
+      reason: "Low-exposure recent item from a subscribed feed."
+    };
+  }
+  return { eligible: false, bucket: null, reason: null };
 }
 
 function duplicateStatsFor(
@@ -1474,7 +1484,7 @@ function applyExplorationSlots(
     return selected;
   }
   const top20 = selected.slice(0, 20);
-  const currentExploration = top20.filter((item) => item.score.explorationBonus > 0).length;
+  const currentExploration = top20.filter((item) => item.score.wasExploration).length;
   let remainingSlots = Math.max(0, maxTop20Slots - currentExploration);
   if (remainingSlots === 0) {
     return selected;
@@ -1485,7 +1495,7 @@ function applyExplorationSlots(
     .filter(
       (item) =>
         item.score.score >= 0.05 &&
-        item.score.explorationBonus > 0 &&
+        item.score.explorationEligible &&
         !item.candidate.state.hidden &&
         !item.candidate.state.notInterested
     )
@@ -1512,7 +1522,10 @@ function applyExplorationSlots(
     }
     removed.score = {
       ...removed.score,
-      explorationBonus: Math.max(removed.score.explorationBonus, params.explorationRatio)
+      score: roundScore(clamp(removed.score.score + params.explorationRatio, 0, 1)),
+      preRerankScore: roundScore(clamp(removed.score.preRerankScore + params.explorationRatio, 0, 1)),
+      explorationBonus: roundScore(params.explorationRatio),
+      wasExploration: true
     };
     next.splice(targetIndex, 0, removed);
     remainingSlots -= 1;
@@ -1563,6 +1576,9 @@ function explanationPayloadFor(
       diversityPenalty: score.diversityPenalty,
       pendingEmbedding: score.pendingEmbeddingScore,
       exploration: score.explorationBonus,
+      wasExploration: score.wasExploration,
+      explorationBucket: score.wasExploration ? score.explorationBucket : null,
+      explorationReason: score.wasExploration ? score.explorationReason : null,
       exposurePenalty: score.exposurePenalty,
       ftrl: score.ftrlScore
     },
