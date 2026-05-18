@@ -1412,7 +1412,7 @@ function recommendationMode(input: {
   if (
     input.activeIndex.status === "failed" ||
     input.activeProvider.lastTestStatus === "failed" ||
-    input.coverage.failedJobs > 0
+    hasBlockingEmbeddingFailures(input.coverage)
   ) {
     return "degraded";
   }
@@ -1422,6 +1422,18 @@ function recommendationMode(input: {
   }
 
   return "personalized";
+}
+
+function hasBlockingEmbeddingFailures(coverage: RecommendationCoverage): boolean {
+  if (coverage.failedJobs === 0) {
+    return false;
+  }
+
+  return (
+    coverage.missingEmbeddingCount > 0 ||
+    coverage.staleEmbeddingCount > 0 ||
+    coverage.coverageRatio < 1
+  );
 }
 
 function recommendationWarnings(input: {

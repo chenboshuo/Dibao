@@ -1560,6 +1560,75 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("does not keep recommendation diagnostics degraded for historical failed jobs after coverage recovers", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    const vectorStore = new SqliteVecVectorStore(db);
+    vectorStore.upsertArticleVector({
+      articleId: "article_recommended",
+      embeddingIndexId: index.id,
+      vector: [1, 0, 0],
+      contentHash: "article_recommended:2000",
+      now: 6100
+    });
+    vectorStore.upsertArticleVector({
+      articleId: "article_recent",
+      embeddingIndexId: index.id,
+      vector: [0, 1, 0],
+      contentHash: "article_recent:3000",
+      now: 6200
+    });
+    const jobs = new SqliteJobRepository(db);
+    const failedJob = jobs.enqueue({
+      id: "job_embedding_historical_failed",
+      type: "embedding_generate",
+      payloadJson: JSON.stringify({
+        embeddingIndexId: index.id,
+        articleIds: ["article_recent"]
+      }),
+      now: 7000
+    });
+    jobs.markFailed(failedJob.id, "Provider request failed", 7100);
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(status.statusCode, status.body).toBe(200);
+      expect(status.json()).toMatchObject({
+        data: {
+          mode: "personalized",
+          coverage: {
+            candidateCount: 2,
+            eligibleArticleCount: 2,
+            missingEmbeddingCount: 0,
+            staleEmbeddingCount: 0,
+            embeddingCount: 2,
+            coverageRatio: 1,
+            pendingJobs: 0,
+            failedJobs: 1,
+            lastFailedAt: "1970-01-01T00:00:07.100Z",
+            lastError: "Provider request failed"
+          },
+          warnings: expect.arrayContaining([
+            {
+              code: "EMBEDDING_JOB_FAILED",
+              message: "Embedding generation has failed jobs for the active index."
+            }
+          ])
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("reports degraded recommendation diagnostics when the active provider test failed", async () => {
     const db = createFixtureDatabase();
     createActiveEmbeddingDiagnosticsFixture(db, {
