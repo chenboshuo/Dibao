@@ -8,8 +8,10 @@ import {
 import {
   BASE_RANK_CONTEXT,
   fromVectorBlob,
+  sanitizeFtsQuery,
   type ArticleRankExplanationSourceRow,
   type ArticleRankingCandidateRow,
+  type DibaoDatabase,
   type EmbeddingRepository,
   type InterestClusterPolarity,
   type InterestClusterRow,
@@ -72,6 +74,7 @@ export type RankingSettingsSnapshot = {
 };
 
 export type RecommendationRankingServiceOptions = {
+  db?: DibaoDatabase;
   embeddings?: Pick<EmbeddingRepository, "findActiveProviderWithIndex">;
   profiles?: Pick<ProfileRepository, "listClusters">;
   rankings: RankingRepository;
@@ -84,6 +87,52 @@ type ClusterVector = {
   polarity: InterestClusterPolarity;
   vector: number[];
   weightNorm: number;
+};
+
+type CandidateOrigin =
+  | "explicit"
+  | "must_include"
+  | "recency"
+  | "semantic"
+  | "lexical"
+  | "diversity";
+
+type LexicalFeature = {
+  bm25Positive: number;
+  bm25Recent: number;
+  positiveOverlap: number;
+  negativeOverlap: number;
+  titleKeywordMatch: number;
+  matchedTerms: Array<{ term: string; polarity: "positive" | "negative"; scope: "long" | "recent" }>;
+};
+
+type RecentIntentVector = {
+  polarity: InterestClusterPolarity;
+  vector: number[];
+  weight: number;
+  eventCount: number;
+  updatedAt: number;
+};
+
+type DuplicateFeature = {
+  groupId: string | null;
+  groupSize: number;
+  reason: string | null;
+  confidence: number | null;
+  representativeArticleId: string | null;
+};
+
+type SourceFeature = {
+  clearSignalCount: number;
+  smoothedPositiveRate: number;
+  sourceConfidence: number;
+};
+
+type FtrlModel = {
+  status: "shadow" | "active" | "retired" | "failed";
+  sampleCount: number;
+  blendAlpha: number;
+  weights: Map<string, number>;
 };
 
 type V2Score = {
@@ -250,15 +299,21 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
           cocoonLevel: settings.cocoonLevel
         })
       : BASE_RANK_CONTEXT;
-    const candidates = this.options.rankings.listCandidates({
+    const candidateSet = this.listCandidatesForRanking({
       articleIds,
       afterArticleId: page?.afterArticleId,
       limit: page?.limit,
       embeddingIndexId: activeIndexId
     });
+    const candidates = candidateSet.candidates;
     const now = this.now();
     const clusters = activeIndexId ? this.clusterVectorsFor(activeIndexId) : [];
-    const duplicateStats = duplicateStatsFor(candidates);
+    const recentIntent = activeIndexId ? this.recentIntentVectorsFor(activeIndexId) : [];
+    const lexicalFeatures = this.lexicalFeaturesFor(candidates);
+    const duplicateFeatures = this.duplicateFeaturesFor(candidates);
+    const sourceFeatures = this.sourceFeaturesFor(candidates);
+    const ftrlModel = this.ftrlModel();
+    const duplicateStats = duplicateStatsFor(candidates, duplicateFeatures);
     const rerankWindowId = `${activeRankContext}:${now}`;
     const scored: Array<{ candidate: ArticleRankingCandidateRow; score: V2Score }> = [];
 
@@ -320,9 +375,14 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         candidate,
         now,
         clusters,
+        recentIntent,
         settings,
         baseScore: baseScore.score,
-        duplicateCount: duplicateStats.get(candidate.articleId) ?? 1
+        duplicateCount: duplicateStats.get(candidate.articleId) ?? 1,
+        lexical: lexicalFeatures.get(candidate.articleId) ?? emptyLexicalFeature(),
+        duplicate: duplicateFeatures.get(candidate.articleId) ?? emptyDuplicateFeature(),
+        source: sourceFeatures.get(candidate.feedId) ?? emptySourceFeature(),
+        ftrlModel
       });
       scored.push({ candidate, score });
     }
@@ -363,7 +423,14 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         articleId: item.candidate.articleId,
         rankContext: activeRankContext,
         embeddingIndexId: activeIndexId,
-        payloadJson: JSON.stringify(explanationPayloadFor(item.candidate, item.score, settings)),
+        payloadJson: JSON.stringify(
+          explanationPayloadFor(item.candidate, item.score, settings, {
+            origins: candidateSet.origins.get(item.candidate.articleId) ?? [],
+            lexical: lexicalFeatures.get(item.candidate.articleId) ?? emptyLexicalFeature(),
+            duplicate: duplicateFeatures.get(item.candidate.articleId) ?? emptyDuplicateFeature(),
+            recentIntent
+          })
+        ),
         createdAt: now
       });
     }
@@ -379,6 +446,494 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
 
   private activeEmbeddingIndexId(): string | null {
     return this.options.embeddings?.findActiveProviderWithIndex()?.index.id ?? null;
+  }
+
+  private listCandidatesForRanking(input: {
+    articleIds?: string[];
+    afterArticleId?: string | null;
+    embeddingIndexId?: string | null;
+    limit?: number;
+  }): { candidates: ArticleRankingCandidateRow[]; origins: Map<string, CandidateOrigin[]> } {
+    const db = this.options.db;
+    if (!db || input.articleIds || input.afterArticleId || input.limit !== undefined) {
+      const candidates = this.options.rankings.listCandidates(input);
+      return {
+        candidates,
+        origins: new Map(candidates.map((candidate) => [candidate.articleId, ["explicit"]]))
+      };
+    }
+
+    const origins = new Map<string, Set<CandidateOrigin>>();
+    const add = (origin: CandidateOrigin, rows: Array<{ articleId: string }>) => {
+      for (const row of rows) {
+        const set = origins.get(row.articleId) ?? new Set<CandidateOrigin>();
+        set.add(origin);
+        origins.set(row.articleId, set);
+      }
+    };
+
+    const now = this.now();
+    const eligibleWhere = `
+      a.deleted_at is null
+      and a.status != 'deleted'
+      and f.deleted_at is null
+      and f.enabled = 1
+      and s.hidden_at is null
+      and s.not_interested_at is null
+    `;
+
+    add(
+      "must_include",
+      db
+        .prepare(
+          `
+            select a.id as articleId
+            from articles a
+            join feeds f on f.id = a.feed_id
+            left join article_states s on s.article_id = a.id
+            left join article_embeddings ae
+              on ae.article_id = a.id
+             and ae.embedding_index_id = ?
+            where ${eligibleWhere}
+              and (
+                s.favorited_at is not null
+                or s.read_later_at is not null
+                or (s.last_opened_at is not null and s.read_at is null and coalesce(s.reading_progress, 0) < 0.9)
+                or (ae.article_id is null and coalesce(a.published_at, a.discovered_at) >= ?)
+                or abs(f.source_weight) >= 0.75
+              )
+            order by coalesce(a.published_at, a.discovered_at) desc, a.id desc
+            limit 300
+          `
+        )
+        .all(input.embeddingIndexId ?? "", now - 72 * 3_600_000) as Array<{ articleId: string }>
+    );
+
+    add(
+      "recency",
+      db
+        .prepare(
+          `
+            select a.id as articleId
+            from articles a
+            join feeds f on f.id = a.feed_id
+            left join article_states s on s.article_id = a.id
+            where ${eligibleWhere}
+              and coalesce(a.published_at, a.discovered_at) >= ?
+            order by coalesce(a.published_at, a.discovered_at) desc, a.id desc
+            limit 500
+          `
+        )
+        .all(now - 14 * 86_400_000) as Array<{ articleId: string }>
+    );
+
+    add("lexical", this.lexicalCandidateRows(500));
+    add("diversity", this.diversityCandidateRows(200));
+    if (input.embeddingIndexId) {
+      add("semantic", this.semanticCandidateRows(input.embeddingIndexId, 400));
+    }
+
+    const mustInclude = Array.from(origins.entries())
+      .filter(([, set]) => set.has("must_include"))
+      .map(([articleId]) => articleId);
+    const other = Array.from(origins.keys()).filter((articleId) => !mustInclude.includes(articleId));
+    const articleIds = [...mustInclude, ...other.slice(0, MMR_WINDOW_LIMIT)];
+    const candidates = this.options.rankings.listCandidates({
+      articleIds,
+      embeddingIndexId: input.embeddingIndexId
+    });
+
+    return {
+      candidates,
+      origins: new Map(
+        candidates.map((candidate) => [
+          candidate.articleId,
+          Array.from(origins.get(candidate.articleId) ?? ["explicit"])
+        ])
+      )
+    };
+  }
+
+  private lexicalCandidateRows(limit: number): Array<{ articleId: string }> {
+    const db = this.options.db;
+    if (!db) {
+      return [];
+    }
+    const terms = this.profileTerms({
+      polarity: "positive",
+      scopes: ["recent", "long"],
+      limit: 32
+    });
+    const query = sanitizeFtsQuery(terms.map((term) => term.term).join(" "));
+    if (!query) {
+      return [];
+    }
+    return db
+      .prepare(
+        `
+          select article_id as articleId
+          from article_fts
+          where article_fts match ?
+          order by bm25(article_fts, 5.0, 2.0, 0.6)
+          limit ?
+        `
+      )
+      .all(query, Math.max(1, Math.min(limit, 1000))) as Array<{ articleId: string }>;
+  }
+
+  private semanticCandidateRows(embeddingIndexId: string, limit: number): Array<{ articleId: string }> {
+    const db = this.options.db;
+    if (!db) {
+      return [];
+    }
+    const vectors = [
+      ...this.clusterVectorsFor(embeddingIndexId)
+        .filter((cluster) => cluster.polarity === "positive")
+        .slice(0, 8)
+        .map((cluster) => cluster.vector),
+      ...this.recentIntentVectorsFor(embeddingIndexId)
+        .filter((intent) => intent.polarity === "positive")
+        .slice(0, 2)
+        .map((intent) => intent.vector)
+    ];
+    if (vectors.length === 0) {
+      return [];
+    }
+    const rows = db
+      .prepare(
+        `
+          select
+            a.id as articleId,
+            ae.vector_blob as vectorBlob
+          from articles a
+          join feeds f on f.id = a.feed_id
+          join article_embeddings ae
+            on ae.article_id = a.id
+           and ae.embedding_index_id = ?
+          left join article_states s on s.article_id = a.id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and s.hidden_at is null
+            and s.not_interested_at is null
+          order by coalesce(a.published_at, a.discovered_at) desc, a.id desc
+          limit 1500
+        `
+      )
+      .all(embeddingIndexId) as Array<{ articleId: string; vectorBlob: Buffer }>;
+
+    return rows
+      .map((row) => {
+        const vector = fromVectorBlob(row.vectorBlob);
+        return {
+          articleId: row.articleId,
+          score: Math.max(...vectors.map((profileVector) => cosineSimilarity(vector, profileVector)))
+        };
+      })
+      .filter((row) => row.score >= profileAlgorithmDefaults.positiveInterestMatchThreshold)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit)
+      .map((row) => ({ articleId: row.articleId }));
+  }
+
+  private diversityCandidateRows(limit: number): Array<{ articleId: string }> {
+    const db = this.options.db;
+    if (!db) {
+      return [];
+    }
+    return db
+      .prepare(
+        `
+          select a.id as articleId
+          from articles a
+          join feeds f on f.id = a.feed_id
+          left join article_states s on s.article_id = a.id
+          left join article_behavior_summaries abs on abs.article_id = a.id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and s.hidden_at is null
+            and s.not_interested_at is null
+            and abs.article_id is null
+          order by coalesce(a.published_at, a.discovered_at) desc, a.id desc
+          limit ?
+        `
+      )
+      .all(Math.max(1, Math.min(limit, 500))) as Array<{ articleId: string }>;
+  }
+
+  private profileTerms(input: {
+    polarity: "positive" | "negative";
+    scopes: Array<"long" | "recent">;
+    limit: number;
+  }): Array<{ term: string; polarity: "positive" | "negative"; scope: "long" | "recent"; weight: number }> {
+    const db = this.options.db;
+    if (!db || input.scopes.length === 0) {
+      return [];
+    }
+    return db
+      .prepare(
+        `
+          select
+            term,
+            polarity,
+            scope,
+            weight
+          from profile_terms
+          where polarity = ?
+            and scope in (${input.scopes.map(() => "?").join(", ")})
+          order by weight desc, evidence_count desc, term
+          limit ?
+        `
+      )
+      .all(input.polarity, ...input.scopes, input.limit) as Array<{
+      term: string;
+      polarity: "positive" | "negative";
+      scope: "long" | "recent";
+      weight: number;
+    }>;
+  }
+
+  private lexicalFeaturesFor(
+    candidates: ArticleRankingCandidateRow[]
+  ): Map<string, LexicalFeature> {
+    const db = this.options.db;
+    const result = new Map<string, LexicalFeature>();
+    for (const candidate of candidates) {
+      result.set(candidate.articleId, emptyLexicalFeature());
+    }
+    if (!db || candidates.length === 0) {
+      return result;
+    }
+
+    const positiveLong = this.profileTerms({ polarity: "positive", scopes: ["long"], limit: 24 });
+    const positiveRecent = this.profileTerms({ polarity: "positive", scopes: ["recent"], limit: 24 });
+    const negativeTerms = this.profileTerms({
+      polarity: "negative",
+      scopes: ["long", "recent"],
+      limit: 32
+    });
+    const applyBm25 = (
+      terms: Array<{ term: string; polarity: "positive" | "negative"; scope: "long" | "recent"; weight: number }>,
+      field: "bm25Positive" | "bm25Recent"
+    ) => {
+      const query = sanitizeFtsQuery(terms.map((term) => term.term).join(" "));
+      if (!query) {
+        return;
+      }
+      const rows = db
+        .prepare(
+          `
+            select article_id as articleId, bm25(article_fts, 5.0, 2.0, 0.6) as rank
+            from article_fts
+            where article_fts match ?
+            order by rank
+            limit 1000
+          `
+        )
+        .all(query) as Array<{ articleId: string; rank: number }>;
+      for (const row of rows) {
+        const feature = result.get(row.articleId);
+        if (!feature) {
+          continue;
+        }
+        feature[field] = Math.max(feature[field], 1 / (1 + Math.max(0, row.rank)));
+      }
+    };
+    applyBm25(positiveLong, "bm25Positive");
+    applyBm25(positiveRecent, "bm25Recent");
+
+    const allTerms = [...positiveLong, ...positiveRecent, ...negativeTerms];
+    for (const candidate of candidates) {
+      const feature = result.get(candidate.articleId) ?? emptyLexicalFeature();
+      const title = normalizeForTermMatch(candidate.title);
+      const text = normalizeForTermMatch(
+        `${candidate.title} ${candidate.summary ?? ""} ${(candidate.contentText ?? "").slice(0, 2000)}`
+      );
+      let positiveWeight = 0;
+      let negativeWeight = 0;
+      const matched: LexicalFeature["matchedTerms"] = [];
+      for (const term of allTerms) {
+        const normalized = normalizeForTermMatch(term.term);
+        if (!normalized || !text.includes(normalized)) {
+          continue;
+        }
+        matched.push({ term: term.term, polarity: term.polarity, scope: term.scope });
+        if (term.polarity === "positive") {
+          positiveWeight += term.weight;
+          if (title.includes(normalized)) {
+            feature.titleKeywordMatch = Math.max(feature.titleKeywordMatch, 1);
+          }
+        } else {
+          negativeWeight += term.weight;
+        }
+      }
+      feature.positiveOverlap = clamp(Math.log1p(positiveWeight) / Math.log1p(20), 0, 1);
+      feature.negativeOverlap = clamp(Math.log1p(negativeWeight) / Math.log1p(20), 0, 1);
+      feature.matchedTerms = matched.slice(0, 12);
+      result.set(candidate.articleId, feature);
+    }
+
+    return result;
+  }
+
+  private recentIntentVectorsFor(embeddingIndexId: string): RecentIntentVector[] {
+    const db = this.options.db;
+    if (!db) {
+      return [];
+    }
+    return (
+      db
+        .prepare(
+          `
+            select
+              polarity,
+              centroid_vector_blob as centroidVectorBlob,
+              weight,
+              event_count as eventCount,
+              updated_at as updatedAt
+            from recent_intent_profiles
+            where embedding_index_id = ?
+              and centroid_vector_blob is not null
+            order by weight desc, updated_at desc
+          `
+        )
+        .all(embeddingIndexId) as Array<{
+        polarity: InterestClusterPolarity;
+        centroidVectorBlob: Buffer;
+        weight: number;
+        eventCount: number;
+        updatedAt: number;
+      }>
+    ).map((row) => ({
+      polarity: row.polarity,
+      vector: fromVectorBlob(row.centroidVectorBlob),
+      weight: row.weight,
+      eventCount: row.eventCount,
+      updatedAt: row.updatedAt
+    }));
+  }
+
+  private duplicateFeaturesFor(
+    candidates: ArticleRankingCandidateRow[]
+  ): Map<string, DuplicateFeature> {
+    const db = this.options.db;
+    const result = new Map<string, DuplicateFeature>();
+    for (const candidate of candidates) {
+      result.set(candidate.articleId, emptyDuplicateFeature());
+    }
+    if (!db || candidates.length === 0) {
+      return result;
+    }
+    const ids = candidates.map((candidate) => candidate.articleId);
+    const rows = db
+      .prepare(
+        `
+          select
+            dgm.article_id as articleId,
+            dgm.duplicate_group_id as groupId,
+            dg.article_count as groupSize,
+            dgm.reason,
+            dgm.confidence,
+            dg.representative_article_id as representativeArticleId
+          from duplicate_group_members dgm
+          join duplicate_groups dg on dg.id = dgm.duplicate_group_id
+          where dgm.article_id in (${ids.map(() => "?").join(", ")})
+          order by dg.article_count desc, dgm.confidence desc
+        `
+      )
+      .all(...ids) as Array<{
+      articleId: string;
+      groupId: string;
+      groupSize: number;
+      reason: string;
+      confidence: number;
+      representativeArticleId: string | null;
+    }>;
+    for (const row of rows) {
+      if (result.get(row.articleId)?.groupId) {
+        continue;
+      }
+      result.set(row.articleId, row);
+    }
+    return result;
+  }
+
+  private sourceFeaturesFor(
+    candidates: ArticleRankingCandidateRow[]
+  ): Map<string, SourceFeature> {
+    const db = this.options.db;
+    const feedIds = uniqueStrings(candidates.map((candidate) => candidate.feedId));
+    const result = new Map<string, SourceFeature>();
+    if (!db || feedIds.length === 0) {
+      return result;
+    }
+    const rows = db
+      .prepare(
+        `
+          select
+            feed_id as feedId,
+            clear_signal_count as clearSignalCount,
+            smoothed_positive_rate as smoothedPositiveRate,
+            source_confidence as sourceConfidence
+          from feed_stats
+          where feed_id in (${feedIds.map(() => "?").join(", ")})
+        `
+      )
+      .all(...feedIds) as Array<{
+      feedId: string;
+      clearSignalCount: number;
+      smoothedPositiveRate: number;
+      sourceConfidence: number;
+    }>;
+    for (const row of rows) {
+      result.set(row.feedId, row);
+    }
+    return result;
+  }
+
+  private ftrlModel(): FtrlModel | null {
+    const db = this.options.db;
+    if (!db) {
+      return null;
+    }
+    const version = db
+      .prepare(
+        `
+          select
+            id,
+            status,
+            sample_count as sampleCount,
+            blend_alpha as blendAlpha
+          from rank_model_versions
+          where status in ('active', 'shadow')
+          order by case when status = 'active' then 0 else 1 end, updated_at desc
+          limit 1
+        `
+      )
+      .get() as
+      | { id: string; status: FtrlModel["status"]; sampleCount: number; blendAlpha: number }
+      | undefined;
+    if (!version) {
+      return null;
+    }
+    const rows = db
+      .prepare(
+        `
+          select feature_name as featureName, weight
+          from rank_model_weights
+          where model_version_id = ?
+        `
+      )
+      .all(version.id) as Array<{ featureName: string; weight: number }>;
+    return {
+      status: version.status,
+      sampleCount: version.sampleCount,
+      blendAlpha: version.blendAlpha,
+      weights: new Map(rows.map((row) => [row.featureName, row.weight]))
+    };
   }
 
   private rankingSettings(): RankingSettingsSnapshot {
@@ -477,6 +1032,76 @@ function topKWeightedAverage(matches: Array<{ value: number }>, k: number): numb
   return divisor > 0 ? weightedSum / divisor : 0;
 }
 
+function recentIntentMatchesFor(
+  candidate: ArticleRankingCandidateRow,
+  recentIntent: RecentIntentVector[]
+): { positive: number; negative: number } {
+  if (!candidate.vectorBlob || recentIntent.length === 0) {
+    return { positive: 0, negative: 0 };
+  }
+  const articleVector = fromVectorBlob(candidate.vectorBlob);
+  let positive = 0;
+  let negative = 0;
+  for (const intent of recentIntent) {
+    const strength = clamp(Math.log1p(intent.weight) / Math.log1p(20), 0, 1);
+    const similarity = Math.max(0, cosineSimilarity(articleVector, intent.vector)) * strength;
+    if (intent.polarity === "positive") {
+      positive = Math.max(positive, similarity);
+    } else {
+      negative = Math.max(negative, similarity);
+    }
+  }
+  return { positive, negative };
+}
+
+function ftrlFeaturesFor(input: {
+  semanticScore: number;
+  negativePenalty: number;
+  bm25Score: number;
+  keywordNegativePenalty: number;
+  freshness: number;
+  pendingEmbeddingScore: number;
+  sourceScore: number;
+  stateScore: number;
+  duplicatePenalty: number;
+  exposurePenalty: number;
+  explorationBonus: number;
+  ageHours: number;
+  candidate: ArticleRankingCandidateRow;
+  source: SourceFeature;
+}): Map<string, number> {
+  return new Map(
+    Object.entries({
+      semantic: clamp(input.semanticScore / 0.68, 0, 1),
+      semantic_negative: clamp(Math.abs(input.negativePenalty) / 0.5, 0, 1),
+      bm25: clamp(input.bm25Score / 0.14, 0, 1),
+      keyword_negative: clamp(Math.abs(input.keywordNegativePenalty) / 0.12, 0, 1),
+      freshness: clamp(input.freshness / 0.2, 0, 1),
+      source: clamp((input.sourceScore + 0.14) / 0.28, 0, 1),
+      source_confidence: clamp(input.source.sourceConfidence, 0, 1),
+      state: clamp((input.stateScore + 0.12) / 0.36, 0, 1),
+      pending_embedding: input.pendingEmbeddingScore > 0 ? 1 : 0,
+      duplicate_penalty: clamp(Math.abs(input.duplicatePenalty) / 0.2, 0, 1),
+      exposure_penalty: input.exposurePenalty < 0 ? 1 : 0,
+      exploration_bonus: input.explorationBonus > 0 ? 1 : 0,
+      age_bucket_recent: input.ageHours <= 24 ? 1 : 0,
+      age_bucket_week: input.ageHours > 24 && input.ageHours <= 168 ? 1 : 0,
+      favorite: input.candidate.state.favorited ? 1 : 0,
+      read_later: input.candidate.state.readLater ? 1 : 0,
+      opened_unfinished:
+        input.candidate.state.interactionStatus === "opened" && !input.candidate.state.read ? 1 : 0
+    })
+  );
+}
+
+function ftrlPredict(model: FtrlModel, features: Map<string, number>): number {
+  let logit = 0;
+  for (const [name, value] of features) {
+    logit += (model.weights.get(name) ?? 0) * value;
+  }
+  return clamp(1 / (1 + Math.exp(-logit)), 0, 1);
+}
+
 function rankContextFor(input: { hasEmbedding: boolean; cocoonLevel: number }): string {
   return `${RECOMMENDATION_ALGORITHM_VERSION}:${input.hasEmbedding ? "embedding" : "base"}:cocoon_${input.cocoonLevel}:schema_${RECOMMENDATION_FEATURE_SCHEMA_VERSION}`;
 }
@@ -501,9 +1126,14 @@ function calculateV2Score(input: {
   candidate: ArticleRankingCandidateRow;
   now: number;
   clusters: ClusterVector[];
+  recentIntent: RecentIntentVector[];
   settings: RankingSettingsSnapshot;
   baseScore: number;
   duplicateCount: number;
+  lexical: LexicalFeature;
+  duplicate: DuplicateFeature;
+  source: SourceFeature;
+  ftrlModel: FtrlModel | null;
 }): V2Score {
   const params = cocoonParameters(input.settings.cocoonLevel);
   const candidate = input.candidate;
@@ -512,31 +1142,51 @@ function calculateV2Score(input: {
     (input.now - (candidate.publishedAt ?? candidate.discoveredAt)) / 3_600_000
   );
   const matches = interestMatchesFor(candidate, input.clusters);
+  const recentMatches = recentIntentMatchesFor(candidate, input.recentIntent);
   const semanticScore = clamp(
-    matches.positiveInterestMatch * 0.48 * params.personalizationStrength,
+    matches.positiveInterestMatch * 0.42 * params.personalizationStrength +
+      recentMatches.positive * 0.18 * params.recentIntentStrength,
     0,
-    0.62
+    0.68
   );
   const negativePenalty =
-    matches.negativeSimilarity >= profileAlgorithmDefaults.negativePenaltyThreshold
+    matches.negativeSimilarity >= profileAlgorithmDefaults.negativePenaltyThreshold ||
+    recentMatches.negative >= profileAlgorithmDefaults.negativePenaltyThreshold
       ? -clamp(
-          matches.negativeInterestMatch * 0.42 * params.negativeSemanticStrength,
+          (matches.negativeInterestMatch + recentMatches.negative * 0.65) *
+            0.42 *
+            params.negativeSemanticStrength,
           0,
           0.5
         )
       : 0;
-  const bm25Score = lexicalPreferenceScore(candidate) * 0.12 * params.keywordProfileStrength;
+  const bm25Score =
+    clamp(
+      input.lexical.bm25Positive * 0.65 +
+        input.lexical.bm25Recent * 0.8 +
+        input.lexical.positiveOverlap * 0.35 +
+        input.lexical.titleKeywordMatch * 0.25,
+      0,
+      1
+    ) *
+    0.12 *
+    params.keywordProfileStrength;
+  const keywordNegativePenalty = -input.lexical.negativeOverlap * 0.12;
   const freshness = freshnessScore(ageHours, 0.18, profileAlgorithmDefaults.freshnessHalfLifeHours) *
     params.freshnessWeight;
   const pendingEmbeddingScore =
     candidate.embeddingStatus === "embedding_pending" && ageHours <= 72
       ? Math.max(0, params.pendingEmbeddingFloor - freshness)
       : 0;
-  const sourceScore = normalizedSourceScore(candidate);
+  const sourceScore = normalizedSourceScore(candidate, input.source);
   const stateScore = stateScoreForV2(candidate);
-  const duplicatePenalty = input.duplicateCount > 1 && !candidate.state.favorited && !candidate.state.readLater
-    ? -Math.min(0.16, (input.duplicateCount - 1) * 0.04)
-    : 0;
+  const duplicatePenalty =
+    input.duplicateCount > 1 && !candidate.state.favorited && !candidate.state.readLater
+      ? -Math.min(
+          0.2,
+          (input.duplicateCount - 1) * 0.04 + (input.duplicate.confidence ?? 0) * 0.06
+        )
+      : 0;
   const exposurePenalty = candidate.state.interactionStatus === "ignored" ? -0.04 : 0;
   const explorationBonus = explorationBonusFor(candidate, input.settings, ageHours);
   const preRerankScore =
@@ -547,13 +1197,37 @@ function calculateV2Score(input: {
     sourceScore +
     stateScore +
     negativePenalty +
+    keywordNegativePenalty +
     duplicatePenalty +
     exposurePenalty +
     explorationBonus;
-  const ftrlScore = 0;
+  const ftrlFeatures = ftrlFeaturesFor({
+    semanticScore,
+    negativePenalty,
+    bm25Score,
+    keywordNegativePenalty,
+    freshness,
+    pendingEmbeddingScore,
+    sourceScore,
+    stateScore,
+    duplicatePenalty,
+    exposurePenalty,
+    explorationBonus,
+    ageHours,
+    candidate,
+    source: input.source
+  });
+  const ftrlScore = input.ftrlModel ? ftrlPredict(input.ftrlModel, ftrlFeatures) : 0;
+  const ftrlBlendAlpha =
+    input.settings.localLearningEnabled &&
+    !input.settings.localLearningShadowMode &&
+    input.ftrlModel?.status === "active" &&
+    input.ftrlModel.sampleCount >= 50
+      ? clamp(input.ftrlModel.blendAlpha, 0, 0.25)
+      : 0;
   const score = clamp(
-    input.settings.localLearningEnabled && !input.settings.localLearningShadowMode
-      ? preRerankScore * 0.9 + ftrlScore * 0.1
+    ftrlBlendAlpha > 0
+      ? preRerankScore * (1 - ftrlBlendAlpha) + ftrlScore * ftrlBlendAlpha
       : preRerankScore,
     0,
     1
@@ -569,8 +1243,8 @@ function calculateV2Score(input: {
     freshnessScore: roundScore(freshness),
     stateScore: roundScore(stateScore),
     diversityScore: 0,
-    penaltyScore: roundScore(negativePenalty + duplicatePenalty + exposurePenalty),
-    negativePenalty: roundScore(negativePenalty),
+    penaltyScore: roundScore(negativePenalty + keywordNegativePenalty + duplicatePenalty + exposurePenalty),
+    negativePenalty: roundScore(negativePenalty + keywordNegativePenalty),
     duplicatePenalty: roundScore(duplicatePenalty),
     diversityPenalty: 0,
     explorationBonus: roundScore(explorationBonus),
@@ -580,7 +1254,19 @@ function calculateV2Score(input: {
   };
 }
 
-function normalizedSourceScore(candidate: ArticleRankingCandidateRow): number {
+function normalizedSourceScore(
+  candidate: ArticleRankingCandidateRow,
+  source: SourceFeature = emptySourceFeature()
+): number {
+  if (source.clearSignalCount > 0) {
+    const manual = clamp(candidate.sourceWeight, -1, 1) * 0.08;
+    const learned =
+      clamp((source.smoothedPositiveRate - 0.5) * 2, -1, 1) *
+      source.sourceConfidence *
+      0.06;
+    const openOnly = clamp(candidate.feedOpenRate, 0, 1) * 0.002;
+    return clamp(manual + learned + openOnly, -0.14, 0.14);
+  }
   const clearSignalScore = Math.tanh(
     (candidate.feedPositiveScore - candidate.feedNegativeScore) / 16
   );
@@ -626,6 +1312,39 @@ function tokenize(text: string): string[] {
   );
 }
 
+function normalizeForTermMatch(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function emptyLexicalFeature(): LexicalFeature {
+  return {
+    bm25Positive: 0,
+    bm25Recent: 0,
+    positiveOverlap: 0,
+    negativeOverlap: 0,
+    titleKeywordMatch: 0,
+    matchedTerms: []
+  };
+}
+
+function emptyDuplicateFeature(): DuplicateFeature {
+  return {
+    groupId: null,
+    groupSize: 1,
+    reason: null,
+    confidence: null,
+    representativeArticleId: null
+  };
+}
+
+function emptySourceFeature(): SourceFeature {
+  return {
+    clearSignalCount: 0,
+    smoothedPositiveRate: 0,
+    sourceConfidence: 0
+  };
+}
+
 function explorationBonusFor(
   candidate: ArticleRankingCandidateRow,
   settings: RankingSettingsSnapshot,
@@ -640,16 +1359,23 @@ function explorationBonusFor(
   return clamp(pending + lowExposure, 0, 0.08);
 }
 
-function duplicateStatsFor(candidates: ArticleRankingCandidateRow[]): Map<string, number> {
+function duplicateStatsFor(
+  candidates: ArticleRankingCandidateRow[],
+  duplicateFeatures: Map<string, DuplicateFeature> = new Map()
+): Map<string, number> {
   const keys = new Map<string, number>();
   for (const candidate of candidates) {
-    const key = duplicateKeyFor(candidate);
+    const key = duplicateFeatures.get(candidate.articleId)?.groupId ?? duplicateKeyFor(candidate);
     keys.set(key, (keys.get(key) ?? 0) + 1);
   }
 
   const result = new Map<string, number>();
   for (const candidate of candidates) {
-    result.set(candidate.articleId, keys.get(duplicateKeyFor(candidate)) ?? 1);
+    const feature = duplicateFeatures.get(candidate.articleId);
+    result.set(
+      candidate.articleId,
+      Math.max(feature?.groupSize ?? 1, keys.get(feature?.groupId ?? duplicateKeyFor(candidate)) ?? 1)
+    );
   }
   return result;
 }
@@ -732,14 +1458,94 @@ function rerankCanonicalWindow(
     });
   }
 
-  return selected;
+  return applyExplorationSlots(selected, settings);
+}
+
+function applyExplorationSlots(
+  selected: Array<{ candidate: ArticleRankingCandidateRow; score: V2Score; position: number }>,
+  settings: RankingSettingsSnapshot
+): Array<{ candidate: ArticleRankingCandidateRow; score: V2Score; position: number }> {
+  if (!settings.explorationEnabled || selected.length === 0) {
+    return selected;
+  }
+  const params = cocoonParameters(settings.cocoonLevel);
+  const maxTop20Slots = params.explorationRatio >= 0.04 ? 2 : params.explorationRatio >= 0.015 ? 1 : 0;
+  if (maxTop20Slots === 0) {
+    return selected;
+  }
+  const top20 = selected.slice(0, 20);
+  const currentExploration = top20.filter((item) => item.score.explorationBonus > 0).length;
+  let remainingSlots = Math.max(0, maxTop20Slots - currentExploration);
+  if (remainingSlots === 0) {
+    return selected;
+  }
+
+  const candidates = selected
+    .slice(20)
+    .filter(
+      (item) =>
+        item.score.score >= 0.05 &&
+        item.score.explorationBonus > 0 &&
+        !item.candidate.state.hidden &&
+        !item.candidate.state.notInterested
+    )
+    .sort((left, right) => explorationSeedScore(left, settings) - explorationSeedScore(right, settings));
+
+  const next = selected.slice();
+  const slotPositions = maxTop20Slots === 2 ? [10, 20] : [20];
+  for (const slotPosition of slotPositions) {
+    if (remainingSlots <= 0) {
+      break;
+    }
+    const candidate = candidates.shift();
+    if (!candidate) {
+      break;
+    }
+    const currentIndex = next.findIndex((item) => item.candidate.articleId === candidate.candidate.articleId);
+    if (currentIndex < 0) {
+      continue;
+    }
+    const targetIndex = Math.min(slotPosition - 1, next.length - 1);
+    const [removed] = next.splice(currentIndex, 1);
+    if (!removed) {
+      continue;
+    }
+    removed.score = {
+      ...removed.score,
+      explorationBonus: Math.max(removed.score.explorationBonus, params.explorationRatio)
+    };
+    next.splice(targetIndex, 0, removed);
+    remainingSlots -= 1;
+  }
+
+  return next.map((item, index) => ({ ...item, position: index + 1 }));
+}
+
+function explorationSeedScore(
+  item: { candidate: ArticleRankingCandidateRow; score: V2Score },
+  settings: RankingSettingsSnapshot
+): number {
+  const key = `${settings.cocoonLevel}:${item.candidate.articleId}`;
+  let hash = 0;
+  for (const char of key) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash / 0xffffffff;
 }
 
 function explanationPayloadFor(
   candidate: ArticleRankingCandidateRow,
   score: V2Score,
-  settings: RankingSettingsSnapshot
+  settings: RankingSettingsSnapshot,
+  evidence: {
+    origins?: CandidateOrigin[];
+    lexical?: LexicalFeature;
+    duplicate?: DuplicateFeature;
+    recentIntent?: RecentIntentVector[];
+  } = {}
 ): Record<string, unknown> {
+  const lexical = evidence.lexical ?? emptyLexicalFeature();
+  const duplicate = evidence.duplicate ?? emptyDuplicateFeature();
   return {
     algorithmVersion: RECOMMENDATION_ALGORITHM_VERSION,
     featureSchemaVersion: RECOMMENDATION_FEATURE_SCHEMA_VERSION,
@@ -765,7 +1571,30 @@ function explanationPayloadFor(
       embeddingStatus: candidate.embeddingStatus,
       dedupeKey: candidate.dedupeKey,
       contentHash: candidate.contentHash,
-      titleTerms: tokenize(candidate.title).slice(0, 8)
+      titleTerms: tokenize(candidate.title).slice(0, 8),
+      candidateOrigins: evidence.origins ?? [],
+      matchedTerms: lexical.matchedTerms,
+      duplicateGroup: duplicate.groupId
+        ? {
+            id: duplicate.groupId,
+            size: duplicate.groupSize,
+            reason: duplicate.reason,
+            confidence: duplicate.confidence,
+            representativeArticleId: duplicate.representativeArticleId
+          }
+        : null,
+      recentIntent: (evidence.recentIntent ?? []).map((intent) => ({
+        polarity: intent.polarity,
+        eventCount: intent.eventCount,
+        weight: roundScore(intent.weight),
+        updatedAt: intent.updatedAt
+      }))
+    },
+    readiness: {
+      bm25ProfileTerms: lexical.matchedTerms.length > 0 || score.bm25Score > 0 ? "active" : "empty",
+      recentIntent: (evidence.recentIntent ?? []).length > 0 ? "active" : "missing",
+      ftrl: "not_trained",
+      evaluation: "diagnostic_only"
     },
     flags: {
       localLearningEnabled: settings.localLearningEnabled,

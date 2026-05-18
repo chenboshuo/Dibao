@@ -152,6 +152,11 @@ describe("db package", () => {
       expect(hasFtsTable(db, "article_fts")).toBe(true);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
+      expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
+      expect(hasColumn(db, "rank_model_weights", "n")).toBe(true);
+      expect(hasColumn(db, "feed_stats", "clear_positive")).toBe(true);
+      expect(hasColumn(db, "feed_stats", "source_confidence")).toBe(true);
+      expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
     } finally {
       db.close();
     }
@@ -169,10 +174,13 @@ describe("db package", () => {
       expect(runMigrations(db, loadDefaultMigrations(), () => 2000).map((migration) => migration.version)).toEqual([
         "002",
         "003",
-        "004"
+        "004",
+        "005"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
+      expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
+      expect(hasColumn(db, "feed_stats", "clear_signal_count")).toBe(true);
 
       db.prepare(
         `
@@ -258,6 +266,76 @@ describe("db package", () => {
       ).toEqual({
         type: "duplicate_group_rebuild"
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies recommendation completion migration after an already-applied 004 database without changing core counts", () => {
+    const db = openDatabase(":memory:", { loadSqliteVec: false });
+    try {
+      const through004 = loadDefaultMigrations().slice(0, 4);
+      expect(runMigrations(db, through004, () => 1000).map((migration) => migration.version)).toEqual([
+        "001",
+        "002",
+        "003",
+        "004"
+      ]);
+
+      db.prepare(
+        `
+          insert into feeds (id, title, feed_url, created_at, updated_at)
+          values ('feed_005', '005 Feed', 'https://example.com/005.xml', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into articles (
+            id,
+            feed_id,
+            url,
+            title,
+            discovered_at,
+            dedupe_key,
+            created_at,
+            updated_at
+          )
+          values ('article_005', 'feed_005', 'https://example.com/005', '005 Article', 1000, 'article_005', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            created_at
+          )
+          values ('event_005', 'article_005', 'open', 0.1, 1000)
+        `
+      ).run();
+
+      const before = {
+        feeds: countTable(db, "feeds"),
+        articles: countTable(db, "articles"),
+        behaviorEvents: countTable(db, "behavior_events")
+      };
+      const checksum004 = getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum;
+
+      expect(runMigrations(db, loadDefaultMigrations(), () => 2000).map((migration) => migration.version)).toEqual([
+        "005"
+      ]);
+
+      expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
+      expect({
+        feeds: countTable(db, "feeds"),
+        articles: countTable(db, "articles"),
+        behaviorEvents: countTable(db, "behavior_events")
+      }).toEqual(before);
+      expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
+      expect(hasColumn(db, "feed_stats", "smoothed_positive_rate")).toBe(true);
+      expect(hasIndex(db, "idx_duplicate_group_members_article_reason")).toBe(true);
     } finally {
       db.close();
     }
@@ -1067,4 +1145,11 @@ function hasIndex(db: ReturnType<typeof openDatabase>, indexName: string): boole
       )
       .get(indexName)
   );
+}
+
+function countTable(db: ReturnType<typeof openDatabase>, tableName: string): number {
+  const row = db.prepare(`select count(*) as count from ${tableName}`).get() as {
+    count: number;
+  };
+  return row.count;
 }

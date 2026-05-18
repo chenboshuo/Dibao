@@ -667,7 +667,7 @@ MVP 也接受 `application/xml` 请求体，便于本地自托管和自动化测
 
 - `latest` 始终按发布时间/发现时间排序。
 - `recommended` 在无 active embedding index 时使用 `rank_context = "base"`。
-- 存在 active embedding index 时使用 `rank_context = embeddingIndexId`，并在 active context 缺分数时 fallback 到 base rank，避免推荐列表为空。
+- 存在 active embedding index 时使用 active V2 rank context，例如 `rec_v2:embedding:cocoon_5:schema_2`；`recommended` 优先按该 context 的 `rerank_position asc`，缺失时 fallback 到 active/base score，避免推荐列表为空。
 - `read_later` 默认使用 active rank context 个性化排序，缺 active 分数时 fallback 到 base rank，再 fallback 到 `read_later_at desc`；也可用 `sort` 手动切换加入时间或发布时间排序。
 - `favorites` 不使用 rank 排序，默认按 `favorited_at desc`；可用 `sort` 显式切换。
 
@@ -996,6 +996,8 @@ cursor
 - `retention.retentionDays = 0` 表示永久保留普通文章，后台 retention cleanup 不会清理旧文章。
 - `behavior.markScrolledArticlesIgnored` 控制最新 / 推荐列表中“滚过未打开文章 -> 已忽略”的自动行为记录。
 - `behavior.removeReadLaterOnReadComplete` 控制稍后读文章触发完读后是否自动移出稍后读；当前完读阈值为 `read_progress >= 0.9` 或兼容 action `mark_read`。自动移出只更新文章状态，不额外写入 `remove_read_later` 行为事件。
+- `ranking.cocoonLevel`、`ranking.localLearningEnabled`、`ranking.localLearningShadowMode`、`ranking.explorationEnabled`、`ranking.evaluationEnabled` 实际变化时会 enqueue 一个 deduped `ranking_recalculate` job；reader/behavior/retention 变化不会触发 ranking job。
+- settings 变化不会触发 `embedding_generate`、FTS rebuild 或 vector index rebuild。
 
 请求：
 
@@ -1024,6 +1026,8 @@ cursor
 {
   "data": {
     "ok": true,
+    "rankingRecalculateQueued": true,
+    "rankingRecalculateJobId": "job_rank_...",
     "settings": {
       "ui": {
         "locale": "en-US"
@@ -1047,7 +1051,12 @@ cursor
       "ranking": {
         "preferFreshness": 0.5,
         "preferSource": 0.5,
-        "preferDiversity": 0.5
+        "preferDiversity": 0.5,
+        "cocoonLevel": 7,
+        "localLearningEnabled": false,
+        "localLearningShadowMode": true,
+        "explorationEnabled": true,
+        "evaluationEnabled": false
       }
     }
   }
@@ -1529,10 +1538,19 @@ PROFILE_WARMUP
       allowedRemoteDependency: "one embedding provider"
     }
     maintenance: {
-      schemaMigration: "004_recommendation_v2"
+      schemaMigration: "005_recommendation_v2_completion"
       backfillState: string
       explanationAuthority: "article_rank_explanations"
       scoreAuthority: "article_rank_scores"
+    }
+    moduleStatus: {
+      bm25ProfileTerms: "not_active" | "empty" | "stale" | "active"
+      recentIntent: "missing" | "stale" | "active"
+      ftrl: "disabled" | "shadow_no_samples" | "shadow_trained" | "active" | "failed"
+      exploration: "disabled" | "enabled_bonus_only" | "enabled_slots_active"
+      evaluation: "unavailable" | "diagnostic_only" | "strict_replay"
+      duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active"
+      evidence: "dynamic_fallback" | "reconstructed" | "live_evidence"
     }
     failureStates: Record<string, boolean>
   }
@@ -1550,11 +1568,12 @@ POST /api/recommendation/recalculate
 POST /api/recommendation/backfill/fingerprints
 POST /api/recommendation/rebuild-duplicates
 POST /api/recommendation/rebuild-keywords
+POST /api/recommendation/rebuild-recent-intent
 POST /api/recommendation/evaluate
 POST /api/recommendation/ftrl/reset
 ```
 
-前五个接口响应：
+除 `ftrl/reset` 外的维护接口响应：
 
 ```json
 {

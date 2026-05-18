@@ -386,6 +386,15 @@ export type RecommendationTransparency = RecommendationStatus & {
       explanationAuthority: string;
       scoreAuthority: string;
     };
+    moduleStatus: {
+      bm25ProfileTerms: "not_active" | "empty" | "stale" | "active";
+      recentIntent: "missing" | "stale" | "active";
+      ftrl: "disabled" | "shadow_no_samples" | "shadow_trained" | "active" | "failed";
+      exploration: "disabled" | "enabled_bonus_only" | "enabled_slots_active";
+      evaluation: "unavailable" | "diagnostic_only" | "strict_replay";
+      duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active";
+      evidence: "dynamic_fallback" | "reconstructed" | "live_evidence";
+    };
     failureStates: Record<string, boolean>;
   };
 };

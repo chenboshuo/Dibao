@@ -568,7 +568,8 @@ function orderByForView(
   if (view === "recommended") {
     return `
       order by
-        case when coalesce(rs.score, base_rs.score) is null then 1 else 0 end,
+        case when rs.rerank_position is null then 1 else 0 end,
+        rs.rerank_position asc,
         coalesce(rs.score, base_rs.score) desc,
         coalesce(a.published_at, a.discovered_at) desc,
         a.id desc
@@ -647,7 +648,8 @@ function orderByForView(
 
     return `
       order by
-        case when coalesce(rs.score, base_rs.score) is null then 1 else 0 end,
+        case when rs.rerank_position is null then 1 else 0 end,
+        rs.rerank_position asc,
         coalesce(rs.score, base_rs.score) desc,
         s.read_later_at desc,
         coalesce(a.published_at, a.discovered_at) desc,

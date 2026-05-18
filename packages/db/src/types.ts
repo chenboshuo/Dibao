@@ -518,6 +518,11 @@ export type FeedStatsInput = {
   openRate: number;
   favoriteRate: number;
   notInterestedRate: number;
+  clearPositive?: number;
+  clearNegative?: number;
+  clearSignalCount?: number;
+  smoothedPositiveRate?: number;
+  sourceConfidence?: number;
   now?: number;
 };
 

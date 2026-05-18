@@ -37,8 +37,8 @@ try {
     .get() as { id: string } | undefined;
   const appliedNow = runMigrations(db);
   const migrations = db
-    .prepare("select version, name from schema_migrations order by version")
-    .all() as Array<{ version: string; name: string }>;
+    .prepare("select version, name, checksum from schema_migrations order by version")
+    .all() as Array<{ version: string; name: string; checksum: string | null }>;
   const postCounts = tableCounts(db);
   const hasRankContexts = hasTable(db, "rank_contexts");
   const legacyRankReadable = countTable(db, "article_rank_scores") >= 0;
@@ -86,7 +86,16 @@ function tableCounts(db: ReturnType<typeof openDatabase>) {
     article_embeddings: countTable(db, "article_embeddings"),
     interest_clusters: countTable(db, "interest_clusters"),
     feed_stats: countTable(db, "feed_stats"),
-    article_rank_scores: countTable(db, "article_rank_scores")
+    article_rank_scores: countTable(db, "article_rank_scores"),
+    rank_contexts: countTable(db, "rank_contexts"),
+    profile_terms: countTable(db, "profile_terms"),
+    recent_intent_profiles: countTable(db, "recent_intent_profiles"),
+    interest_cluster_evidence: countTable(db, "interest_cluster_evidence"),
+    article_fingerprints: countTable(db, "article_fingerprints"),
+    duplicate_groups: countTable(db, "duplicate_groups"),
+    rank_model_versions: countTable(db, "rank_model_versions"),
+    ranking_eval_runs: countTable(db, "ranking_eval_runs"),
+    recommendation_backfill_state: countTable(db, "recommendation_backfill_state")
   };
 }
 

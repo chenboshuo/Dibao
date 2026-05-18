@@ -55,10 +55,23 @@ export interface ProfileRepository {
     polarity?: InterestClusterPolarity;
   }): InterestClusterRow[];
   listClusterEvidence(input: { embeddingIndexId: string; limit?: number }): InterestClusterEvidenceRow[];
+  insertClusterEvidence(input: {
+    id: string;
+    clusterId: string;
+    articleId: string;
+    behaviorEventId?: string | null;
+    evidenceSource: "live_event" | "reconstructed";
+    confidence: number;
+    similarity?: number | null;
+    weightDelta: number;
+    createdAt: number;
+  }): void;
   listEventsForArticles(input: {
     articleIds: string[];
     embeddingIndexId: string;
   }): ProfileBehaviorEventRow[];
+  moveClusterEvidence(input: { fromClusterId: string; toClusterId: string }): void;
+  trimClusterEvidence(input: { clusterId: string; limit: number }): void;
   listFeedBehaviorEvents(feedId: string): FeedBehaviorEventRow[];
   updateCluster(input: UpdateInterestClusterInput): InterestClusterRow | null;
   upsertCluster(input: UpsertInterestClusterInput): InterestClusterRow;
@@ -256,6 +269,50 @@ export class SqliteProfileRepository implements ProfileRepository {
 
   listClusterEvidence(input: { embeddingIndexId: string; limit?: number }): InterestClusterEvidenceRow[] {
     const limit = Math.max(1, Math.min(5000, input.limit ?? 2000));
+    const persisted = this.db
+      .prepare(
+        `
+          select
+            ice.id,
+            ice.cluster_id as clusterId,
+            a.id as articleId,
+            a.feed_id as feedId,
+            f.title as feedTitle,
+            ice.behavior_event_id as behaviorEventId,
+            ice.evidence_source as evidenceSource,
+            ice.confidence,
+            ice.similarity,
+            ice.weight_delta as weightDelta,
+            coalesce(be.event_type, 'read_complete') as eventType,
+            be.metadata_json as metadataJson,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            a.title,
+            ae.vector_blob as vectorBlob,
+            ice.created_at as createdAt
+          from interest_cluster_evidence ice
+          join interest_clusters ic on ic.id = ice.cluster_id
+          join articles a on a.id = ice.article_id
+          join feeds f on f.id = a.feed_id
+          join article_embeddings ae
+            on ae.article_id = a.id
+           and ae.embedding_index_id = ic.embedding_index_id
+          left join article_states s on s.article_id = a.id
+          left join behavior_events be on be.id = ice.behavior_event_id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and ae.vector_blob is not null
+            and ic.embedding_index_id = ?
+          order by ice.evidence_source = 'live_event' desc, ice.confidence desc, ice.created_at desc
+          limit ?
+        `
+      )
+      .all(input.embeddingIndexId, limit) as InterestClusterEvidenceRow[];
+    if (persisted.length > 0) {
+      return persisted;
+    }
+
     return this.db
       .prepare(
         `
@@ -295,6 +352,120 @@ export class SqliteProfileRepository implements ProfileRepository {
         `
       )
       .all(input.embeddingIndexId, limit) as InterestClusterEvidenceRow[];
+  }
+
+  insertClusterEvidence(input: {
+    id: string;
+    clusterId: string;
+    articleId: string;
+    behaviorEventId?: string | null;
+    evidenceSource: "live_event" | "reconstructed";
+    confidence: number;
+    similarity?: number | null;
+    weightDelta: number;
+    createdAt: number;
+  }): void {
+    const existing = this.db
+      .prepare(
+        `
+          select id
+          from interest_cluster_evidence
+          where cluster_id = ?
+            and article_id = ?
+            and coalesce(behavior_event_id, '') = coalesce(?, '')
+            and evidence_source = ?
+          limit 1
+        `
+      )
+      .get(
+        input.clusterId,
+        input.articleId,
+        input.behaviorEventId ?? null,
+        input.evidenceSource
+      ) as { id: string } | undefined;
+
+    if (existing) {
+      this.db
+        .prepare(
+          `
+            update interest_cluster_evidence
+            set
+              confidence = max(confidence, ?),
+              similarity = coalesce(?, similarity),
+              weight_delta = max(weight_delta, ?),
+              created_at = max(created_at, ?)
+            where id = ?
+          `
+        )
+        .run(
+          input.confidence,
+          input.similarity ?? null,
+          input.weightDelta,
+          input.createdAt,
+          existing.id
+        );
+      return;
+    }
+
+    this.db
+      .prepare(
+        `
+          insert into interest_cluster_evidence (
+            id,
+            cluster_id,
+            article_id,
+            behavior_event_id,
+            evidence_source,
+            confidence,
+            similarity,
+            weight_delta,
+            created_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .run(
+        input.id,
+        input.clusterId,
+        input.articleId,
+        input.behaviorEventId ?? null,
+        input.evidenceSource,
+        input.confidence,
+        input.similarity ?? null,
+        input.weightDelta,
+        input.createdAt
+      );
+  }
+
+  moveClusterEvidence(input: { fromClusterId: string; toClusterId: string }): void {
+    this.db
+      .prepare(
+        `
+          update interest_cluster_evidence
+          set cluster_id = ?
+          where cluster_id = ?
+        `
+      )
+      .run(input.toClusterId, input.fromClusterId);
+  }
+
+  trimClusterEvidence(input: { clusterId: string; limit: number }): void {
+    const limit = Math.max(1, Math.min(100, input.limit));
+    this.db
+      .prepare(
+        `
+          delete from interest_cluster_evidence
+          where cluster_id = ?
+            and id not in (
+              select id
+              from interest_cluster_evidence
+              where cluster_id = ?
+              order by confidence desc, abs(weight_delta) desc, created_at desc
+              limit ?
+            )
+        `
+      )
+      .run(input.clusterId, input.clusterId, limit);
   }
 
   upsertCluster(input: UpsertInterestClusterInput): InterestClusterRow {
@@ -416,15 +587,25 @@ export class SqliteProfileRepository implements ProfileRepository {
             open_rate,
             favorite_rate,
             not_interested_rate,
+            clear_positive,
+            clear_negative,
+            clear_signal_count,
+            smoothed_positive_rate,
+            source_confidence,
             last_calculated_at
           )
-          values (?, ?, ?, ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict(feed_id) do update set
             positive_score = excluded.positive_score,
             negative_score = excluded.negative_score,
             open_rate = excluded.open_rate,
             favorite_rate = excluded.favorite_rate,
             not_interested_rate = excluded.not_interested_rate,
+            clear_positive = excluded.clear_positive,
+            clear_negative = excluded.clear_negative,
+            clear_signal_count = excluded.clear_signal_count,
+            smoothed_positive_rate = excluded.smoothed_positive_rate,
+            source_confidence = excluded.source_confidence,
             last_calculated_at = excluded.last_calculated_at
         `
       )
@@ -435,6 +616,11 @@ export class SqliteProfileRepository implements ProfileRepository {
         input.openRate,
         input.favoriteRate,
         input.notInterestedRate,
+        input.clearPositive ?? 0,
+        input.clearNegative ?? 0,
+        input.clearSignalCount ?? 0,
+        input.smoothedPositiveRate ?? 0,
+        input.sourceConfidence ?? 0,
         now
       );
   }

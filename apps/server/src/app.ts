@@ -103,6 +103,7 @@ import {
   KEYWORD_PROFILE_REBUILD_JOB_TYPE,
   RANKING_EVAL_RUN_JOB_TYPE,
   RECOMMENDATION_BACKFILL_JOB_TYPE,
+  RECENT_INTENT_REBUILD_JOB_TYPE,
   RecommendationMaintenanceService
 } from "./recommendation-maintenance-service.js";
 import { RecommendationRankingService } from "./ranking-service.js";
@@ -256,6 +257,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     now: options.now
   });
   const rankingService = new RecommendationRankingService({
+    db,
     embeddings,
     profiles,
     rankings,
@@ -386,6 +388,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       [DUPLICATE_GROUP_REBUILD_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job),
       [KEYWORD_PROFILE_REBUILD_JOB_TYPE]: (job) =>
+        recommendationMaintenanceService.handleJob(job),
+      [RECENT_INTENT_REBUILD_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job),
       [RANKING_EVAL_RUN_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job),
@@ -599,6 +603,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.get("/api/recommendation/status", async () => ({
     data: getRecommendationStatus({
+      db,
       embeddings,
       profiles,
       rankings,
@@ -609,6 +614,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.get("/api/recommendation/transparency", async () => ({
     data: getRecommendationTransparency({
+      db,
       embeddings,
       profiles,
       rankings,
@@ -633,6 +639,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     data: recommendationMaintenanceService.enqueueKeywordRebuild()
   }));
 
+  app.post("/api/recommendation/rebuild-recent-intent", async () => ({
+    data: recommendationMaintenanceService.enqueueRecentIntentRebuild()
+  }));
+
   app.post("/api/recommendation/evaluate", async () => ({
     data: recommendationMaintenanceService.enqueueEvaluation()
   }));
@@ -647,8 +657,21 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.patch<{ Body: unknown }>("/api/settings", async (request, reply) => {
     try {
+      const beforeRanking = settingsService.getSettings().ranking;
+      const result = settingsService.updateSettings(request.body);
+      const afterRanking = result.settings.ranking;
+      const rankingJob = rankingSettingsChanged(beforeRanking, afterRanking)
+        ? rankingJobService.enqueueAll()
+        : null;
+      if (rankingJob) {
+        drainBackgroundJobs();
+      }
       return {
-        data: settingsService.updateSettings(request.body)
+        data: {
+          ...result,
+          rankingRecalculateQueued: rankingJob !== null,
+          rankingRecalculateJobId: rankingJob?.id ?? null
+        }
       };
     } catch (error) {
       return sendSettingsError(reply, error);
@@ -1254,6 +1277,7 @@ function getSetupStatus(
 }
 
 function getRecommendationStatus(options: {
+  db: DibaoDatabase;
   embeddings: SqliteEmbeddingRepository;
   profiles: SqliteProfileRepository;
   rankings: SqliteRankingRepository;
@@ -1333,6 +1357,7 @@ function getRecommendationStatus(options: {
 }
 
 function getRecommendationTransparency(options: {
+  db: DibaoDatabase;
   embeddings: SqliteEmbeddingRepository;
   profiles: SqliteProfileRepository;
   rankings: SqliteRankingRepository;
@@ -1349,13 +1374,15 @@ function getRecommendationTransparency(options: {
           ? "provider_or_embedding_job_failure"
           : null;
 
+  const moduleStatus = recommendationModuleStatus(options.db, status.algorithm);
+
   return {
     ...status,
     transparency: {
       currentFormula:
         status.mode === "baseline"
-          ? "freshness + source + state + local keyword fallback"
-          : "semantic + BM25/keywords + freshness + source + state - negative/dedupe/exposure + canonical MMR rerank",
+          ? "freshness + source + state fallback"
+          : "semantic + freshness + source + state - negative/dedupe/exposure + canonical MMR rerank",
       fallbackReason,
       rankingCore: {
         usesRemoteLlm: false,
@@ -1363,8 +1390,9 @@ function getRecommendationTransparency(options: {
         usesExternalSearchService: false,
         allowedRemoteDependency: "one embedding provider"
       },
+      moduleStatus,
       maintenance: {
-        schemaMigration: "004_recommendation_v2",
+        schemaMigration: "005_recommendation_v2_completion",
         backfillState: "tracked in recommendation_backfill_state",
         explanationAuthority: "article_rank_explanations",
         scoreAuthority: "article_rank_scores"
@@ -1374,6 +1402,11 @@ function getRecommendationTransparency(options: {
         backfillRunning: status.coverage.pendingJobs > 0,
         rankContextMissing: status.rankedArticles.active === 0,
         embeddingCoverageLow: status.coverage.coverageRatio < 0.8,
+        bm25ProfileTermsActive: moduleStatus.bm25ProfileTerms === "active",
+        recentIntentMissing: moduleStatus.recentIntent !== "active",
+        ftrlTrained: moduleStatus.ftrl === "shadow_trained" || moduleStatus.ftrl === "active",
+        duplicateNearMatchActive: moduleStatus.duplicate === "near_duplicate_active",
+        evidenceUsingDynamicFallback: moduleStatus.evidence === "dynamic_fallback",
         ftrlShadowMode: status.algorithm.localLearning.shadowMode,
         evaluationUnavailable: !status.algorithm.evaluation.enabled,
         recommendationUsingFallback: status.mode !== "personalized"
@@ -1622,6 +1655,112 @@ function isProfileLearning(
 ): boolean {
   const behaviorTotal = Object.values(behaviorCounts).reduce((sum, count) => sum + count, 0);
   return behaviorTotal < 3 || clusters.positive + clusters.negative === 0;
+}
+
+function rankingSettingsChanged(
+  before: ReturnType<SettingsService["getSettings"]>["ranking"],
+  after: ReturnType<SettingsService["getSettings"]>["ranking"]
+): boolean {
+  return (
+    before.cocoonLevel !== after.cocoonLevel ||
+    before.localLearningEnabled !== after.localLearningEnabled ||
+    before.localLearningShadowMode !== after.localLearningShadowMode ||
+    before.explorationEnabled !== after.explorationEnabled ||
+    before.evaluationEnabled !== after.evaluationEnabled
+  );
+}
+
+function recommendationModuleStatus(
+  db: DibaoDatabase,
+  algorithm: {
+    localLearning: { enabled: boolean; shadowMode: boolean };
+    exploration: { enabled: boolean };
+    evaluation: { enabled: boolean };
+  }
+) {
+  const profileTermCount = countIfTable(db, "profile_terms");
+  const recentIntentActive =
+    scalarCount(
+      db,
+      "select count(*) as count from recent_intent_profiles where event_count > 0 and centroid_vector_blob is not null"
+    ) > 0;
+  const model = db
+    .prepare(
+      `
+        select status, sample_count as sampleCount
+        from rank_model_versions
+        where status in ('shadow', 'active', 'failed')
+        order by updated_at desc
+        limit 1
+      `
+    )
+    .get() as { status: "shadow" | "active" | "failed"; sampleCount: number } | undefined;
+  const nearDuplicateActive =
+    scalarCount(
+      db,
+      "select count(*) as count from duplicate_group_members where reason like 'near_%'"
+    ) > 0;
+  const duplicateBuilt = countIfTable(db, "duplicate_groups") > 0;
+  const evidenceRows = countIfTable(db, "interest_cluster_evidence");
+  const latestEval = db
+    .prepare(
+      `
+        select metrics_json as metricsJson
+        from ranking_eval_runs
+        where status = 'succeeded'
+        order by created_at desc
+        limit 1
+      `
+    )
+    .get() as { metricsJson: string | null } | undefined;
+  const evalMode = evaluationModeFromMetrics(latestEval?.metricsJson ?? null);
+
+  return {
+    bm25ProfileTerms: profileTermCount > 0 ? "active" : "not_active",
+    recentIntent: recentIntentActive ? "active" : "missing",
+    ftrl: !algorithm.localLearning.enabled
+      ? "disabled"
+      : model?.status === "failed"
+        ? "failed"
+        : model?.status === "active"
+          ? "active"
+          : model && model.sampleCount > 0
+            ? "shadow_trained"
+            : "shadow_no_samples",
+    exploration: algorithm.exploration.enabled
+      ? "enabled_slots_active"
+      : "disabled",
+    evaluation: !algorithm.evaluation.enabled ? "unavailable" : evalMode,
+    duplicate: nearDuplicateActive ? "near_duplicate_active" : duplicateBuilt ? "exact_scaffold" : "not_built",
+    evidence: evidenceRows > 0 ? "live_evidence" : "dynamic_fallback"
+  };
+}
+
+function evaluationModeFromMetrics(metricsJson: string | null): "unavailable" | "diagnostic_only" | "strict_replay" {
+  if (!metricsJson) {
+    return "unavailable";
+  }
+  try {
+    const metrics = JSON.parse(metricsJson) as { strictReplay?: unknown };
+    return metrics.strictReplay === true ? "strict_replay" : "diagnostic_only";
+  } catch {
+    return "diagnostic_only";
+  }
+}
+
+function countIfTable(db: DibaoDatabase, tableName: string): number {
+  const exists = db
+    .prepare("select 1 as ok from sqlite_master where type in ('table', 'view') and name = ?")
+    .get(tableName) as { ok: number } | undefined;
+  if (!exists) {
+    return 0;
+  }
+  return scalarCount(db, `select count(*) as count from ${tableName}`);
+}
+
+function scalarCount(db: DibaoDatabase, sql: string): number {
+  const row = db.prepare(sql).get() as { count: number } | undefined;
+  return row?.count ?? 0;
 }
 
 function mapRecommendationProvider(provider: EmbeddingProviderRow) {
@@ -2258,6 +2397,7 @@ function parseJobType(value: string | undefined): JobType | undefined | null {
     value === ARTICLE_FINGERPRINT_BACKFILL_JOB_TYPE ||
     value === DUPLICATE_GROUP_REBUILD_JOB_TYPE ||
     value === KEYWORD_PROFILE_REBUILD_JOB_TYPE ||
+    value === RECENT_INTENT_REBUILD_JOB_TYPE ||
     value === RANKING_EVAL_RUN_JOB_TYPE ||
     value === FTRL_TRAIN_JOB_TYPE ||
     value === RECOMMENDATION_BACKFILL_JOB_TYPE

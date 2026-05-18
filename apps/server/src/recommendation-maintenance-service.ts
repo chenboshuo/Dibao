@@ -1,11 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { DibaoDatabase, JobRepository, JobRow, JobType } from "@dibao/db";
+import { fromVectorBlob, toVectorBlob, type DibaoDatabase, type JobRepository, type JobRow, type JobType } from "@dibao/db";
+import { clamp, cosineSimilarity, normalizeVector } from "@dibao/ranking";
 import { PermanentJobFailure } from "./job-runner.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
 export const ARTICLE_FINGERPRINT_BACKFILL_JOB_TYPE = "article_fingerprint_backfill" as const;
 export const DUPLICATE_GROUP_REBUILD_JOB_TYPE = "duplicate_group_rebuild" as const;
 export const KEYWORD_PROFILE_REBUILD_JOB_TYPE = "keyword_profile_rebuild" as const;
+export const RECENT_INTENT_REBUILD_JOB_TYPE = "recent_intent_rebuild" as const;
 export const RANKING_EVAL_RUN_JOB_TYPE = "ranking_eval_run" as const;
 export const FTRL_TRAIN_JOB_TYPE = "ftrl_train" as const;
 export const RECOMMENDATION_BACKFILL_JOB_TYPE = "recommendation_backfill" as const;
@@ -14,6 +16,7 @@ type MaintenanceJobType =
   | typeof ARTICLE_FINGERPRINT_BACKFILL_JOB_TYPE
   | typeof DUPLICATE_GROUP_REBUILD_JOB_TYPE
   | typeof KEYWORD_PROFILE_REBUILD_JOB_TYPE
+  | typeof RECENT_INTENT_REBUILD_JOB_TYPE
   | typeof RANKING_EVAL_RUN_JOB_TYPE
   | typeof FTRL_TRAIN_JOB_TYPE
   | typeof RECOMMENDATION_BACKFILL_JOB_TYPE;
@@ -57,6 +60,10 @@ export class RecommendationMaintenanceService {
     return this.enqueueUnique(KEYWORD_PROFILE_REBUILD_JOB_TYPE);
   }
 
+  enqueueRecentIntentRebuild(): RecommendationMaintenanceResult {
+    return this.enqueueUnique(RECENT_INTENT_REBUILD_JOB_TYPE);
+  }
+
   enqueueEvaluation(): RecommendationMaintenanceResult {
     return this.enqueueUnique(RANKING_EVAL_RUN_JOB_TYPE);
   }
@@ -87,10 +94,15 @@ export class RecommendationMaintenanceService {
       case KEYWORD_PROFILE_REBUILD_JOB_TYPE:
         this.rebuildKeywordProfile();
         return;
+      case RECENT_INTENT_REBUILD_JOB_TYPE:
+        this.rebuildRecentIntent();
+        return;
       case RANKING_EVAL_RUN_JOB_TYPE:
-        this.runDiagnosticEvaluation();
+        this.runReplayEvaluation();
         return;
       case FTRL_TRAIN_JOB_TYPE:
+        this.trainFtrl();
+        return;
       case RECOMMENDATION_BACKFILL_JOB_TYPE:
         this.touchBackfillState(job.type, "succeeded", null);
         return;
@@ -202,10 +214,10 @@ export class RecommendationMaintenanceService {
           select
             coalesce(dedupe_key, content_hash, normalized_url, title_hash) as bucketKey,
             case
-              when dedupe_key is not null then 'dedupe_key'
-              when content_hash is not null then 'content_hash'
-              when normalized_url is not null then 'normalized_url'
-              else 'title_hash'
+              when dedupe_key is not null then 'exact_dedupe_key'
+              when content_hash is not null then 'exact_content_hash'
+              when normalized_url is not null then 'exact_url'
+              else 'exact_title_hash'
             end as reason,
             group_concat(article_id, char(31)) as articleIds,
             count(*) as count
@@ -216,6 +228,33 @@ export class RecommendationMaintenanceService {
         `
       )
       .all() as Array<{ bucketKey: string; reason: string; articleIds: string; count: number }>;
+    const nearRows = this.options.db
+      .prepare(
+        `
+          select
+            af.article_id as articleId,
+            af.normalized_title as normalizedTitle,
+            af.title_simhash as titleSimhash,
+            af.summary_simhash as summarySimhash,
+            coalesce(a.published_at, a.discovered_at) as articleTime
+          from article_fingerprints af
+          join articles a on a.id = af.article_id
+          join feeds f on f.id = a.feed_id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and coalesce(a.published_at, a.discovered_at) >= ?
+          order by coalesce(a.published_at, a.discovered_at) desc, af.article_id
+        `
+      )
+      .all(now - 14 * 86_400_000) as Array<{
+      articleId: string;
+      normalizedTitle: string | null;
+      titleSimhash: string | null;
+      summarySimhash: string | null;
+      articleTime: number;
+    }>;
 
     this.options.db.transaction(() => {
       this.options.db.prepare("delete from duplicate_group_members").run();
@@ -248,19 +287,67 @@ export class RecommendationMaintenanceService {
           values (?, ?, ?, ?, ?, ?)
         `
       );
+      const grouped = new Set<string>();
 
       for (const bucket of buckets) {
         const articleIds = bucket.articleIds.split(String.fromCharCode(31)).filter(Boolean);
         const representative = articleIds[0]!;
         const groupId = `dup_${sha256(bucket.reason + ":" + bucket.bucketKey).slice(0, 24)}`;
-        const confidence = bucket.reason === "dedupe_key" || bucket.reason === "content_hash" ? 0.98 : 0.82;
+        const confidence =
+          bucket.reason === "exact_dedupe_key" || bucket.reason === "exact_content_hash" ? 0.98 : 0.86;
         insertGroup.run(groupId, representative, bucket.reason, confidence, articleIds.length, now, now);
         for (const articleId of articleIds) {
           insertMember.run(groupId, articleId, confidence, bucket.reason, articleId === representative ? 1 : 0, now);
+          grouped.add(articleId);
         }
       }
 
-      this.touchBackfillState("duplicate_group_rebuild", "succeeded", buckets.length);
+      for (const bucketRows of boundedNearDuplicateBuckets(nearRows)) {
+        const articleIds = new Set<string>();
+        let reason: "near_title_simhash" | "near_summary_simhash" | null = null;
+        for (let leftIndex = 0; leftIndex < bucketRows.length; leftIndex += 1) {
+          const left = bucketRows[leftIndex]!;
+          if (grouped.has(left.articleId)) {
+            continue;
+          }
+          for (let rightIndex = leftIndex + 1; rightIndex < bucketRows.length; rightIndex += 1) {
+            const right = bucketRows[rightIndex]!;
+            if (grouped.has(right.articleId)) {
+              continue;
+            }
+            if (
+              left.titleSimhash &&
+              right.titleSimhash &&
+              hammingDistanceHex(left.titleSimhash, right.titleSimhash) <= 5
+            ) {
+              articleIds.add(left.articleId);
+              articleIds.add(right.articleId);
+              reason = "near_title_simhash";
+            } else if (
+              left.summarySimhash &&
+              right.summarySimhash &&
+              hammingDistanceHex(left.summarySimhash, right.summarySimhash) <= 8
+            ) {
+              articleIds.add(left.articleId);
+              articleIds.add(right.articleId);
+              reason = "near_summary_simhash";
+            }
+          }
+        }
+        if (articleIds.size < 2 || !reason) {
+          continue;
+        }
+        const ids = Array.from(articleIds).sort();
+        const representative = ids[0]!;
+        const groupId = `dup_${sha256(reason + ":" + ids.join(":")).slice(0, 24)}`;
+        insertGroup.run(groupId, representative, reason, 0.72, ids.length, now, now);
+        for (const articleId of ids) {
+          insertMember.run(groupId, articleId, 0.72, reason, articleId === representative ? 1 : 0, now);
+          grouped.add(articleId);
+        }
+      }
+
+      this.touchBackfillState("duplicate_group_rebuild", "succeeded", buckets.length + grouped.size);
     })();
   }
 
@@ -271,28 +358,70 @@ export class RecommendationMaintenanceService {
         `
           select
             be.event_type as eventType,
+            be.metadata_json as metadataJson,
+            be.created_at as createdAt,
+            coalesce(s.reading_progress, 0) as readingProgress,
             a.title,
-            a.summary
+            a.summary,
+            ac.content_text as contentText,
+            f.title as feedTitle
           from behavior_events be
           join articles a on a.id = be.article_id
           join feeds f on f.id = a.feed_id
+          left join article_states s on s.article_id = a.id
+          left join article_contents ac on ac.article_id = a.id
           where a.deleted_at is null
             and a.status != 'deleted'
             and f.deleted_at is null
             and f.enabled = 1
         `
       )
-      .all() as Array<{ eventType: string; title: string; summary: string | null }>;
+      .all() as Array<{
+      eventType: string;
+      metadataJson: string | null;
+      createdAt: number;
+      readingProgress: number;
+      title: string;
+      summary: string | null;
+      contentText: string | null;
+      feedTitle: string;
+    }>;
 
-    const weights = new Map<string, number>();
+    const weights = new Map<string, { weight: number; evidenceCount: number; lastEventAt: number }>();
     for (const row of rows) {
-      const polarity = keywordPolarity(row.eventType);
+      const polarity = keywordPolarity(row.eventType, row.metadataJson, row.readingProgress);
       if (!polarity) {
         continue;
       }
-      const sign = polarity === "positive" ? 1 : -1;
-      for (const term of tokenize(`${row.title} ${row.summary ?? ""}`).slice(0, 16)) {
-        weights.set(`${polarity}:${term}`, (weights.get(`${polarity}:${term}`) ?? 0) + sign);
+      const eventWeight = keywordEventWeight(row.eventType, row.metadataJson, row.readingProgress);
+      const ageHours = Math.max(0, (now - row.createdAt) / 3_600_000);
+      const scopes: Array<{ scope: "long" | "recent"; decay: number }> = [
+        { scope: "long", decay: Math.pow(0.5, ageHours / (24 * 45)) },
+        { scope: "recent", decay: Math.pow(0.5, ageHours / 48) }
+      ];
+      const termWeights = new Map<string, number>();
+      for (const term of tokenize(row.title).slice(0, 12)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 3);
+      }
+      for (const term of tokenize(row.summary ?? "").slice(0, 24)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 1.5);
+      }
+      for (const term of tokenize((row.contentText ?? "").slice(0, 4000)).slice(0, 64)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 0.35);
+      }
+      for (const term of tokenize(row.feedTitle).slice(0, 4)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 0.4);
+      }
+      for (const scope of scopes) {
+        for (const [term, fieldWeight] of termWeights) {
+          const key = `${polarity}:${scope.scope}:${term}`;
+          const existing = weights.get(key) ?? { weight: 0, evidenceCount: 0, lastEventAt: 0 };
+          weights.set(key, {
+            weight: existing.weight + eventWeight * fieldWeight * scope.decay,
+            evidenceCount: existing.evidenceCount + 1,
+            lastEventAt: Math.max(existing.lastEventAt, row.createdAt)
+          });
+        }
       }
     }
 
@@ -309,39 +438,329 @@ export class RecommendationMaintenanceService {
             last_event_at,
             updated_at
           )
-          values (?, ?, 'long', ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?, ?)
         `
       );
-      for (const [key, weight] of weights) {
-        const [polarity, term] = key.split(":");
-        if (!polarity || !term || weight === 0) {
-          continue;
+      for (const polarity of ["positive", "negative"] as const) {
+        for (const scope of ["long", "recent"] as const) {
+          const top = Array.from(weights.entries())
+            .filter(([key]) => key.startsWith(`${polarity}:${scope}:`))
+            .map(([key, value]) => ({
+              term: key.slice(`${polarity}:${scope}:`.length),
+              ...value
+            }))
+            .filter((item) => item.weight > 0)
+            .sort((left, right) => right.weight - left.weight)
+            .slice(0, 256);
+          for (const item of top) {
+            insert.run(
+              item.term,
+              polarity,
+              scope,
+              Number(item.weight.toFixed(6)),
+              item.evidenceCount,
+              item.lastEventAt || null,
+              now
+            );
+          }
         }
-        insert.run(term, polarity, Math.abs(weight), Math.max(1, Math.round(Math.abs(weight))), now, now);
       }
       this.touchBackfillState("keyword_profile_rebuild", "succeeded", weights.size);
     })();
   }
 
-  private runDiagnosticEvaluation(): void {
+  private rebuildRecentIntent(): void {
     const now = this.now();
-    const runId = `eval_${now}_${randomBytes(4).toString("hex")}`;
-    const metrics = this.options.db
+    const activeIndex = this.options.db
+      .prepare(
+        `
+          select id
+          from embedding_indexes
+          where status = 'active'
+          order by updated_at desc
+          limit 1
+        `
+      )
+      .get() as { id: string } | undefined;
+    if (!activeIndex) {
+      this.touchBackfillState("recent_intent_rebuild", "succeeded", 0);
+      return;
+    }
+    const rows = this.options.db
       .prepare(
         `
           select
-            count(*) as candidateCount,
-            sum(case when s.favorited_at is not null or s.read_later_at is not null or coalesce(s.reading_progress, 0) >= 0.75 then 1 else 0 end) as positiveCount,
-            count(distinct a.feed_id) as sourceCount
-          from articles a
+            be.event_type as eventType,
+            be.metadata_json as metadataJson,
+            be.created_at as createdAt,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            ae.vector_blob as vectorBlob
+          from behavior_events be
+          join articles a on a.id = be.article_id
           join feeds f on f.id = a.feed_id
+          join article_embeddings ae
+            on ae.article_id = a.id
+           and ae.embedding_index_id = ?
           left join article_states s on s.article_id = a.id
           where a.deleted_at is null
             and a.status != 'deleted'
             and f.deleted_at is null
+            and f.enabled = 1
+            and ae.vector_blob is not null
+            and be.created_at >= ?
+          order by be.created_at desc, be.id desc
+          limit 100
         `
       )
-      .get() as { candidateCount: number; positiveCount: number | null; sourceCount: number };
+      .all(activeIndex.id, now - 72 * 3_600_000) as Array<{
+      eventType: string;
+      metadataJson: string | null;
+      createdAt: number;
+      readingProgress: number;
+      vectorBlob: Buffer;
+    }>;
+
+    const centroids = new Map<"positive" | "negative", { vector: number[]; weight: number; count: number }>();
+    for (const row of rows) {
+      const polarity = keywordPolarity(row.eventType, row.metadataJson, row.readingProgress);
+      if (!polarity) {
+        continue;
+      }
+      const ageHours = Math.max(0, (now - row.createdAt) / 3_600_000);
+      const weight = keywordEventWeight(row.eventType, row.metadataJson, row.readingProgress) * Math.pow(0.5, ageHours / 18);
+      const vector = fromVectorBlob(row.vectorBlob);
+      const existing = centroids.get(polarity);
+      if (!existing) {
+        centroids.set(polarity, { vector: vector.map((value) => value * weight), weight, count: 1 });
+      } else {
+        existing.vector = existing.vector.map((value, index) => value + (vector[index] ?? 0) * weight);
+        existing.weight += weight;
+        existing.count += 1;
+      }
+    }
+
+    this.options.db.transaction(() => {
+      const upsert = this.options.db.prepare(
+        `
+          insert into recent_intent_profiles (
+            id,
+            embedding_index_id,
+            polarity,
+            centroid_vector_blob,
+            weight,
+            event_count,
+            half_life_hours,
+            updated_at
+          )
+          values (?, ?, ?, ?, ?, ?, 18, ?)
+          on conflict(id) do update set
+            centroid_vector_blob = excluded.centroid_vector_blob,
+            weight = excluded.weight,
+            event_count = excluded.event_count,
+            half_life_hours = excluded.half_life_hours,
+            updated_at = excluded.updated_at
+        `
+      );
+      for (const polarity of ["positive", "negative"] as const) {
+        const centroid = centroids.get(polarity);
+        const id = `recent_intent_${activeIndex.id}_${polarity}`;
+        if (!centroid || centroid.weight <= 0) {
+          upsert.run(id, activeIndex.id, polarity, null, 0, 0, now);
+          continue;
+        }
+        upsert.run(
+          id,
+          activeIndex.id,
+          polarity,
+          toVectorBlob(normalizeVector(centroid.vector.map((value) => value / centroid.weight))),
+          Number(centroid.weight.toFixed(6)),
+          centroid.count,
+          now
+        );
+      }
+      this.touchBackfillState("recent_intent_rebuild", "succeeded", rows.length);
+    })();
+  }
+
+  private trainFtrl(): void {
+    const now = this.now();
+    const modelId = "ftrl_schema_2";
+    const rows = this.options.db
+      .prepare(
+        `
+          select
+            be.id as eventId,
+            be.article_id as articleId,
+            be.event_type as eventType,
+            be.metadata_json as metadataJson,
+            be.created_at as createdAt,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            ars.semantic_score as semanticScore,
+            ars.bm25_score as bm25Score,
+            ars.source_score as sourceScore,
+            ars.freshness_score as freshnessScore,
+            ars.state_score as stateScore,
+            ars.duplicate_penalty as duplicatePenalty,
+            ars.exposure_penalty as exposurePenalty,
+            ars.exploration_bonus as explorationBonus,
+            ars.rerank_position as rerankPosition
+          from behavior_events be
+          join articles a on a.id = be.article_id
+          left join article_states s on s.article_id = be.article_id
+          left join article_rank_scores ars
+            on ars.article_id = be.article_id
+           and ars.rank_context != 'base'
+          where be.event_type in (
+            'favorite',
+            'like',
+            'read_later',
+            'read_complete',
+            'read_progress',
+            'open',
+            'hide',
+            'not_interested',
+            'quick_bounce'
+          )
+          order by be.created_at, be.id
+          limit 5000
+        `
+      )
+      .all() as Array<{
+      eventId: string;
+      articleId: string;
+      eventType: string;
+      metadataJson: string | null;
+      createdAt: number;
+      readingProgress: number;
+      semanticScore: number | null;
+      bm25Score: number | null;
+      sourceScore: number | null;
+      freshnessScore: number | null;
+      stateScore: number | null;
+      duplicatePenalty: number | null;
+      exposurePenalty: number | null;
+      explorationBonus: number | null;
+      rerankPosition: number | null;
+    }>;
+
+    const examples = rows
+      .map((row) => trainingExampleFor(row))
+      .filter((example): example is NonNullable<typeof example> => example !== null);
+    const highQualitySamples = examples.filter((example) => example.sampleWeight >= 0.75).length;
+    const status = existingModelStatus(this.options.db, modelId) ?? "shadow";
+    const blendAlpha =
+      highQualitySamples >= 50 ? Math.min(0.25, ((highQualitySamples - 50) / 150) * 0.25) : 0;
+
+    this.options.db.transaction(() => {
+      this.options.db
+        .prepare(
+          `
+            insert into rank_model_versions (
+              id,
+              algorithm_version,
+              feature_schema_version,
+              status,
+              sample_count,
+              blend_alpha,
+              metrics_json,
+              created_at,
+              updated_at
+            )
+            values (?, 'rec_v2', 2, ?, ?, ?, ?, ?, ?)
+            on conflict(id) do update set
+              sample_count = excluded.sample_count,
+              blend_alpha = excluded.blend_alpha,
+              metrics_json = excluded.metrics_json,
+              updated_at = excluded.updated_at
+          `
+        )
+        .run(
+          modelId,
+          status,
+          examples.length,
+          blendAlpha,
+          JSON.stringify({ highQualitySamples, mode: status }),
+          now,
+          now
+        );
+
+      const insertExample = this.options.db.prepare(
+        `
+          insert into rank_training_examples (
+            id,
+            model_version_id,
+            article_id,
+            behavior_event_id,
+            label,
+            sample_weight,
+            event_type,
+            exposure_context,
+            rank_position_when_exposed,
+            was_exploration,
+            created_from,
+            feature_values_json,
+            created_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'behavior_event', ?, ?)
+          on conflict(id) do nothing
+        `
+      );
+      for (const example of examples) {
+        insertExample.run(
+          `train_${example.eventId}`,
+          modelId,
+          example.articleId,
+          example.eventId,
+          example.label,
+          example.sampleWeight,
+          example.eventType,
+          example.exposureContext,
+          example.rankPosition,
+          example.wasExploration ? 1 : 0,
+          JSON.stringify(Object.fromEntries(example.features)),
+          example.createdAt
+        );
+      }
+
+      this.options.db.prepare("delete from rank_model_weights where model_version_id = ?").run(modelId);
+      const weights = trainFtrlWeights(examples);
+      const insertWeight = this.options.db.prepare(
+        `
+          insert into rank_model_weights (
+            model_version_id,
+            feature_name,
+            weight,
+            accumulator,
+            z,
+            n,
+            updated_at
+          )
+          values (?, ?, ?, 0, ?, ?, ?)
+        `
+      );
+      for (const [featureName, state] of weights) {
+        insertWeight.run(modelId, featureName, state.weight, state.z, state.n, now);
+      }
+      this.touchBackfillState("ftrl_train", "succeeded", examples.length);
+    })();
+  }
+
+  private runReplayEvaluation(): void {
+    const now = this.now();
+    const runId = `eval_${now}_${randomBytes(4).toString("hex")}`;
+    const cutoffRows = this.options.db
+      .prepare(
+        `
+          select created_at as cutoffAt
+          from behavior_events
+          where created_at >= ?
+          group by date(created_at / 1000, 'unixepoch')
+          order by created_at desc
+          limit 50
+        `
+      )
+      .all(now - 60 * 86_400_000) as Array<{ cutoffAt: number }>;
+    const metrics = replayMetricsFor(this.options.db, cutoffRows.map((row) => row.cutoffAt));
 
     this.options.db
       .prepare(
@@ -363,11 +782,10 @@ export class RecommendationMaintenanceService {
       .run(
         runId,
         JSON.stringify({
-          diagnosticReplay: true,
-          note: "Diagnostic replay only; not a causal A/B result.",
-          candidateCount: metrics.candidateCount,
-          positiveCount: metrics.positiveCount ?? 0,
-          sourceCount: metrics.sourceCount
+          strictReplay: metrics.cutoffCount > 0 && metrics.labelCount > 0,
+          diagnosticOnly: metrics.cutoffCount === 0 || metrics.labelCount === 0,
+          note: "Local offline replay estimate; not a causal A/B test.",
+          ...metrics
         }),
         now,
         now,
@@ -452,6 +870,35 @@ function simhash(text: string): string {
   return result.toString(16).padStart(16, "0");
 }
 
+function hammingDistanceHex(left: string, right: string): number {
+  let value = BigInt(`0x${left}`) ^ BigInt(`0x${right}`);
+  let distance = 0;
+  while (value > 0n) {
+    distance += Number(value & 1n);
+    value >>= 1n;
+  }
+  return distance;
+}
+
+function boundedNearDuplicateBuckets<T extends { normalizedTitle: string | null }>(
+  rows: T[]
+): T[][] {
+  const buckets = new Map<string, T[]>();
+  for (const row of rows) {
+    const tokens = tokenize(row.normalizedTitle ?? "").slice(0, 4);
+    if (tokens.length === 0) {
+      continue;
+    }
+    const key = tokens.join(" ");
+    const bucket = buckets.get(key) ?? [];
+    if (bucket.length < 80) {
+      bucket.push(row);
+    }
+    buckets.set(key, bucket);
+  }
+  return Array.from(buckets.values()).filter((bucket) => bucket.length > 1);
+}
+
 function tokenize(text: string): string[] {
   return Array.from(
     new Set(
@@ -465,17 +912,384 @@ function tokenize(text: string): string[] {
   );
 }
 
-function keywordPolarity(eventType: string): "positive" | "negative" | null {
+function keywordPolarity(
+  eventType: string,
+  metadataJson?: string | null,
+  readingProgress?: number
+): "positive" | "negative" | null {
   switch (eventType) {
     case "favorite":
     case "like":
     case "read_later":
     case "read_complete":
       return "positive";
+    case "read_progress": {
+      const progress = progressFromMetadata(metadataJson) ?? readingProgress ?? 0;
+      return progress >= 0.75
+        ? "positive"
+        : isQuickBounce(metadataJson, readingProgress)
+          ? "negative"
+          : null;
+    }
     case "hide":
     case "not_interested":
+    case "quick_bounce":
       return "negative";
     default:
       return null;
   }
+}
+
+function keywordEventWeight(
+  eventType: string,
+  metadataJson?: string | null,
+  readingProgress?: number
+): number {
+  switch (eventType) {
+    case "like":
+      return 3;
+    case "favorite":
+      return 2.6;
+    case "read_later":
+      return 2;
+    case "read_complete":
+      return 2.4;
+    case "read_progress": {
+      const progress = progressFromMetadata(metadataJson) ?? readingProgress ?? 0;
+      if (progress >= 0.9) {
+        return 2.2;
+      }
+      if (progress >= 0.75) {
+        return 1.5;
+      }
+      return isQuickBounce(metadataJson, readingProgress) ? 0.8 : 0;
+    }
+    case "hide":
+      return 2;
+    case "not_interested":
+      return 3;
+    case "quick_bounce":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function progressFromMetadata(metadataJson?: string | null): number | null {
+  if (!metadataJson) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(metadataJson) as { progress?: unknown };
+    return typeof parsed.progress === "number" ? parsed.progress : null;
+  } catch {
+    return null;
+  }
+}
+
+function activeDurationFromMetadata(metadataJson?: string | null): number | null {
+  if (!metadataJson) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(metadataJson) as { activeDurationMs?: unknown };
+    return typeof parsed.activeDurationMs === "number" ? parsed.activeDurationMs : null;
+  } catch {
+    return null;
+  }
+}
+
+function isQuickBounce(metadataJson?: string | null, readingProgress?: number): boolean {
+  const duration = activeDurationFromMetadata(metadataJson);
+  const progress = progressFromMetadata(metadataJson) ?? readingProgress ?? 0;
+  return duration !== null && duration <= 5_000 && progress <= 0.1;
+}
+
+type FtrlTrainingExample = {
+  eventId: string;
+  articleId: string;
+  eventType: string;
+  label: number;
+  sampleWeight: number;
+  exposureContext: string;
+  rankPosition: number | null;
+  wasExploration: boolean;
+  features: Map<string, number>;
+  createdAt: number;
+};
+
+function trainingExampleFor(row: {
+  eventId: string;
+  articleId: string;
+  eventType: string;
+  metadataJson: string | null;
+  readingProgress: number;
+  semanticScore: number | null;
+  bm25Score: number | null;
+  sourceScore: number | null;
+  freshnessScore: number | null;
+  stateScore: number | null;
+  duplicatePenalty: number | null;
+  exposurePenalty: number | null;
+  explorationBonus: number | null;
+  rerankPosition: number | null;
+  createdAt: number;
+}): FtrlTrainingExample | null {
+  const progress = progressFromMetadata(row.metadataJson) ?? row.readingProgress;
+  const labelAndWeight = labelAndWeightForEvent(row.eventType, progress);
+  if (!labelAndWeight) {
+    return null;
+  }
+  return {
+    eventId: row.eventId,
+    articleId: row.articleId,
+    eventType: row.eventType,
+    label: labelAndWeight.label,
+    sampleWeight: labelAndWeight.sampleWeight,
+    exposureContext: row.rerankPosition === null ? "unknown" : "recommended",
+    rankPosition: row.rerankPosition,
+    wasExploration: (row.explorationBonus ?? 0) > 0,
+    features: new Map(
+      Object.entries({
+        semantic: clamp((row.semanticScore ?? 0) / 0.68, 0, 1),
+        bm25: clamp((row.bm25Score ?? 0) / 0.14, 0, 1),
+        source: clamp(((row.sourceScore ?? 0) + 0.14) / 0.28, 0, 1),
+        freshness: clamp((row.freshnessScore ?? 0) / 0.2, 0, 1),
+        state: clamp(((row.stateScore ?? 0) + 0.12) / 0.36, 0, 1),
+        duplicate_penalty: clamp(Math.abs(row.duplicatePenalty ?? 0) / 0.2, 0, 1),
+        exposure_penalty: (row.exposurePenalty ?? 0) < 0 ? 1 : 0,
+        exploration_bonus: (row.explorationBonus ?? 0) > 0 ? 1 : 0
+      })
+    ),
+    createdAt: row.createdAt
+  };
+}
+
+function labelAndWeightForEvent(
+  eventType: string,
+  progress: number
+): { label: number; sampleWeight: number } | null {
+  switch (eventType) {
+    case "favorite":
+    case "like":
+      return { label: 1, sampleWeight: 1.5 };
+    case "read_later":
+      return { label: 0.9, sampleWeight: 1.3 };
+    case "read_complete":
+      return { label: 0.85, sampleWeight: 1.2 };
+    case "read_progress":
+      if (progress >= 0.75) {
+        return { label: 0.7, sampleWeight: 1 };
+      }
+      if (progress >= 0.5) {
+        return { label: 0.5, sampleWeight: 0.4 };
+      }
+      return null;
+    case "open":
+      return { label: 0.2, sampleWeight: 0.05 };
+    case "quick_bounce":
+      return { label: 0.1, sampleWeight: 0.6 };
+    case "hide":
+    case "not_interested":
+      return { label: 0, sampleWeight: 1.4 };
+    default:
+      return null;
+  }
+}
+
+function trainFtrlWeights(
+  examples: FtrlTrainingExample[]
+): Map<string, { z: number; n: number; weight: number }> {
+  const alpha = 0.05;
+  const beta = 1;
+  const lambda1 = 0.05;
+  const lambda2 = 0.1;
+  const maxAbsWeight = 5;
+  const states = new Map<string, { z: number; n: number; weight: number }>();
+  const stateFor = (feature: string) => {
+    const state = states.get(feature) ?? { z: 0, n: 0, weight: 0 };
+    states.set(feature, state);
+    return state;
+  };
+  const computeWeight = (state: { z: number; n: number }): number => {
+    if (Math.abs(state.z) <= lambda1) {
+      return 0;
+    }
+    const sign = state.z < 0 ? -1 : 1;
+    return clamp(
+      -(state.z - sign * lambda1) / ((beta + Math.sqrt(state.n)) / alpha + lambda2),
+      -maxAbsWeight,
+      maxAbsWeight
+    );
+  };
+
+  for (const example of examples) {
+    let logit = 0;
+    for (const [feature, value] of example.features) {
+      const state = stateFor(feature);
+      state.weight = computeWeight(state);
+      logit += state.weight * value;
+    }
+    const prediction = 1 / (1 + Math.exp(-logit));
+    for (const [feature, value] of example.features) {
+      const state = stateFor(feature);
+      const gradient = (prediction - example.label) * value * example.sampleWeight;
+      const sigma = (Math.sqrt(state.n + gradient * gradient) - Math.sqrt(state.n)) / alpha;
+      state.z += gradient - sigma * state.weight;
+      state.n += gradient * gradient;
+      state.weight = computeWeight(state);
+    }
+  }
+  return states;
+}
+
+function existingModelStatus(
+  db: DibaoDatabase,
+  modelId: string
+): "shadow" | "active" | "retired" | "failed" | null {
+  const row = db
+    .prepare("select status from rank_model_versions where id = ?")
+    .get(modelId) as { status: "shadow" | "active" | "retired" | "failed" } | undefined;
+  return row?.status ?? null;
+}
+
+function replayMetricsFor(
+  db: DibaoDatabase,
+  cutoffs: number[]
+): Record<string, number> {
+  let labelCount = 0;
+  let hit10 = 0;
+  let mrrTotal = 0;
+  let ndcg10Total = 0;
+  const positiveRanks: number[] = [];
+  for (const cutoff of cutoffs) {
+    const positives = db
+      .prepare(
+        `
+          select distinct article_id as articleId
+          from behavior_events
+          where created_at > ?
+            and created_at <= ?
+            and event_type in ('favorite', 'like', 'read_later', 'read_complete')
+          limit 50
+        `
+      )
+      .all(cutoff, cutoff + 7 * 86_400_000) as Array<{ articleId: string }>;
+    if (positives.length === 0) {
+      continue;
+    }
+    const positiveSet = new Set(positives.map((row) => row.articleId));
+    const candidates = db
+      .prepare(
+        `
+          select
+            a.id as articleId,
+            a.title,
+            a.summary,
+            coalesce(a.published_at, a.discovered_at) as articleTime
+          from articles a
+          join feeds f on f.id = a.feed_id
+          left join article_states s on s.article_id = a.id
+          where a.discovered_at <= ?
+            and a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and s.hidden_at is null
+            and s.not_interested_at is null
+          order by coalesce(a.published_at, a.discovered_at) desc, a.id desc
+          limit 300
+        `
+      )
+      .all(cutoff) as Array<{
+      articleId: string;
+      title: string;
+      summary: string | null;
+      articleTime: number;
+    }>;
+    const profileTerms = lightweightReplayTerms(db, cutoff);
+    const ranked = candidates
+      .map((candidate) => ({
+        articleId: candidate.articleId,
+        score:
+          replayTermOverlap(`${candidate.title} ${candidate.summary ?? ""}`, profileTerms) * 10 +
+          candidate.articleTime / 86_400_000
+      }))
+      .sort((left, right) => right.score - left.score || right.articleId.localeCompare(left.articleId));
+    labelCount += positiveSet.size;
+    let firstRank: number | null = null;
+    let dcg10 = 0;
+    for (let index = 0; index < ranked.length; index += 1) {
+      if (!positiveSet.has(ranked[index]!.articleId)) {
+        continue;
+      }
+      const rank = index + 1;
+      positiveRanks.push(rank);
+      firstRank = firstRank === null ? rank : Math.min(firstRank, rank);
+      if (rank <= 10) {
+        hit10 += 1;
+        dcg10 += 1 / Math.log2(rank + 1);
+      }
+    }
+    if (firstRank !== null) {
+      mrrTotal += 1 / firstRank;
+    }
+    const ideal = Array.from({ length: Math.min(10, positiveSet.size) }).reduce<number>(
+      (sum, _value, index) => sum + 1 / Math.log2(index + 2),
+      0
+    );
+    ndcg10Total += ideal > 0 ? dcg10 / ideal : 0;
+  }
+  positiveRanks.sort((left, right) => left - right);
+  const evaluatedCutoffs = cutoffs.length;
+  return {
+    cutoffCount: evaluatedCutoffs,
+    labelCount,
+    sampleCount: positiveRanks.length,
+    hitAt10: labelCount > 0 ? hit10 / labelCount : 0,
+    ndcgAt10: evaluatedCutoffs > 0 ? ndcg10Total / evaluatedCutoffs : 0,
+    mrr: evaluatedCutoffs > 0 ? mrrTotal / evaluatedCutoffs : 0,
+    positiveRankMedian:
+      positiveRanks.length > 0 ? positiveRanks[Math.floor(positiveRanks.length / 2)]! : 0
+  };
+}
+
+function lightweightReplayTerms(db: DibaoDatabase, cutoff: number): Set<string> {
+  const rows = db
+    .prepare(
+      `
+        select a.title, a.summary
+        from behavior_events be
+        join articles a on a.id = be.article_id
+        where be.created_at < ?
+          and be.event_type in ('favorite', 'like', 'read_later', 'read_complete', 'read_progress')
+        order by be.created_at desc
+        limit 100
+      `
+    )
+    .all(cutoff) as Array<{ title: string; summary: string | null }>;
+  const terms = new Set<string>();
+  for (const row of rows) {
+    for (const term of tokenize(`${row.title} ${row.summary ?? ""}`).slice(0, 12)) {
+      terms.add(term);
+      if (terms.size >= 64) {
+        return terms;
+      }
+    }
+  }
+  return terms;
+}
+
+function replayTermOverlap(text: string, terms: Set<string>): number {
+  if (terms.size === 0) {
+    return 0;
+  }
+  const candidateTerms = new Set(tokenize(text));
+  let matches = 0;
+  for (const term of terms) {
+    if (candidateTerms.has(term)) {
+      matches += 1;
+    }
+  }
+  return matches / Math.max(terms.size, 1);
 }

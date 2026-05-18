@@ -290,7 +290,8 @@ export class ProfileService {
       if (!forceCreate) {
         return;
       }
-      this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+      const cluster = this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+      this.recordClusterEvidence(event, cluster.id, "live_event", 1, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
       return;
     }
@@ -310,12 +311,21 @@ export class ProfileService {
         lastMatchedAt: now,
         now
       });
+      this.recordClusterEvidence(
+        event,
+        best.cluster.id,
+        "live_event",
+        best.similarity,
+        eventWeight,
+        now
+      );
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
       return;
     }
 
     if (forceCreate || (polarity === "positive" && best.similarity >= thresholds.create)) {
-      this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+      const cluster = this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+      this.recordClusterEvidence(event, cluster.id, "live_event", 1, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
     }
   }
@@ -326,8 +336,8 @@ export class ProfileService {
     vector: number[],
     eventWeight: number,
     now: number
-  ): void {
-    this.options.profiles.upsertCluster({
+  ): InterestClusterRow {
+    return this.options.profiles.upsertCluster({
       id: this.clusterIdFactory(),
       embeddingIndexId,
       polarity,
@@ -337,6 +347,28 @@ export class ProfileService {
       lastMatchedAt: now,
       now
     });
+  }
+
+  private recordClusterEvidence(
+    event: ProfileBehaviorEventRow,
+    clusterId: string,
+    evidenceSource: "live_event" | "reconstructed",
+    similarity: number,
+    weightDelta: number,
+    now: number
+  ): void {
+    this.options.profiles.insertClusterEvidence({
+      id: `evidence_${event.id}_${clusterId}_${evidenceSource}`,
+      clusterId,
+      articleId: event.articleId,
+      behaviorEventId: event.id,
+      evidenceSource,
+      confidence: evidenceSource === "live_event" ? 1 : clamp(similarity, 0, 1),
+      similarity,
+      weightDelta,
+      createdAt: now
+    });
+    this.options.profiles.trimClusterEvidence({ clusterId, limit: 50 });
   }
 
   private compactAllClusters(): { deleted: number } {
@@ -414,6 +446,11 @@ export class ProfileService {
             lastMatchedAt: Math.max(survivor.lastMatchedAt ?? 0, mergedAway.lastMatchedAt ?? 0) || null,
             now
           });
+          this.options.profiles.moveClusterEvidence({
+            fromClusterId: mergedAway.id,
+            toClusterId: survivor.id
+          });
+          this.options.profiles.trimClusterEvidence({ clusterId: survivor.id, limit: 50 });
           if (this.options.profiles.deleteCluster(mergedAway.id)) {
             deleted += 1;
           }
@@ -479,6 +516,8 @@ export class ProfileService {
     let favoriteCount = 0;
     let notInterestedCount = 0;
     let clearSignalCount = 0;
+    let clearPositive = 0;
+    let clearNegative = 0;
 
     for (const event of events) {
       const key = sourceEventKeyFor(event);
@@ -490,6 +529,11 @@ export class ProfileService {
       negativeScore += weights.negative;
       if (weights.clear !== false && key !== "open") {
         clearSignalCount += 1;
+        if (weights.positive > weights.negative) {
+          clearPositive += 1;
+        } else if (weights.negative > 0) {
+          clearNegative += 1;
+        }
       }
       if (key === "open") {
         openCount += 1;
@@ -503,6 +547,11 @@ export class ProfileService {
     const confidence = clamp(clearSignalCount / FEED_STATS_CLEAR_SIGNAL_TARGET, 0, 1);
     const openScale = clearSignalCount === 0 ? FEED_STATS_OPEN_ONLY_CONFIDENCE : confidence;
     const denominator = Math.max(events.length, 1);
+    const globalPositiveRate = 0.5;
+    const smoothingAlpha = 8;
+    const smoothedPositiveRate =
+      (clearPositive + smoothingAlpha * globalPositiveRate) /
+      Math.max(clearPositive + clearNegative + smoothingAlpha, 1);
     this.options.profiles.upsertFeedStats({
       feedId,
       positiveScore: positiveScore * (clearSignalCount === 0 ? openScale : confidence),
@@ -510,6 +559,11 @@ export class ProfileService {
       openRate: (openCount / denominator) * openScale,
       favoriteRate: (favoriteCount / denominator) * confidence,
       notInterestedRate: (notInterestedCount / denominator) * confidence,
+      clearPositive,
+      clearNegative,
+      clearSignalCount,
+      smoothedPositiveRate,
+      sourceConfidence: confidence,
       now: this.now()
     });
   }

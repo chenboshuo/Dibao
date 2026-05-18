@@ -1,6 +1,6 @@
 # Dibao Recommendation V2/V3 Design
 
-This document records the implemented V2/V3 recommendation architecture. The ranking core remains local-first:
+This document records the phased V2/V3 recommendation architecture and the current implementation status. The ranking core remains local-first:
 
 - No remote LLM.
 - No remote reranker.
@@ -8,6 +8,32 @@ This document records the implemented V2/V3 recommendation architecture. The ran
 - No external search service.
 - The only optional remote dependency is one embedding provider.
 - Scores, explanations, local model data, profile data, and evaluation logs are stored in SQLite.
+
+## Implementation Status
+
+### Implemented and active by default
+
+- `004_recommendation_v2` plus append-only `005_recommendation_v2_completion`.
+- Canonical rank context remains `article_rank_scores.rank_context`; there is no second `rank_context_id`.
+- Ranking jobs persist `rerank_position`, and `view=recommended` reads that canonical order before falling back to score.
+- Ranking setting changes enqueue a deduped `ranking_recalculate` job without enqueueing embedding, FTS, or vector rebuild jobs.
+- Semantic ranking uses existing `interest_clusters`, recent intent vectors when present, and persisted score components.
+- `profile_terms + FTS5 bm25()` participates in lexical candidate recall and `bm25_score`; token counts are not used as BM25.
+- Candidate recall is bucketed in the full recalculation path: must-include, recency, semantic, lexical, and diversity buckets are unioned before scoring.
+- `interest_cluster_evidence` is written for live cluster updates and read before dynamic diagnostics fallback.
+- Duplicate rebuild includes exact keys and bounded simhash near-duplicate grouping; ranking reads persisted duplicate groups for penalties.
+- Feed source normalization writes Bayesian smoothing fields and ranking prefers them when available.
+- Recent intent rebuild uses existing embeddings only and does not call an embedding provider.
+- Offline evaluation writes local replay-style metrics from sampled cutoffs and labels; it is still not causal A/B evidence.
+
+### Implemented but shadow or disabled
+
+- FTRL training generates examples and weights locally. It writes non-zero shadow `ftrl_score`, but final ranking uses it only when the model is active, sample count is sufficient, and settings allow active blend.
+- Micro-exploration uses deterministic slots in canonical rerank when exploration is enabled. It remains bounded by top10/top20 slot caps.
+
+### Planned / disabled
+
+- A stricter historical replay can still improve embedding-time leakage handling. Current evaluation is a local replay estimate and must not be described as an A/B test.
 
 ## Rank Context
 
@@ -43,7 +69,7 @@ rec_v2:<base|embedding>:cocoon_<level>:schema_2
 
 ## Candidate Generation
 
-The implementation is structured around bucketed recall, not one global pre-union cap:
+Target V2 is structured around bucketed recall, not one global pre-union cap:
 
 - must-include: favorite, read-later, recently opened unfinished, fresh pending embeddings, high source-weight feeds
 - recency: fresh articles and recent hot-window articles
@@ -51,7 +77,7 @@ The implementation is structured around bucketed recall, not one global pre-unio
 - lexical: local FTS/BM25 and keyword profile signals
 - diversity: low-exposure feeds and underrepresented duplicate groups
 
-The current implementation computes the hot window through the existing ranking candidates query and stores enough schema to expand each bucket independently without changing the public API.
+The full recalculation path uses independent bucket queries and stores candidate origins in the explanation payload. Cursor chunk recalculation may still use the compatibility candidate query for resumability.
 
 ## Hybrid Scoring
 
@@ -59,7 +85,7 @@ V2 score combines:
 
 - long-term semantic interest from `interest_clusters`
 - top-k weighted positive and negative cluster matching instead of single max cosine
-- local keyword/BM25-style score
+- local keyword/BM25 score when P1 activates `profile_terms + FTS5 bm25()`
 - freshness
 - source normalization
 - article state
@@ -93,7 +119,7 @@ Search uses:
 bm25(article_fts, 5.0, 2.0, 0.6)
 ```
 
-The direction is SQLite FTS5 native: lower BM25 rank is more relevant. The ranking pipeline normalizes local lexical signals before mixing them with semantic and source features.
+The direction is SQLite FTS5 native: lower BM25 rank is more relevant. `article_rank_scores.bm25_score` must only be populated from `profile_terms + FTS5 bm25()` after P1. It must not be populated from token counts, title length, summary length, or text density.
 
 ## Source Normalization
 
@@ -125,7 +151,7 @@ Hard constraints:
 - level 10 never bypasses dedupe or freshness floor
 - duplicate groups cannot flood the list at any level
 
-Changing cocoon level triggers ranking recalculation only. It does not require new embeddings or FTS rebuild.
+Changing cocoon level triggers a deduped ranking recalculation only. It does not require new embeddings, FTS rebuild, or vector rebuild.
 
 ## Canonical Rerank
 
@@ -145,9 +171,9 @@ V3 features are local and feature-flagged:
 - `recommendation.exploration.enabled`
 - `recommendation.evaluation.enabled`
 
-FTRL is shadow-mode by default. Training examples include `sample_weight`, `event_type`, `exposure_context`, `rank_position_when_exposed`, `was_exploration`, and `created_from` to reduce exposure bias.
+FTRL is shadow-mode by default. It is trained locally from low-dimensional normalized ranking features, not raw embedding dimensions.
 
-Offline replay evaluation is diagnostic unless a strict time-travel profile is used. It must not be described as causal A/B proof.
+Offline replay evaluation is a local replay estimate. It must not be described as causal A/B proof.
 
 ## Migration And Backfill
 
@@ -157,6 +183,8 @@ Migration `004_recommendation_v2`:
 - appends nullable score columns to `article_rank_scores`
 - adds derived-data tables for rank contexts, evidence, fingerprints, duplicates, local learning, exploration, evaluation, and backfill state
 - expands job types with a recreate-copy-rename migration
+
+Migration `005_recommendation_v2_completion` is append-only and safe for databases that already applied `004`. It adds FTRL state columns (`z`, `n`), source normalization derived fields on `feed_stats`, and non-unique indexes for P1/P2 work. It intentionally avoids unique indexes that could fail on dirty derived rows.
 
 Live migration is gated. Use:
 

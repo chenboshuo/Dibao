@@ -9,6 +9,9 @@
 ```text
 packages/db/migrations/001_initial_schema.sql
 packages/db/migrations/002_article_state_likes.sql
+packages/db/migrations/003_profile_event_jobs.sql
+packages/db/migrations/004_recommendation_v2.sql
+packages/db/migrations/005_recommendation_v2_completion.sql
 ```
 
 实现时可以根据具体库和 sqlite-vec 版本调整语法，但不得改变这里定义的数据边界和所有权原则。
@@ -695,8 +698,19 @@ negative_score REAL NOT NULL DEFAULT 0
 open_rate REAL NOT NULL DEFAULT 0
 favorite_rate REAL NOT NULL DEFAULT 0
 not_interested_rate REAL NOT NULL DEFAULT 0
+clear_positive INTEGER NOT NULL DEFAULT 0
+clear_negative INTEGER NOT NULL DEFAULT 0
+clear_signal_count INTEGER NOT NULL DEFAULT 0
+smoothed_positive_rate REAL NOT NULL DEFAULT 0
+source_confidence REAL NOT NULL DEFAULT 0
 last_calculated_at INTEGER
 ```
+
+说明：
+
+- `positive_score` / `negative_score` / rate 字段保留兼容。
+- `clear_*`、`smoothed_positive_rate` 和 `source_confidence` 是 005 新增的 source normalization authority 字段；P1 ranking 应优先使用它们。
+- open-only 行为只能产生极低 confidence，impression 不应因为高频源被放大成强负反馈。
 
 ## 排序结果
 
@@ -710,11 +724,28 @@ rank_context TEXT NOT NULL
 embedding_index_id TEXT REFERENCES embedding_indexes(id) ON DELETE SET NULL
 score REAL NOT NULL
 interest_score REAL NOT NULL DEFAULT 0
+base_score REAL
+ftrl_score REAL
+semantic_score REAL
+bm25_score REAL
 source_score REAL NOT NULL DEFAULT 0
 freshness_score REAL NOT NULL DEFAULT 0
 state_score REAL NOT NULL DEFAULT 0
 diversity_score REAL NOT NULL DEFAULT 0
 penalty_score REAL NOT NULL DEFAULT 0
+negative_penalty REAL
+duplicate_penalty REAL
+diversity_penalty REAL
+exploration_bonus REAL
+pending_embedding_score REAL
+exposure_penalty REAL
+pre_rerank_score REAL
+rerank_score REAL
+rerank_position INTEGER
+rerank_window_id TEXT
+algorithm_version TEXT
+feature_schema_version INTEGER
+cocoon_level INTEGER
 calculated_at INTEGER NOT NULL
 PRIMARY KEY(article_id, rank_context)
 ```
@@ -730,7 +761,9 @@ idx_article_rank_scores_calculated_at(calculated_at)
 说明：
 
 - `rank_context = 'base'` 表示没有 embedding provider 时的基础排序结果。
-- 使用 embedding provider 时，`rank_context` 等于 `embedding_index_id`。
+- V2 context 形如 `rec_v2:embedding:cocoon_<level>:schema_2`。
+- `rerank_position` 是 recommended canonical order；`latest` 不使用该字段排序。
+- `bm25_score` 只能表示真实 `profile_terms + FTS5 bm25()` 分数；P0 阶段未激活时应为 0/null。
 
 ### article_rank_explanations
 

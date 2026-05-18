@@ -486,6 +486,45 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("reports recommendation transparency modules honestly before completion backfills are active", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          transparency: {
+            currentFormula: "freshness + source + state fallback",
+            moduleStatus: {
+              bm25ProfileTerms: "not_active",
+              recentIntent: "missing",
+              ftrl: "disabled",
+              evaluation: "unavailable",
+              duplicate: "not_built",
+              evidence: "dynamic_fallback"
+            },
+            failureStates: {
+              bm25ProfileTermsActive: false,
+              recentIntentMissing: true,
+              ftrlTrained: false,
+              duplicateNearMatchActive: false,
+              evidenceUsingDynamicFallback: true
+            }
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("reports setup status with existing undeleted feeds", async () => {
     const db = createEmptyDatabase();
     const feedRepository = new SqliteFeedRepository(db);
@@ -1867,6 +1906,66 @@ describe("server API vertical slice", () => {
           }
         });
       }
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("queues ranking recalculation only when ranking settings actually change", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 5000 });
+    const jobs = new SqliteJobRepository(db);
+
+    try {
+      const changed = await injectJson(app, "PATCH", "/api/settings", {
+        ranking: {
+          cocoonLevel: 7
+        }
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      expect(changed.json()).toMatchObject({
+        data: {
+          rankingRecalculateQueued: true,
+          rankingRecalculateJobId: expect.any(String),
+          settings: {
+            ranking: {
+              cocoonLevel: 7
+            }
+          }
+        }
+      });
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
+      expect(jobs.countByTypeAndStatus("embedding_generate", "queued")).toBe(0);
+
+      const same = await injectJson(app, "PATCH", "/api/settings", {
+        ranking: {
+          cocoonLevel: 7
+        }
+      });
+      expect(same.statusCode, same.body).toBe(200);
+      expect(same.json()).toMatchObject({
+        data: {
+          rankingRecalculateQueued: false,
+          rankingRecalculateJobId: null
+        }
+      });
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
+
+      const readerOnly = await injectJson(app, "PATCH", "/api/settings", {
+        reader: {
+          fontSize: 20
+        }
+      });
+      expect(readerOnly.statusCode, readerOnly.body).toBe(200);
+      expect(readerOnly.json()).toMatchObject({
+        data: {
+          rankingRecalculateQueued: false,
+          rankingRecalculateJobId: null
+        }
+      });
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
+      expect(jobs.countByTypeAndStatus("embedding_generate", "queued")).toBe(0);
     } finally {
       await app.close();
       db.close();

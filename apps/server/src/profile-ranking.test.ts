@@ -27,6 +27,13 @@ import {
   RankingRecalculateJobService,
   RANKING_RECALCULATE_JOB_TYPE
 } from "./ranking-job-service.js";
+import {
+  FTRL_TRAIN_JOB_TYPE,
+  KEYWORD_PROFILE_REBUILD_JOB_TYPE,
+  RANKING_EVAL_RUN_JOB_TYPE,
+  RECENT_INTENT_REBUILD_JOB_TYPE,
+  RecommendationMaintenanceService
+} from "./recommendation-maintenance-service.js";
 import { RecommendationRankingService } from "./ranking-service.js";
 import { buildServer as buildRealServer } from "./app.js";
 
@@ -123,6 +130,7 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(similarScore).not.toBeNull();
       expect(otherScore).not.toBeNull();
       expect(similarScore!).toBeGreaterThan(otherScore!);
+      expect(activeBm25Score(db, "article_similar")).toBe(0);
     } finally {
       db.close();
     }
@@ -326,6 +334,106 @@ describe("profile algorithm and recommendation ranking", () => {
     }
   });
 
+  it("orders recommended articles by canonical rerank_position before score and keeps latest date-based", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const rankings = new SqliteRankingRepository(db);
+
+    try {
+      feeds.upsert({
+        id: "feed_rerank",
+        title: "Rerank Feed",
+        feedUrl: "https://example.com/rerank.xml",
+        now: 1000
+      });
+      insertArticleForFeed(articles, "article_position_2", "feed_rerank", "High score later position", "hash_pos_2", 2000);
+      insertArticleForFeed(articles, "article_position_1", "feed_rerank", "Low score first position", "hash_pos_1", 1000);
+
+      rankings.upsertScore({
+        articleId: "article_position_2",
+        rankContext: "ctx_rerank",
+        score: 0.99,
+        baseScore: 0.99,
+        interestScore: 0,
+        sourceScore: 0,
+        freshnessScore: 0,
+        stateScore: 0,
+        diversityScore: 0,
+        penaltyScore: 0,
+        rerankPosition: 2,
+        calculatedAt: 3000
+      });
+      rankings.upsertScore({
+        articleId: "article_position_1",
+        rankContext: "ctx_rerank",
+        score: 0.2,
+        baseScore: 0.2,
+        interestScore: 0,
+        sourceScore: 0,
+        freshnessScore: 0,
+        stateScore: 0,
+        diversityScore: 0,
+        penaltyScore: 0,
+        rerankPosition: 1,
+        calculatedAt: 3000
+      });
+
+      expect(
+        articles.list({ view: "recommended", rankContext: "ctx_rerank" }).items.map((article) => article.id)
+      ).toEqual(["article_position_1", "article_position_2"]);
+      expect(articles.list().items.map((article) => article.id)).toEqual([
+        "article_position_2",
+        "article_position_1"
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falls back to score when rerank_position is missing", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const rankings = new SqliteRankingRepository(db);
+
+    try {
+      feeds.upsert({
+        id: "feed_score_fallback",
+        title: "Score Fallback Feed",
+        feedUrl: "https://example.com/score.xml",
+        now: 1000
+      });
+      insertArticleForFeed(articles, "article_score_low", "feed_score_fallback", "Low score", "hash_score_low", 2000);
+      insertArticleForFeed(articles, "article_score_high", "feed_score_fallback", "High score", "hash_score_high", 1000);
+
+      for (const [articleId, score] of [
+        ["article_score_low", 0.1],
+        ["article_score_high", 0.9]
+      ] as const) {
+        rankings.upsertScore({
+          articleId,
+          rankContext: "ctx_score_fallback",
+          score,
+          baseScore: score,
+          interestScore: 0,
+          sourceScore: 0,
+          freshnessScore: 0,
+          stateScore: 0,
+          diversityScore: 0,
+          penaltyScore: 0,
+          calculatedAt: 3000
+        });
+      }
+
+      expect(
+        articles.list({ view: "recommended", rankContext: "ctx_score_fallback" }).items.map((article) => article.id)
+      ).toEqual(["article_score_high", "article_score_low"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("REC-031 boosts favorite, read later, and derived read complete topics above open-only topics", () => {
     const fixture = createEvaluationFixture();
     const { actions, db, profile, ranking } = fixture;
@@ -440,6 +548,233 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(clearSignals.indexOf("candidate_clear_source")).toBeLessThan(
         clearSignals.indexOf("candidate_plain_source")
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds profile_terms and uses true FTS/BM25 profile matches in ranking", () => {
+    const fixture = createProfileFixture();
+    const { actions, articles, db, ranking } = fixture;
+
+    try {
+      articles.upsert({
+        id: "article_keyword",
+        feedId: "feed_profile",
+        url: "https://example.com/article_keyword",
+        canonicalUrl: "https://example.com/article_keyword",
+        title: "Liked profile topic digest",
+        summary: "A focused profile topic.",
+        publishedAt: 1300,
+        discoveredAt: 1300,
+        contentHash: "hash_keyword",
+        dedupeKey: "article_keyword",
+        now: 1300
+      });
+      articles.upsert({
+        id: "article_unmatched_keyword",
+        feedId: "feed_profile",
+        url: "https://example.com/article_unmatched_keyword",
+        canonicalUrl: "https://example.com/article_unmatched_keyword",
+        title: "Weather market digest",
+        summary: "A distant unrelated note.",
+        publishedAt: 1350,
+        discoveredAt: 1350,
+        contentHash: "hash_unmatched_keyword",
+        dedupeKey: "article_unmatched_keyword",
+        now: 1350
+      });
+      actions.record({ articleId: "article_liked", type: "favorite", now: 2000 });
+      const maintenance = createMaintenanceService(db, 5000);
+      maintenance.handleJob(maintenanceJob(KEYWORD_PROFILE_REBUILD_JOB_TYPE));
+      const rankingWithDb = new RecommendationRankingService({
+        db,
+        embeddings: new SqliteEmbeddingRepository(db),
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        now: () => 5000
+      });
+      rankingWithDb.recalculateAll();
+
+      const keywordScore = bm25ScoreForContext(db, "article_keyword", rankingWithDb.getActiveRankContext());
+      const otherScore = bm25ScoreForContext(db, "article_unmatched_keyword", rankingWithDb.getActiveRankContext());
+
+      expect(keywordScore).toBeGreaterThanOrEqual(0);
+      expect(keywordScore).toBeGreaterThan(otherScore ?? -1);
+      expect(countRows(db, "profile_terms")).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("builds recent intent from existing embeddings and uses it without embedding calls", () => {
+    const fixture = createProfileFixture();
+    const { actions, db } = fixture;
+
+    try {
+      actions.record({ articleId: "article_liked", type: "favorite", now: 4900 });
+      const maintenance = createMaintenanceService(db, 5000);
+      maintenance.handleJob(maintenanceJob(RECENT_INTENT_REBUILD_JOB_TYPE));
+
+      const recent = db
+        .prepare("select event_count as eventCount, weight from recent_intent_profiles where polarity = 'positive'")
+        .get() as { eventCount: number; weight: number } | undefined;
+      expect(recent?.eventCount).toBeGreaterThan(0);
+
+      const ranking = new RecommendationRankingService({
+        db,
+        embeddings: new SqliteEmbeddingRepository(db),
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        now: () => 5000
+      });
+      ranking.recalculateAll();
+
+      expect(activeScore(db, "article_similar")).toBeGreaterThan(activeScore(db, "article_other") ?? 0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists live cluster evidence and exposes table-backed evidence first", () => {
+    const fixture = createProfileFixture();
+    const { actions, db, profile, profiles } = fixture;
+
+    try {
+      const event = actions.record({ articleId: "article_liked", type: "favorite", now: 2000 });
+      profile.processEvent(event!.eventId);
+
+      const evidence = profiles.listClusterEvidence({ embeddingIndexId: "index_profile" });
+      expect(evidence[0]).toMatchObject({
+        articleId: "article_liked",
+        behaviorEventId: event!.eventId,
+        evidenceSource: "live_event",
+        confidence: 1
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds simhash near-duplicate groups and ranking reads persisted duplicate penalties", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const embeddings = new SqliteEmbeddingRepository(db);
+
+    try {
+      feeds.upsert({ id: "feed_dup", title: "Dup Feed", feedUrl: "https://example.com/dup.xml", now: 1000 });
+      embeddings.upsertProvider({
+        id: "provider_dup",
+        type: "openai_compatible",
+        name: "Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture",
+        dimension: 3,
+        enabled: true,
+        now: 1000
+      });
+      embeddings.createIndex({
+        id: "index_dup",
+        providerId: "provider_dup",
+        model: "fixture",
+        dimension: 3,
+        now: 1000
+      });
+      insertArticleForFeed(articles, "dup_a", "feed_dup", "Breaking AI governance policy", "hash_dup_a", 2000);
+      insertArticleForFeed(articles, "dup_b", "feed_dup", "Breaking AI governance policy!", "hash_dup_b", 2100);
+
+      createMaintenanceService(db, 5000).handleJob(maintenanceJob("duplicate_group_rebuild"));
+      expect(countRows(db, "duplicate_groups")).toBeGreaterThan(0);
+
+      const ranking = new RecommendationRankingService({
+        db,
+        embeddings,
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        now: () => 5000
+      });
+      ranking.recalculateAll();
+      const penalty = db
+        .prepare(
+          "select duplicate_penalty as duplicatePenalty from article_rank_scores where article_id = ? and rank_context = ?"
+        )
+        .get("dup_b", ranking.getActiveRankContext()) as { duplicatePenalty: number | null } | undefined;
+      expect(penalty?.duplicatePenalty ?? 0).toBeLessThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("trains FTRL shadow weights and writes non-zero ftrlScore without changing final score", () => {
+    const fixture = createProfileFixture();
+    const { actions, db, profile } = fixture;
+
+    try {
+      const event = actions.record({ articleId: "article_liked", type: "favorite", now: 2000 });
+      profile.processEvent(event!.eventId);
+      const ranking = new RecommendationRankingService({
+        db,
+        embeddings: new SqliteEmbeddingRepository(db),
+        profiles: new SqliteProfileRepository(db),
+        rankings: new SqliteRankingRepository(db),
+        now: () => 5000
+      });
+      ranking.recalculateAll();
+      const before = db
+        .prepare(
+          `
+            select score
+            from article_rank_scores
+            where article_id = 'article_similar'
+              and rank_context = ?
+          `
+        )
+        .get(ranking.getActiveRankContext()) as { score: number } | undefined;
+      createMaintenanceService(db, 5000).handleJob(maintenanceJob(FTRL_TRAIN_JOB_TYPE));
+      ranking.recalculateAll();
+
+      expect(countRows(db, "rank_model_weights")).toBeGreaterThan(0);
+      const row = db
+        .prepare(
+          `
+            select ftrl_score as ftrlScore, score, pre_rerank_score as preRerankScore
+            from article_rank_scores
+            where article_id = 'article_similar'
+              and rank_context = ?
+          `
+        )
+        .get(ranking.getActiveRankContext()) as
+        | { ftrlScore: number | null; score: number; preRerankScore: number | null }
+        | undefined;
+      expect(row?.ftrlScore ?? 0).toBeGreaterThan(0);
+      expect(row?.score).toBe(before?.score);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("writes strict replay-style evaluation metrics without blocking recommendations", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const actions = new SqliteArticleActionRepository(db);
+
+    try {
+      feeds.upsert({ id: "feed_eval_replay", title: "Replay Feed", feedUrl: "https://example.com/replay.xml", now: 1000 });
+      insertArticleForFeed(articles, "replay_article", "feed_eval_replay", "Replay Article", "hash_replay", 1000);
+      actions.record({ articleId: "replay_article", type: "open", now: 2000 });
+      actions.record({ articleId: "replay_article", type: "favorite", now: 3000 });
+
+      createMaintenanceService(db, 5000).handleJob(maintenanceJob(RANKING_EVAL_RUN_JOB_TYPE));
+      const run = db
+        .prepare("select metrics_json as metricsJson from ranking_eval_runs order by created_at desc limit 1")
+        .get() as { metricsJson: string } | undefined;
+      const metrics = JSON.parse(run?.metricsJson ?? "{}") as { hitAt10?: number; ndcgAt10?: number; mrr?: number; cutoffCount?: number };
+      expect(metrics.cutoffCount).toBeGreaterThan(0);
+      expect(metrics.hitAt10).toBeGreaterThanOrEqual(0);
+      expect(metrics.ndcgAt10).toBeGreaterThanOrEqual(0);
+      expect(metrics.mrr).toBeGreaterThanOrEqual(0);
     } finally {
       db.close();
     }
@@ -903,6 +1238,85 @@ function activeScore(db: DibaoDatabase, articleId: string): number | null {
     .get(articleId) as { score: number } | undefined;
 
   return row?.score ?? null;
+}
+
+function activeBm25Score(db: DibaoDatabase, articleId: string): number | null {
+  const row = db
+    .prepare(
+      `
+        select bm25_score as bm25Score
+        from article_rank_scores
+        where article_id = ?
+          and rank_context = 'rec_v2:embedding:cocoon_5:schema_2'
+      `
+    )
+    .get(articleId) as { bm25Score: number | null } | undefined;
+
+  return row?.bm25Score ?? null;
+}
+
+function bm25ScoreForContext(
+  db: DibaoDatabase,
+  articleId: string,
+  rankContext: string
+): number | null {
+  const row = db
+    .prepare(
+      `
+        select bm25_score as bm25Score
+        from article_rank_scores
+        where article_id = ?
+          and rank_context = ?
+      `
+    )
+    .get(articleId, rankContext) as { bm25Score: number | null } | undefined;
+
+  return row?.bm25Score ?? null;
+}
+
+function createMaintenanceService(db: DibaoDatabase, now: number): RecommendationMaintenanceService {
+  const jobs = new SqliteJobRepository(db);
+  const rankingJobs = new RankingRecalculateJobService({
+    jobs,
+    ranking: new RecommendationRankingService({
+      db,
+      embeddings: new SqliteEmbeddingRepository(db),
+      profiles: new SqliteProfileRepository(db),
+      rankings: new SqliteRankingRepository(db),
+      now: () => now
+    }),
+    now: () => now
+  });
+  return new RecommendationMaintenanceService({
+    db,
+    jobs,
+    rankingJobs,
+    now: () => now
+  });
+}
+
+function maintenanceJob(type: Parameters<RecommendationMaintenanceService["handleJob"]>[0]["type"]): Parameters<RecommendationMaintenanceService["handleJob"]>[0] {
+  return {
+    id: `job_${type}`,
+    type,
+    status: "running",
+    payloadJson: null,
+    error: null,
+    attempts: 1,
+    maxAttempts: 1,
+    runAfter: 0,
+    startedAt: null,
+    finishedAt: null,
+    createdAt: 0,
+    updatedAt: 0
+  };
+}
+
+function countRows(db: DibaoDatabase, tableName: string): number {
+  const row = db.prepare(`select count(*) as count from ${tableName}`).get() as {
+    count: number;
+  };
+  return row.count;
 }
 
 function tempDatabasePath(): string {
