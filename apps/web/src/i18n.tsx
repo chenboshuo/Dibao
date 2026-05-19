@@ -389,7 +389,8 @@ export const zhCN = {
     statusTones: {
       normal: "正常",
       warning: "警告",
-      stopped: "停摆"
+      stopped: "停摆",
+      disabled: "未启用"
     },
     fields: {
       provider: "Provider",
@@ -1146,7 +1147,8 @@ export const enUS = {
     statusTones: {
       normal: "Normal",
       warning: "Warning",
-      stopped: "Stopped"
+      stopped: "Stopped",
+      disabled: "Disabled"
     },
     fields: {
       provider: "Provider",

@@ -406,11 +406,13 @@ export type RecommendationTransparency = RecommendationStatus & {
       evaluation: "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" | "strict_replay";
       duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active";
       evidence: "dynamic_fallback" | "reconstructed" | "live_evidence";
+      stalePendingEmbeddingJobs: number;
+      failedRankingJobs: number;
     };
     algorithmModules: Array<{
       id: string;
       name: string;
-      status: "normal" | "warning" | "stopped";
+      status: "normal" | "warning" | "stopped" | "disabled";
       summary: string;
     }>;
     failureStates: Record<string, boolean>;
@@ -487,8 +489,8 @@ export const defaultAppSettings: AppSettings = {
     preferSource: 0.5,
     preferDiversity: 0.5,
     cocoonLevel: 5,
-    localLearningEnabled: false,
-    localLearningShadowMode: true,
+    localLearningEnabled: true,
+    localLearningShadowMode: false,
     explorationEnabled: true,
     evaluationEnabled: false
   }

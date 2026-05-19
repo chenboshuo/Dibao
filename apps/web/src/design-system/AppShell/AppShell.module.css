@@ -590,6 +590,10 @@
   border-left-color: var(--color-vermilion);
 }
 
+.algorithmStatusCard[data-status="disabled"] {
+  border-left-color: var(--color-faint);
+}
+
 .algorithmStatusCard strong,
 .algorithmExplanationList strong {
   color: var(--color-ink);
@@ -606,7 +610,8 @@
 
 .algorithmStatusNormal,
 .algorithmStatusWarning,
-.algorithmStatusStopped {
+.algorithmStatusStopped,
+.algorithmStatusDisabled {
   width: fit-content;
   border: var(--border-subtle);
   padding: 2px var(--space-2);
@@ -630,6 +635,12 @@
   border-color: var(--color-vermilion);
   background: var(--color-vermilion-soft);
   color: var(--color-vermilion);
+}
+
+.algorithmStatusDisabled {
+  border-color: var(--color-faint);
+  background: var(--color-surface-subtle);
+  color: var(--color-muted);
 }
 
 .algorithmClusterGrid {

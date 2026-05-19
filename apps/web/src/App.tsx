@@ -4745,7 +4745,9 @@ function recommendationStatusMetrics(
   ];
 }
 
-function algorithmStatusClassName(status: "normal" | "warning" | "stopped"): string {
+function algorithmStatusClassName(
+  status: "normal" | "warning" | "stopped" | "disabled"
+): string {
   switch (status) {
     case "normal":
       return styles.algorithmStatusNormal;
@@ -4753,6 +4755,8 @@ function algorithmStatusClassName(status: "normal" | "warning" | "stopped"): str
       return styles.algorithmStatusWarning;
     case "stopped":
       return styles.algorithmStatusStopped;
+    case "disabled":
+      return styles.algorithmStatusDisabled;
   }
 }
 

@@ -82,8 +82,8 @@ const DEFAULT_RANKING_SETTINGS = {
   preferSource: 0.5,
   preferDiversity: 0.5,
   cocoonLevel: 5,
-  localLearningEnabled: false,
-  localLearningShadowMode: true,
+  localLearningEnabled: true,
+  localLearningShadowMode: false,
   explorationEnabled: true,
   evaluationEnabled: false
 } as const;

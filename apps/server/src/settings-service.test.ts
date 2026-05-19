@@ -82,6 +82,10 @@ describe("settings service", () => {
       retention: {
         keepFavorites: true,
         keepReadLater: true
+      },
+      ranking: {
+        localLearningEnabled: true,
+        localLearningShadowMode: false
       }
     });
 

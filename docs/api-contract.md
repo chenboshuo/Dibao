@@ -1058,8 +1058,8 @@ cursor
         "preferSource": 0.5,
         "preferDiversity": 0.5,
         "cocoonLevel": 7,
-        "localLearningEnabled": false,
-        "localLearningShadowMode": true,
+        "localLearningEnabled": true,
+        "localLearningShadowMode": false,
         "explorationEnabled": true,
         "evaluationEnabled": false
       }
@@ -1556,13 +1556,21 @@ PROFILE_WARMUP
       evaluation: "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" | "strict_replay"
       duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active"
       evidence: "dynamic_fallback" | "reconstructed" | "live_evidence"
+      stalePendingEmbeddingJobs: number
+      failedRankingJobs: number
     }
+    algorithmModules: Array<{
+      id: string
+      name: string
+      status: "normal" | "warning" | "stopped" | "disabled"
+      summary: string
+    }>
     failureStates: Record<string, boolean>
   }
 }
 ```
 
-透明页必须能解释 fallback/running/failed 状态，而不是只展示正常态。
+透明页必须能解释 fallback/running/failed/disabled 状态，而不是只展示正常态。色卡语义为：绿色 `normal`，黄色 `warning`，红色 `stopped`，灰色 `disabled`。
 
 ### Recommendation Maintenance APIs
 

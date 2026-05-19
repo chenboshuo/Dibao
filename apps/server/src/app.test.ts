@@ -523,7 +523,7 @@ describe("server API vertical slice", () => {
             moduleStatus: {
               bm25ProfileTerms: "not_active",
               recentIntent: "missing",
-              ftrl: "disabled",
+              ftrl: "shadow_no_samples",
               evaluation: "unavailable",
               duplicate: "not_built",
               evidence: "dynamic_fallback"
@@ -536,6 +536,10 @@ describe("server API vertical slice", () => {
               expect.objectContaining({
                 id: "embedding_index",
                 status: "stopped"
+              }),
+              expect.objectContaining({
+                id: "local_learning",
+                status: "disabled"
               })
             ]),
             failureStates: {
@@ -1462,6 +1466,28 @@ describe("server API vertical slice", () => {
       expect(status.body).not.toContain("hasApiKey");
       expect(status.body).not.toContain("vectorBlob");
       expect(status.body).not.toContain("tableName");
+
+      const transparency = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency"
+      });
+      expect(transparency.statusCode, transparency.body).toBe(200);
+      expect(transparency.json()).toMatchObject({
+        data: {
+          transparency: {
+            algorithmModules: expect.arrayContaining([
+              expect.objectContaining({
+                id: "coverage_backfill",
+                status: "stopped"
+              }),
+              expect.objectContaining({
+                id: "semantic_ranking",
+                status: "warning"
+              })
+            ])
+          }
+        }
+      });
     } finally {
       await app.close();
       db.close();
@@ -1803,8 +1829,8 @@ describe("server API vertical slice", () => {
             preferSource: 0.5,
             preferDiversity: 0.5,
             cocoonLevel: 5,
-            localLearningEnabled: false,
-            localLearningShadowMode: true,
+            localLearningEnabled: true,
+            localLearningShadowMode: false,
             explorationEnabled: true,
             evaluationEnabled: false
           }
@@ -2128,7 +2154,7 @@ describe("server API vertical slice", () => {
 
       const shadowModeChanged = await injectJson(app, "PATCH", "/api/settings", {
         ranking: {
-          localLearningShadowMode: false
+          localLearningShadowMode: true
         }
       });
       expect(shadowModeChanged.statusCode, shadowModeChanged.body).toBe(200);

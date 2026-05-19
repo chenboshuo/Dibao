@@ -8,6 +8,7 @@ import Fastify, {
 } from "fastify";
 import {
   ARTICLE_ACTION_EVENT_WEIGHTS,
+  BASE_RANK_CONTEXT,
   getSqliteVecVersion,
   openDatabase,
   SqliteAppSettingsRepository,
@@ -1385,7 +1386,9 @@ function getRecommendationTransparency(options: {
           ? "provider_or_embedding_job_failure"
           : null;
 
-  const moduleStatus = recommendationModuleStatus(options.db, status.algorithm);
+  const moduleStatus = recommendationModuleStatus(options.db, status.algorithm, {
+    activeIndexId: status.activeIndex?.id ?? null
+  });
 
   return {
     ...status,
@@ -1412,8 +1415,13 @@ function getRecommendationTransparency(options: {
       failureStates: {
         migrationNotCompleted: false,
         backfillRunning: status.coverage.pendingJobs > 0,
-        rankContextMissing: status.rankedArticles.active === 0,
-        embeddingCoverageLow: status.coverage.coverageRatio < 0.8,
+        rankContextMissing:
+          status.activeRankContext !== BASE_RANK_CONTEXT && status.rankedArticles.active === 0,
+        embeddingCoverageLow: status.coverage.coverageRatio < STOPPED_COVERAGE_THRESHOLD,
+        stalePendingEmbeddingJobs: moduleStatus.stalePendingEmbeddingJobs > 0,
+        rankingJobFailedWithoutFallback:
+          moduleStatus.failedRankingJobs > 0 &&
+          status.rankedArticles.base + status.rankedArticles.active === 0,
         bm25ProfileTermsActive: moduleStatus.bm25ProfileTerms === "active",
         recentIntentMissing: moduleStatus.recentIntent !== "active",
         ftrlTrained: moduleStatus.ftrl === "shadow_trained" || moduleStatus.ftrl === "active",
@@ -1421,11 +1429,16 @@ function getRecommendationTransparency(options: {
         evidenceUsingDynamicFallback: moduleStatus.evidence === "dynamic_fallback",
         ftrlShadowMode: status.algorithm.localLearning.shadowMode,
         evaluationUnavailable: !status.algorithm.evaluation.enabled,
-        recommendationUsingFallback: status.mode !== "personalized"
+        recommendationUsingFallback: status.mode === "baseline" || status.mode === "degraded"
       }
     }
   };
 }
+
+type RecommendationAlgorithmModuleTone = "normal" | "warning" | "stopped" | "disabled";
+
+const STOPPED_COVERAGE_THRESHOLD = 0.95;
+const STALE_PENDING_JOB_AGE_MS = 30 * 60 * 1000;
 
 function recommendationAlgorithmModules(
   status: ReturnType<typeof getRecommendationStatus>,
@@ -1433,9 +1446,15 @@ function recommendationAlgorithmModules(
 ): Array<{
   id: string;
   name: string;
-  status: "normal" | "warning" | "stopped";
+  status: RecommendationAlgorithmModuleTone;
   summary: string;
 }> {
+  const activeRankContextMissing =
+    status.activeRankContext !== BASE_RANK_CONTEXT && status.rankedArticles.active === 0;
+  const hasUsableRankingFallback = status.rankedArticles.base + status.rankedArticles.active > 0;
+  const recommendationUsingFallback =
+    status.mode === "baseline" || status.mode === "degraded";
+
   return [
     {
       id: "provider",
@@ -1467,12 +1486,27 @@ function recommendationAlgorithmModules(
       id: "coverage_backfill",
       name: "Coverage and backfill",
       status:
-        status.coverage.failedJobs > 0
+        status.coverage.coverageRatio < STOPPED_COVERAGE_THRESHOLD ||
+        moduleStatus.stalePendingEmbeddingJobs > 0
           ? "stopped"
-          : status.coverage.pendingJobs > 0 || status.coverage.coverageRatio < 0.8
+          : status.coverage.pendingJobs > 0 ||
+              status.coverage.coverageRatio < 1 ||
+              status.coverage.failedJobs > 0
             ? "warning"
             : "normal",
       summary: `${Math.round(status.coverage.coverageRatio * 100)}% coverage · ${status.coverage.pendingJobs} pending · ${status.coverage.failedJobs} failed`
+    },
+    {
+      id: "ranking_pipeline",
+      name: "Ranking pipeline",
+      status:
+        activeRankContextMissing ||
+        (moduleStatus.failedRankingJobs > 0 && !hasUsableRankingFallback)
+          ? "stopped"
+          : moduleStatus.failedRankingJobs > 0
+            ? "warning"
+            : "normal",
+      summary: `rank context ${status.activeRankContext}; active ${status.rankedArticles.active}; base fallback ${status.rankedArticles.base}; failed jobs ${moduleStatus.failedRankingJobs}.`
     },
     {
       id: "profile_clusters",
@@ -1488,11 +1522,31 @@ function recommendationAlgorithmModules(
     {
       id: "semantic_ranking",
       name: "Semantic ranking",
-      status: status.mode === "personalized" || status.mode === "embedding" ? "normal" : "warning",
+      status: recommendationUsingFallback
+        ? "stopped"
+        : status.mode === "embedding"
+          ? "warning"
+          : "normal",
       summary:
         status.mode === "baseline"
           ? "Using freshness, source, and state fallback."
+          : status.mode === "degraded"
+            ? "Provider or embedding failure is forcing a degraded recommendation path."
+            : status.mode === "embedding"
+              ? "Semantic ranking is available but still backfilling or partially covered."
           : "Combining semantic score with freshness, source, state, and penalties."
+    },
+    {
+      id: "bm25_profile_terms",
+      name: "BM25 and profile terms",
+      status: moduleStatus.bm25ProfileTerms === "active" ? "normal" : "warning",
+      summary: `BM25/profile terms: ${moduleStatus.bm25ProfileTerms}.`
+    },
+    {
+      id: "recent_intent",
+      name: "Recent intent",
+      status: moduleStatus.recentIntent === "active" ? "normal" : "warning",
+      summary: `Recent intent profile: ${moduleStatus.recentIntent}.`
     },
     {
       id: "negative_feedback",
@@ -1506,10 +1560,14 @@ function recommendationAlgorithmModules(
       status:
         moduleStatus.duplicate === "near_duplicate_active"
           ? "normal"
-          : moduleStatus.duplicate === "exact_scaffold"
-            ? "warning"
-            : "stopped",
+          : "warning",
       summary: `Duplicate module: ${moduleStatus.duplicate}; evidence: ${moduleStatus.evidence}.`
+    },
+    {
+      id: "explanation_evidence",
+      name: "Explanation evidence",
+      status: moduleStatus.evidence === "dynamic_fallback" ? "warning" : "normal",
+      summary: `Evidence source: ${moduleStatus.evidence}.`
     },
     {
       id: "mmr_diversity",
@@ -1521,22 +1579,23 @@ function recommendationAlgorithmModules(
       id: "local_learning",
       name: "Local learning",
       status:
-        moduleStatus.ftrl === "active"
+        moduleStatus.ftrl === "failed"
+          ? "stopped"
+          : moduleStatus.ftrl === "active" && !status.algorithm.localLearning.shadowMode
           ? "normal"
-          : status.algorithm.localLearning.enabled
-            ? "warning"
-            : "stopped",
+          : "disabled",
       summary: `FTRL: ${moduleStatus.ftrl}; shadow mode: ${status.algorithm.localLearning.shadowMode}.`
     },
     {
       id: "evaluation",
       name: "Evaluation replay",
       status:
-        moduleStatus.evaluation === "lightweight_replay_diagnostic"
+        moduleStatus.evaluation === "unavailable"
+          ? "disabled"
+          : moduleStatus.evaluation === "lightweight_replay_diagnostic" ||
+              moduleStatus.evaluation === "strict_replay"
           ? "normal"
-          : status.algorithm.evaluation.enabled
-            ? "warning"
-            : "stopped",
+          : "warning",
       summary: `Evaluation: ${moduleStatus.evaluation}.`
     }
   ];
@@ -1803,6 +1862,9 @@ function recommendationModuleStatus(
     localLearning: { enabled: boolean; shadowMode: boolean };
     exploration: { enabled: boolean };
     evaluation: { enabled: boolean };
+  },
+  diagnostics: {
+    activeIndexId: string | null;
   }
 ) {
   const profileTermCount = countIfTable(db, "profile_terms");
@@ -1841,6 +1903,29 @@ function recommendationModuleStatus(
     )
     .get() as { metricsJson: string | null } | undefined;
   const evalMode = evaluationModeFromMetrics(latestEval?.metricsJson ?? null);
+  const stalePendingEmbeddingJobs = diagnostics.activeIndexId
+    ? scalarCount(
+        db,
+        `
+          select count(*) as count
+          from jobs
+          where type = 'embedding_generate'
+            and status in ('queued', 'running')
+            and created_at < ?
+            and payload_json like ?
+        `,
+        [Date.now() - STALE_PENDING_JOB_AGE_MS, `%${diagnostics.activeIndexId}%`]
+      )
+    : 0;
+  const failedRankingJobs = scalarCount(
+    db,
+    `
+      select count(*) as count
+      from jobs
+      where type = 'ranking_recalculate'
+        and status = 'failed'
+    `
+  );
 
   return {
     bm25ProfileTerms: profileTermCount > 0 ? "active" : "not_active",
@@ -1861,13 +1946,15 @@ function recommendationModuleStatus(
       : "disabled",
     evaluation: !algorithm.evaluation.enabled ? "unavailable" : evalMode,
     duplicate: nearDuplicateActive ? "near_duplicate_active" : duplicateBuilt ? "exact_scaffold" : "not_built",
-    evidence: evidenceRows > 0 ? "live_evidence" : "dynamic_fallback"
+    evidence: evidenceRows > 0 ? "live_evidence" : "dynamic_fallback",
+    stalePendingEmbeddingJobs,
+    failedRankingJobs
   };
 }
 
 function evaluationModeFromMetrics(
   metricsJson: string | null
-): "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" {
+): "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" | "strict_replay" {
   if (!metricsJson) {
     return "unavailable";
   }
@@ -1876,6 +1963,9 @@ function evaluationModeFromMetrics(
       evaluationMode?: unknown;
       diagnosticOnly?: unknown;
     };
+    if (metrics.evaluationMode === "strict_replay") {
+      return "strict_replay";
+    }
     return metrics.evaluationMode === "lightweight_replay_diagnostic" || metrics.diagnosticOnly === true
       ? "lightweight_replay_diagnostic"
       : "diagnostic_only";
@@ -1894,8 +1984,8 @@ function countIfTable(db: DibaoDatabase, tableName: string): number {
   return scalarCount(db, `select count(*) as count from ${tableName}`);
 }
 
-function scalarCount(db: DibaoDatabase, sql: string): number {
-  const row = db.prepare(sql).get() as { count: number } | undefined;
+function scalarCount(db: DibaoDatabase, sql: string, params: unknown[] = []): number {
+  const row = db.prepare(sql).get(...params) as { count: number } | undefined;
   return row?.count ?? 0;
 }
 

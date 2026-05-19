@@ -944,8 +944,8 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     return (
       this.options.getRankingSettings?.() ?? {
         cocoonLevel: 5,
-        localLearningEnabled: false,
-        localLearningShadowMode: true,
+        localLearningEnabled: true,
+        localLearningShadowMode: false,
         explorationEnabled: true,
         evaluationEnabled: false
       }
