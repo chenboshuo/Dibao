@@ -308,9 +308,43 @@ export type EmbeddingIndex = {
   failedJobs: number;
   lastFailedAt?: string | null;
   lastError?: string | null;
+  usage: {
+    windows: Record<
+      "24h" | "7d" | "30d",
+      {
+        requestCount: number;
+        itemCount: number;
+        estimatedTokens: number;
+      }
+    >;
+  };
   createdAt: string;
   updatedAt: string;
 };
+
+export type RecommendationMaintenanceTask =
+  | "ranking_recalculate"
+  | "fingerprint_backfill"
+  | "duplicate_rebuild"
+  | "keyword_rebuild"
+  | "recent_intent_rebuild"
+  | "evaluation"
+  | "ftrl_train"
+  | "ftrl_reset"
+  | "ftrl_promote";
+
+export type RecommendationMaintenanceTaskResponse =
+  | {
+      jobId: string;
+      existing: boolean;
+    }
+  | {
+      ok: true;
+      modelVersionId?: string;
+      sampleCount?: number;
+      highQualitySampleCount?: number;
+      blendAlpha?: number;
+    };
 
 export type RebuildEmbeddingIndexResponse = {
   jobId: string;
@@ -468,6 +502,12 @@ export type RecommendationClusterItem = {
   };
   lastMatchedAt: string | null;
   updatedAt: string;
+};
+
+export type RecommendationClusterListResponse = {
+  activeIndex: RecommendationStatus["activeIndex"];
+  total: number;
+  items: RecommendationClusterItem[];
 };
 
 export type AuthOkResponse = {
@@ -741,6 +781,32 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getRecommendationTransparency(): Promise<RecommendationTransparency> {
       return (await request<RecommendationTransparency>("/api/recommendation/transparency")).data;
+    },
+
+    async listRecommendationClusters(
+      limit: "all" | number = "all"
+    ): Promise<RecommendationClusterListResponse> {
+      const params = new URLSearchParams({
+        limit: String(limit)
+      });
+      return (
+        await request<RecommendationClusterListResponse>(
+          `/api/recommendation/clusters?${params.toString()}`
+        )
+      ).data;
+    },
+
+    async runRecommendationMaintenanceTask(
+      task: RecommendationMaintenanceTask
+    ): Promise<RecommendationMaintenanceTaskResponse> {
+      return (
+        await request<RecommendationMaintenanceTaskResponse>(
+          `/api/recommendation/maintenance/${encodeURIComponent(task)}`,
+          {
+            method: "POST"
+          }
+        )
+      ).data;
     },
 
     async rebuildEmbeddingIndex(indexId: string): Promise<RebuildEmbeddingIndexResponse> {

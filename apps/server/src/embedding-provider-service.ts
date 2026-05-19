@@ -47,6 +47,7 @@ export type EmbeddingIndexResponse = {
   failedJobs: number;
   lastFailedAt: string | null;
   lastError: string | null;
+  usage: EmbeddingIndexListRow["usage"];
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -587,6 +588,7 @@ function mapIndex(index: EmbeddingIndexListRow): EmbeddingIndexResponse {
     failedJobs: index.failedJobs,
     lastFailedAt: timestampToIso(index.lastFailedAt),
     lastError: sanitizePublicError(index.lastError),
+    usage: index.usage,
     createdAt: timestampToIso(index.createdAt ?? null),
     updatedAt: timestampToIso(index.updatedAt ?? null)
   };

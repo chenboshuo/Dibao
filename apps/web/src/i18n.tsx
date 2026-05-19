@@ -262,6 +262,14 @@ export const zhCN = {
         connectionStatusTitle: "连接测试状态",
         embeddingJobStatusTitle: "Embedding job 状态",
         indexesBody: "Index 展示 coverage、队列和最近失败；连接测试与 embedding job 状态分开判断。",
+        usageWindowLabel: "Embedding 用量窗口",
+        usageWindows: {
+          "24h": "24H",
+          "7d": "7Days",
+          "30d": "30Days"
+        },
+        usage: (requestCount: number, estimatedTokens: number) =>
+          `本地估算用量：${requestCount} 次请求 · ${estimatedTokens} tokens`,
         noIndexes: "保存并启用 provider 后会创建 active index。",
         indexStatus: (model: string, status: string, count: number) =>
           `${model} · ${status} · ${count} 条 embedding`,
@@ -379,6 +387,7 @@ export const zhCN = {
     sections: {
       currentStatus: "当前推荐状态",
       currentClusters: "当前兴趣簇",
+      maintenance: "算法状态维护",
       algorithmExplanation: "算法解释",
       terms: "先解释几个词",
       scoreTable: "行为积分表",
@@ -429,7 +438,70 @@ export const zhCN = {
         high: "过拟合风险高"
       },
       matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
-        `命中「${name}」，相似度 ${similarity}，簇权重 ${weight}，样本 ${sampleCount}。`
+        `命中「${name}」，相似度 ${similarity}，簇权重 ${weight}，样本 ${sampleCount}。`,
+      openAll: "查看全部兴趣簇",
+      allTitle: "全部兴趣簇",
+      allSummary: (count: number) => `完整显示 ${count} 个兴趣簇，按权重从高到低排序。`,
+      back: "返回算法透明说明"
+    },
+    maintenance: {
+      body:
+        "这些任务只维护本地推荐状态。会请求 provider 的任务已单独标注；不确定时优先运行重算排序或近期意图重建。",
+      run: "手动触发",
+      running: "加入中",
+      remoteUse: "外部请求",
+      lastState: "最近状态",
+      neverRun: "暂无记录",
+      skipped: "跳过",
+      notice: (label: string, existing: boolean) =>
+        existing ? `${label} 已有任务在队列中。` : `${label} 已加入维护队列。`,
+      tasks: {
+        ranking_recalculate: {
+          label: "重算排序",
+          description: "重新计算推荐、稍后读等列表的本地排序分，不重新请求 embedding。",
+          remoteUse: "不会调用 provider"
+        },
+        fingerprint_backfill: {
+          label: "补齐文章指纹",
+          description: "为缺少指纹的文章补齐标题/摘要指纹，供重复检测使用。",
+          remoteUse: "不会调用 provider"
+        },
+        duplicate_rebuild: {
+          label: "重建重复检测",
+          description: "根据文章指纹重建重复组，减少相同主题或近重复文章挤占列表。",
+          remoteUse: "不会调用 provider"
+        },
+        keyword_rebuild: {
+          label: "重建关键词画像",
+          description: "从本地行为和文章文本重建关键词画像，文章已清理时尽量使用快照。",
+          remoteUse: "不会调用 provider"
+        },
+        recent_intent_rebuild: {
+          label: "重建近期意图",
+          description: "根据最近阅读行为刷新短期兴趣，用于近期推荐微调。",
+          remoteUse: "不会调用 provider"
+        },
+        ftrl_train: {
+          label: "训练本地排序模型",
+          description: "用本地行为样本训练轻量排序模型，默认不自动提升为 active。",
+          remoteUse: "不会调用 provider"
+        },
+        evaluation: {
+          label: "运行排序评估",
+          description: "用本地回放样本生成诊断指标，帮助判断推荐链路是否健康。",
+          remoteUse: "不会调用 provider"
+        },
+        ftrl_promote: {
+          label: "提升本地模型",
+          description: "当样本质量足够时，把 shadow 模型以受限权重加入 active 排序。",
+          remoteUse: "不会调用 provider"
+        },
+        ftrl_reset: {
+          label: "重置本地模型",
+          description: "清空 FTRL 训练权重和样本，仅用于模型状态明显异常时。",
+          remoteUse: "不会调用 provider"
+        }
+      }
     },
     terms: [
       {
@@ -1021,6 +1093,14 @@ export const enUS = {
         connectionStatusTitle: "Connection test status",
         embeddingJobStatusTitle: "Embedding job status",
         indexesBody: "Indexes show coverage, queue state, and recent failures. Connection tests and embedding jobs are reported separately.",
+        usageWindowLabel: "Embedding usage window",
+        usageWindows: {
+          "24h": "24H",
+          "7d": "7Days",
+          "30d": "30Days"
+        },
+        usage: (requestCount: number, estimatedTokens: number) =>
+          `Local estimate: ${requestCount} requests · ${estimatedTokens} tokens`,
         noIndexes: "Saving and enabling a provider creates an active index.",
         indexStatus: (model: string, status: string, count: number) =>
           `${model} · ${status} · ${count} ${count === 1 ? "embedding" : "embeddings"}`,
@@ -1138,6 +1218,7 @@ export const enUS = {
     sections: {
       currentStatus: "Current recommendation status",
       currentClusters: "Current interest clusters",
+      maintenance: "Algorithm maintenance",
       algorithmExplanation: "Algorithm explanation",
       terms: "Terms",
       scoreTable: "Behavior score table",
@@ -1188,7 +1269,70 @@ export const enUS = {
         high: "High overfit risk"
       },
       matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
-        `Matched "${name}" with similarity ${similarity}, cluster weight ${weight}, samples ${sampleCount}.`
+        `Matched "${name}" with similarity ${similarity}, cluster weight ${weight}, samples ${sampleCount}.`,
+      openAll: "View all interest clusters",
+      allTitle: "All interest clusters",
+      allSummary: (count: number) => `Showing all ${count} interest clusters, sorted by weight.`,
+      back: "Back to transparency"
+    },
+    maintenance: {
+      body:
+        "These tasks maintain local recommendation state. Tasks that might call the provider are called out separately; when unsure, start with ranking recalculation or recent intent rebuild.",
+      run: "Run",
+      running: "Queueing",
+      remoteUse: "Remote use",
+      lastState: "Last state",
+      neverRun: "No record",
+      skipped: "Skipped",
+      notice: (label: string, existing: boolean) =>
+        existing ? `${label} already has an open job.` : `${label} was queued.`,
+      tasks: {
+        ranking_recalculate: {
+          label: "Recalculate ranking",
+          description: "Recomputes local ranking scores for recommendation and read-later lists without requesting embeddings.",
+          remoteUse: "Does not call provider"
+        },
+        fingerprint_backfill: {
+          label: "Backfill fingerprints",
+          description: "Adds missing title and summary fingerprints used by duplicate detection.",
+          remoteUse: "Does not call provider"
+        },
+        duplicate_rebuild: {
+          label: "Rebuild duplicates",
+          description: "Rebuilds duplicate groups from article fingerprints to reduce repeated topics.",
+          remoteUse: "Does not call provider"
+        },
+        keyword_rebuild: {
+          label: "Rebuild keyword profile",
+          description: "Rebuilds the keyword profile from local behavior and article text, using snapshots when articles were cleaned up.",
+          remoteUse: "Does not call provider"
+        },
+        recent_intent_rebuild: {
+          label: "Rebuild recent intent",
+          description: "Refreshes short-term interests from recent reading behavior.",
+          remoteUse: "Does not call provider"
+        },
+        ftrl_train: {
+          label: "Train local ranker",
+          description: "Trains the lightweight local ranking model from behavior samples without automatically promoting it.",
+          remoteUse: "Does not call provider"
+        },
+        evaluation: {
+          label: "Run ranking evaluation",
+          description: "Runs local replay diagnostics to check whether the recommendation chain is healthy.",
+          remoteUse: "Does not call provider"
+        },
+        ftrl_promote: {
+          label: "Promote local model",
+          description: "Adds the shadow model to active ranking with capped weight when sample quality is sufficient.",
+          remoteUse: "Does not call provider"
+        },
+        ftrl_reset: {
+          label: "Reset local model",
+          description: "Clears FTRL weights and samples; use only when model state is clearly wrong.",
+          remoteUse: "Does not call provider"
+        }
+      }
     },
     terms: [
       {

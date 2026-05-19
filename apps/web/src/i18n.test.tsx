@@ -644,6 +644,9 @@ describe("web i18n", () => {
           error={null}
           isLoading={false}
           onBack={() => undefined}
+          onOpenAllClusters={() => undefined}
+          onRunMaintenanceTask={() => Promise.resolve()}
+          runningMaintenanceTask={null}
           status={{
             mode: "personalized",
             activeProvider: {
@@ -889,6 +892,13 @@ onDeleteEmbeddingProvider={() => Promise.resolve()}
               failedJobs: 1,
               lastFailedAt: "2026-05-14T08:10:00.000Z",
               lastError: "Provider request failed",
+              usage: {
+                windows: {
+                  "24h": { requestCount: 3, itemCount: 6, estimatedTokens: 1200 },
+                  "7d": { requestCount: 3, itemCount: 6, estimatedTokens: 1200 },
+                  "30d": { requestCount: 3, itemCount: 6, estimatedTokens: 1200 }
+                }
+              },
               createdAt: "2026-05-14T08:00:00.000Z",
               updatedAt: "2026-05-14T08:00:00.000Z"
             }

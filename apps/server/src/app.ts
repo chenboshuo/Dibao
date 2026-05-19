@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +201,14 @@ type EmbeddingIndexParams = {
   id: string;
 };
 
+type RecommendationMaintenanceParams = {
+  task: string;
+};
+
+type RecommendationClusterQuery = {
+  limit?: string;
+};
+
 type CursorPayload = {
   offset: number;
 };
@@ -291,6 +300,32 @@ export function buildServer(options: BuildServerOptions = {}) {
     providerService: embeddingProviderService,
     profile: profileService,
     rankingJobs: rankingJobService,
+    recordUsage: (input) => {
+      db.prepare(
+        `
+          insert into embedding_usage_events (
+            id,
+            provider_id,
+            embedding_index_id,
+            model,
+            source,
+            request_count,
+            item_count,
+            estimated_tokens,
+            created_at
+          )
+          values (?, ?, ?, ?, 'job', 1, ?, ?, ?)
+        `
+      ).run(
+        `usage_${randomBytes(10).toString("hex")}`,
+        input.providerId,
+        input.embeddingIndexId,
+        input.model,
+        input.itemCount,
+        input.estimatedTokens,
+        input.now
+      );
+    },
     vectorStore,
     now: options.now
   });
@@ -701,6 +736,37 @@ export function buildServer(options: BuildServerOptions = {}) {
       maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates()
     })
   }));
+
+  app.get<{ Querystring: RecommendationClusterQuery }>(
+    "/api/recommendation/clusters",
+    async (request) => ({
+      data: getRecommendationClusters({
+        db,
+        embeddings,
+        profiles,
+        rankings,
+        rankingService,
+        settings: settingsService.getSettings().ranking,
+        limit: request.query.limit === "all" ? null : parsePositiveInteger(request.query.limit, 12)
+      })
+    })
+  );
+
+  app.post<{ Params: RecommendationMaintenanceParams }>(
+    "/api/recommendation/maintenance/:task",
+    async (request, reply) => {
+      try {
+        return {
+          data: enqueueRecommendationMaintenanceTask(
+            recommendationMaintenanceService,
+            request.params.task
+          )
+        };
+      } catch (error) {
+        return sendRecommendationMaintenanceError(reply, error);
+      }
+    }
+  );
 
   app.post("/api/recommendation/recalculate", async () => ({
     data: recommendationMaintenanceService.enqueueRecalculate()
@@ -1391,7 +1457,7 @@ function getRecommendationStatus(options: {
     .listClusters({
       ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
     })
-    .slice(0, 64)
+    .slice(0, 12)
     .map((cluster, index) => mapRecommendationCluster(cluster, index + 1, clusterEvidence));
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
@@ -1443,6 +1509,74 @@ function getRecommendationStatus(options: {
     lastRankingUpdate: timestampToIso(lastRankingUpdate),
     warnings
   };
+}
+
+function getRecommendationClusters(
+  options: Parameters<typeof getRecommendationStatus>[0] & { limit: number | null }
+) {
+  const activeProvider = options.embeddings.findActiveProvider();
+  const indexes = options.embeddings.listIndexes();
+  const activeIndex = activeProvider ? activeDiagnosticIndexFor(activeProvider.id, indexes) : null;
+  const clusterEvidence = activeIndex
+    ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 5000 })
+    : [];
+  const clusters = options.profiles.listClusters({
+    ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
+  });
+  const limitedClusters = options.limit === null ? clusters : clusters.slice(0, options.limit);
+
+  return {
+    activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
+    total: clusters.length,
+    items: limitedClusters.map((cluster, index) =>
+      mapRecommendationCluster(cluster, index + 1, clusterEvidence)
+    )
+  };
+}
+
+function enqueueRecommendationMaintenanceTask(
+  service: RecommendationMaintenanceService,
+  task: string
+) {
+  switch (task) {
+    case "ranking_recalculate":
+      return service.enqueueRecalculate();
+    case "fingerprint_backfill":
+      return service.enqueueFingerprintBackfill();
+    case "duplicate_rebuild":
+      return service.enqueueDuplicateRebuild();
+    case "keyword_rebuild":
+      return service.enqueueKeywordRebuild();
+    case "recent_intent_rebuild":
+      return service.enqueueRecentIntentRebuild();
+    case "evaluation":
+      return service.enqueueEvaluation();
+    case "ftrl_train":
+      return service.enqueueFtrlTrain();
+    case "ftrl_reset":
+      return service.resetFtrl();
+    case "ftrl_promote":
+      return service.promoteFtrl();
+    default:
+      throw new RecommendationMaintenanceServiceError(
+        400,
+        "INVALID_MAINTENANCE_TASK",
+        "Unknown recommendation maintenance task"
+      );
+  }
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5000) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function getRecommendationTransparency(options: {

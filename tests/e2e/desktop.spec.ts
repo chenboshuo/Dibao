@@ -29,7 +29,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "推荐能力" })).toBeVisible();
     await page.getByRole("button", { name: "暂不配置，继续" }).click();
 
-    await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /E2E Article Beta/ })).toBeVisible();
 
     await page.getByRole("button", { name: "退出" }).click();
     await expect(page.getByRole("heading", { name: "登录邸报" })).toBeVisible();
@@ -39,7 +39,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "推荐文章" })).toBeVisible();
     await page.getByRole("link", { name: "最新" }).click();
     await expect(page.getByRole("heading", { name: "最新文章" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /E2E Article Beta/ })).toBeVisible();
     await page.getByRole("button", { name: "只看未读" }).click();
     await page.getByTestId("article-list-scroll-container").evaluate((element) => {
       element.scrollTop = 900;
@@ -48,9 +48,9 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect
       .poll(() => latestBehaviorEvent("E2E Article Beta", "impression") !== null)
       .toBe(true);
-    await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
-    await page.getByRole("button", { name: /E2E Article Beta/ }).click();
-    await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /E2E Article Beta/ })).toBeVisible();
+    await page.getByRole("link", { name: /E2E Article Beta/ }).click();
+    await expect(page.getByRole("link", { name: /E2E Article Beta/ })).toBeVisible();
     await expect(page.getByRole("heading", { name: "E2E Article Beta" })).toBeVisible();
     await expect(page.getByText("当前视图正按照发布时间排序")).toBeVisible();
     await expect(readerExplainButtons(page)).toHaveCount(0);
@@ -118,8 +118,8 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByText("基础排序中")).toBeVisible();
     await expect(page.getByText(/行为 \d+/)).toBeVisible();
     await expect(page.getByText(/Coverage \d+%/)).toBeVisible();
-    await expect(page.getByRole("button", { name: /E2E Article Alpha/ })).toBeVisible();
-    await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
+    await expect(page.getByRole("link", { name: /E2E Article Alpha/ })).toBeVisible();
+    await page.getByRole("link", { name: /E2E Article Alpha/ }).click();
     await expect(page.getByRole("button", { name: "查看完整理由" })).toBeVisible();
     await page.getByRole("button", { name: "查看完整理由" }).click();
     await expect(page.getByRole("heading", { name: "为什么推荐" })).toBeVisible();

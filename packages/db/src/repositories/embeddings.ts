@@ -3,9 +3,11 @@ import type {
   EmbeddingIndexInput,
   EmbeddingIndexListRow,
   EmbeddingIndexRow,
+  EmbeddingIndexUsage,
   EmbeddingProviderInput,
   EmbeddingProviderRow,
   EmbeddingProviderTestResultInput,
+  EmbeddingUsageWindow,
   UpdateEmbeddingProviderInput
 } from "../types.js";
 import { safeVecTableName } from "../vector/sqlite-vec-vector-store.js";
@@ -458,7 +460,8 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
         .all() as EmbeddingIndexListRow[]
     ).map((row) => ({
       ...row,
-      coverageRatio: coverageRatio(row.coveredArticleCount, row.candidateCount)
+      coverageRatio: coverageRatio(row.coveredArticleCount, row.candidateCount),
+      usage: usageForIndex(this.db, row.id)
     }));
   }
 
@@ -545,6 +548,43 @@ function mapProvider(row: EmbeddingProviderDbRow): EmbeddingProviderRow {
 
 function coverageRatio(coveredArticleCount: number, candidateCount: number): number {
   return candidateCount === 0 ? 0 : Math.min(1, coveredArticleCount / candidateCount);
+}
+
+function usageForIndex(db: DibaoDatabase, embeddingIndexId: string): EmbeddingIndexUsage {
+  const now = Date.now();
+  return {
+    windows: {
+      "24h": usageWindowForIndex(db, embeddingIndexId, now - 24 * 60 * 60 * 1000),
+      "7d": usageWindowForIndex(db, embeddingIndexId, now - 7 * 24 * 60 * 60 * 1000),
+      "30d": usageWindowForIndex(db, embeddingIndexId, now - 30 * 24 * 60 * 60 * 1000)
+    }
+  };
+}
+
+function usageWindowForIndex(
+  db: DibaoDatabase,
+  embeddingIndexId: string,
+  since: number
+): EmbeddingUsageWindow {
+  const row = db
+    .prepare(
+      `
+        select
+          coalesce(sum(request_count), 0) as requestCount,
+          coalesce(sum(item_count), 0) as itemCount,
+          coalesce(sum(estimated_tokens), 0) as estimatedTokens
+        from embedding_usage_events
+        where embedding_index_id = ?
+          and created_at >= ?
+      `
+    )
+    .get(embeddingIndexId, since) as EmbeddingUsageWindow | undefined;
+
+  return {
+    requestCount: row?.requestCount ?? 0,
+    itemCount: row?.itemCount ?? 0,
+    estimatedTokens: row?.estimatedTokens ?? 0
+  };
 }
 
 function baseIndexSelect(): string {

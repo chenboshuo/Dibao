@@ -413,6 +413,20 @@ export type InterestClusterEvidenceRow = {
   createdAt: number;
 };
 
+export type EmbeddingUsageWindow = {
+  requestCount: number;
+  itemCount: number;
+  estimatedTokens: number;
+};
+
+export type EmbeddingIndexUsage = {
+  windows: {
+    "24h": EmbeddingUsageWindow;
+    "7d": EmbeddingUsageWindow;
+    "30d": EmbeddingUsageWindow;
+  };
+};
+
 export type RankContextRow = {
   id: string;
   algorithmVersion: string;
@@ -686,6 +700,7 @@ export type EmbeddingIndexListRow = EmbeddingIndexRow & {
   failedJobs: number;
   lastFailedAt: number | null;
   lastError: string | null;
+  usage: EmbeddingIndexUsage;
 };
 
 export type ArticleVectorInput = {

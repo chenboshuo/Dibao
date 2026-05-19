@@ -275,34 +275,30 @@ export class SqliteProfileRepository implements ProfileRepository {
           select
             ice.id,
             ice.cluster_id as clusterId,
-            a.id as articleId,
-            a.feed_id as feedId,
-            f.title as feedTitle,
+            ice.article_id as articleId,
+            coalesce(a.feed_id, ice.feed_id_snapshot, '') as feedId,
+            coalesce(f.title, ice.feed_title_snapshot, '') as feedTitle,
             ice.behavior_event_id as behaviorEventId,
             ice.evidence_source as evidenceSource,
             ice.confidence,
             ice.similarity,
             ice.weight_delta as weightDelta,
-            coalesce(be.event_type, 'read_complete') as eventType,
+            coalesce(be.event_type, ice.event_type_snapshot, 'read_complete') as eventType,
             be.metadata_json as metadataJson,
-            coalesce(s.reading_progress, 0) as readingProgress,
-            a.title,
-            ae.vector_blob as vectorBlob,
+            coalesce(s.reading_progress, ice.reading_progress_snapshot, 0) as readingProgress,
+            coalesce(a.title, ice.article_title_snapshot, ice.article_id) as title,
+            coalesce(ae.vector_blob, ice.vector_blob_snapshot) as vectorBlob,
             ice.created_at as createdAt
           from interest_cluster_evidence ice
           join interest_clusters ic on ic.id = ice.cluster_id
-          join articles a on a.id = ice.article_id
-          join feeds f on f.id = a.feed_id
-          join article_embeddings ae
+          left join articles a on a.id = ice.article_id
+          left join feeds f on f.id = a.feed_id
+          left join article_embeddings ae
             on ae.article_id = a.id
            and ae.embedding_index_id = ic.embedding_index_id
           left join article_states s on s.article_id = a.id
           left join behavior_events be on be.id = ice.behavior_event_id
-          where a.deleted_at is null
-            and a.status != 'deleted'
-            and f.deleted_at is null
-            and f.enabled = 1
-            and ae.vector_blob is not null
+          where coalesce(ae.vector_blob, ice.vector_blob_snapshot) is not null
             and ic.embedding_index_id = ?
           order by ice.evidence_source = 'live_event' desc, ice.confidence desc, ice.created_at desc
           limit ?
@@ -365,6 +361,7 @@ export class SqliteProfileRepository implements ProfileRepository {
     weightDelta: number;
     createdAt: number;
   }): void {
+    const snapshot = this.evidenceSnapshot(input.clusterId, input.articleId, input.behaviorEventId ?? null);
     const existing = this.db
       .prepare(
         `
@@ -393,7 +390,13 @@ export class SqliteProfileRepository implements ProfileRepository {
               confidence = max(confidence, ?),
               similarity = coalesce(?, similarity),
               weight_delta = max(weight_delta, ?),
-              created_at = max(created_at, ?)
+              created_at = max(created_at, ?),
+              article_title_snapshot = coalesce(article_title_snapshot, ?),
+              feed_id_snapshot = coalesce(feed_id_snapshot, ?),
+              feed_title_snapshot = coalesce(feed_title_snapshot, ?),
+              event_type_snapshot = coalesce(event_type_snapshot, ?),
+              reading_progress_snapshot = coalesce(reading_progress_snapshot, ?),
+              vector_blob_snapshot = coalesce(vector_blob_snapshot, ?)
             where id = ?
           `
         )
@@ -402,6 +405,12 @@ export class SqliteProfileRepository implements ProfileRepository {
           input.similarity ?? null,
           input.weightDelta,
           input.createdAt,
+          snapshot.articleTitle,
+          snapshot.feedId,
+          snapshot.feedTitle,
+          snapshot.eventType,
+          snapshot.readingProgress,
+          snapshot.vectorBlob,
           existing.id
         );
       return;
@@ -419,9 +428,15 @@ export class SqliteProfileRepository implements ProfileRepository {
             confidence,
             similarity,
             weight_delta,
+            article_title_snapshot,
+            feed_id_snapshot,
+            feed_title_snapshot,
+            event_type_snapshot,
+            reading_progress_snapshot,
+            vector_blob_snapshot,
             created_at
           )
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       )
       .run(
@@ -433,8 +448,68 @@ export class SqliteProfileRepository implements ProfileRepository {
         input.confidence,
         input.similarity ?? null,
         input.weightDelta,
+        snapshot.articleTitle,
+        snapshot.feedId,
+        snapshot.feedTitle,
+        snapshot.eventType,
+        snapshot.readingProgress,
+        snapshot.vectorBlob,
         input.createdAt
       );
+  }
+
+  private evidenceSnapshot(
+    clusterId: string,
+    articleId: string,
+    behaviorEventId: string | null
+  ): {
+    articleTitle: string | null;
+    feedId: string | null;
+    feedTitle: string | null;
+    eventType: string | null;
+    readingProgress: number;
+    vectorBlob: Buffer | null;
+  } {
+    const row = this.db
+      .prepare(
+        `
+          select
+            a.title as articleTitle,
+            a.feed_id as feedId,
+            f.title as feedTitle,
+            be.event_type as eventType,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            ae.vector_blob as vectorBlob
+          from articles a
+          left join feeds f on f.id = a.feed_id
+          left join behavior_events be on be.id = ?
+          left join article_states s on s.article_id = a.id
+          left join interest_clusters ic on ic.id = ?
+          left join article_embeddings ae
+            on ae.article_id = a.id
+           and ae.embedding_index_id = ic.embedding_index_id
+          where a.id = ?
+        `
+      )
+      .get(behaviorEventId, clusterId, articleId) as
+      | {
+          articleTitle: string | null;
+          feedId: string | null;
+          feedTitle: string | null;
+          eventType: string | null;
+          readingProgress: number;
+          vectorBlob: Buffer | null;
+        }
+      | undefined;
+
+    return {
+      articleTitle: row?.articleTitle ?? null,
+      feedId: row?.feedId ?? null,
+      feedTitle: row?.feedTitle ?? null,
+      eventType: row?.eventType ?? null,
+      readingProgress: row?.readingProgress ?? 0,
+      vectorBlob: row?.vectorBlob ?? null
+    };
   }
 
   moveClusterEvidence(input: { fromClusterId: string; toClusterId: string }): void {

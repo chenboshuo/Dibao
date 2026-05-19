@@ -39,6 +39,14 @@ export type EmbeddingJobServiceOptions = {
   providerService: Pick<EmbeddingProviderService, "activeProviderConfig">;
   profile?: Pick<ProfileService, "processArticleEvents">;
   rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll" | "enqueueArticles">;
+  recordUsage?: (input: {
+    providerId: string;
+    embeddingIndexId: string;
+    model: string;
+    itemCount: number;
+    estimatedTokens: number;
+    now: number;
+  }) => void;
   vectorStore: Pick<VectorStore, "upsertArticleVector">;
   now?: () => number;
   jobIdFactory?: () => string;
@@ -146,19 +154,30 @@ export class EmbeddingJobService {
     }
 
     try {
-      const vectors = (
-        await Promise.all(
-          chunks(candidates, embeddingBatchSizeFor(provider.type)).map((chunk) =>
-            active.adapter.embedBatch({
-              provider: active.provider,
-              items: chunk.map((candidate) => ({
-                id: candidate.articleId,
-                text: textForEmbedding(candidate)
-              }))
-            })
-          )
-        )
-      ).flat();
+      const vectors: Array<{ id: string; vector: number[] }> = [];
+      for (const chunk of chunks(candidates, embeddingBatchSizeFor(provider.type))) {
+        const items = chunk.map((candidate) => ({
+          id: candidate.articleId,
+          text: textForEmbedding(candidate)
+        }));
+        vectors.push(
+          ...(await active.adapter.embedBatch({
+            provider: active.provider,
+            items
+          }))
+        );
+        this.options.recordUsage?.({
+          providerId: provider.id,
+          embeddingIndexId: index.id,
+          model: provider.model,
+          itemCount: items.length,
+          estimatedTokens: items.reduce(
+            (total, item) => total + estimateEmbeddingTokens(item.text),
+            0
+          ),
+          now: this.now()
+        });
+      }
       const vectorByArticleId = new Map(vectors.map((vector) => [vector.id, vector.vector]));
       const now = this.now();
       const writtenArticleIds: string[] = [];
@@ -305,6 +324,24 @@ function textForEmbedding(article: ArticleEmbeddingCandidateRow): string {
     .filter(Boolean)
     .join("\n\n")
     .slice(0, EMBEDDING_TEXT_MAX_CHARS);
+}
+
+export function estimateEmbeddingTokens(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+
+  const cjkCount = (trimmed.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) ?? []).length;
+  const latinWords = trimmed
+    .replace(/[\u3400-\u9fff\uf900-\ufaff]/gu, " ")
+    .split(/[^A-Za-z0-9_]+/u)
+    .filter(Boolean).length;
+  const otherChars = trimmed
+    .replace(/[\u3400-\u9fff\uf900-\ufaff]/gu, "")
+    .replace(/[A-Za-z0-9_\s]+/gu, "").length;
+
+  return Math.max(1, Math.ceil(cjkCount * 0.7 + latinWords * 1.3 + otherChars * 0.5));
 }
 
 function uniqueStrings(values: string[]): string[] {

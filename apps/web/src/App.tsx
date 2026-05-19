@@ -25,7 +25,10 @@ import {
   type ReadLaterArticleSort,
   type ReaderSettings,
   type RecommendationStatus,
+  type RecommendationClusterItem,
   type RecommendationTransparency,
+  type RecommendationMaintenanceTask,
+  type RecommendationMaintenanceTaskResponse,
   type SetupStatus,
   type UpdateFeedFolderInput,
   type UpdateFeedInput,
@@ -66,7 +69,8 @@ type Notice =
   | { type: "embeddingProviderTested" }
   | { type: "embeddingProviderDeleted" }
   | { type: "embeddingIndexRebuildQueued" }
-  | { type: "embeddingIndexBackfillQueued" };
+  | { type: "embeddingIndexBackfillQueued" }
+  | { type: "recommendationMaintenanceQueued"; label: string; existing: boolean };
 
 export type SourceSelection =
   | { type: "all" }
@@ -79,7 +83,14 @@ export type AppPage =
   | { type: "reader"; view: ArticleView }
   | { type: "feed-management" }
   | { type: "settings" }
-  | { type: "algorithm-transparency" };
+  | { type: "algorithm-transparency" }
+  | { type: "algorithm-clusters" };
+
+type AppRoute = {
+  page: AppPage;
+  articleId: string | null;
+  hasExplicitPage: boolean;
+};
 
 export type AppStage =
   | { type: "auth-loading" }
@@ -148,6 +159,10 @@ export function correctSourceSelection(
 
 export function App() {
   const { t, setLocale } = useI18n();
+  const initialRoute = useMemo(
+    () => routeFromLocation(defaultAppSettings.ui.defaultHomeView),
+    []
+  );
   const [appStage, setAppStage] = useState<AppStage>({ type: "auth-loading" });
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -171,20 +186,19 @@ export function App() {
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [sourceSelection, setSourceSelection] = useState<SourceSelection>({ type: "all" });
-  const [appPage, setAppPage] = useState<AppPage>({
-    type: "reader",
-    view: defaultAppSettings.ui.defaultHomeView
-  });
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [todayOnly, setTodayOnly] = useState(false);
+  const [appPage, setAppPage] = useState<AppPage>(initialRoute.page);
+  const [unreadOnly, setUnreadOnly] = useState(() => urlBooleanParam("unread"));
+  const [todayOnly, setTodayOnly] = useState(() => urlBooleanParam("today"));
   const [favoriteSort, setFavoriteSort] = useState<FavoriteArticleSort>(
-    defaultFavoriteArticleSort
+    () => urlFavoriteSortParam() ?? defaultFavoriteArticleSort
   );
   const [readLaterSort, setReadLaterSort] = useState<ReadLaterArticleSort>(
-    defaultReadLaterArticleSort
+    () => urlReadLaterSortParam() ?? defaultReadLaterArticleSort
   );
   const [isSourceDrawerOpen, setIsSourceDrawerOpen] = useState(false);
-  const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
+  const [selectedArticleId, setSelectedArticleId] = useState<string | null>(
+    initialRoute.articleId
+  );
   const [articleDetail, setArticleDetail] = useState<ArticleDetail | null>(null);
   const [rankExplanation, setRankExplanation] = useState<RankExplanation | null>(null);
   const [listRankExplanation, setListRankExplanation] = useState<RankExplanation | null>(null);
@@ -193,6 +207,14 @@ export function App() {
   const [recommendationStatus, setRecommendationStatus] = useState<RecommendationStatus | null>(
     null
   );
+  const [allRecommendationClusters, setAllRecommendationClusters] = useState<
+    RecommendationClusterItem[]
+  >([]);
+  const [allRecommendationClusterTotal, setAllRecommendationClusterTotal] = useState(0);
+  const [isAllClustersLoading, setIsAllClustersLoading] = useState(false);
+  const [allClustersError, setAllClustersError] = useState<string | null>(null);
+  const [runningMaintenanceTask, setRunningMaintenanceTask] =
+    useState<RecommendationMaintenanceTask | null>(null);
   const [isRecommendationStatusLoading, setIsRecommendationStatusLoading] = useState(false);
   const [recommendationStatusError, setRecommendationStatusError] = useState<string | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
@@ -228,10 +250,7 @@ export function App() {
   const hasLoadedSettingsForSession = useRef(false);
   const hasAppliedDefaultHomeViewForSession = useRef(false);
   const appPageRef = useRef<AppPage>(appPage);
-  const mobileArticleHistoryDepth = useRef(0);
-  const mobileExplanationHistoryDepth = useRef(0);
-  const selectedArticleIdRef = useRef<string | null>(null);
-  const isExplanationOpenRef = useRef(false);
+  const hasExplicitUrlPageIntent = useRef(initialRoute.hasExplicitPage);
 
   const selectedFeed = useMemo(
     () =>
@@ -361,6 +380,11 @@ export function App() {
     setArticleDetail(null);
     setRankExplanation(null);
     setRecommendationStatus(null);
+    setAllRecommendationClusters([]);
+    setAllRecommendationClusterTotal(0);
+    setIsAllClustersLoading(false);
+    setAllClustersError(null);
+    setRunningMaintenanceTask(null);
     setIsRecommendationStatusLoading(false);
     setRecommendationStatusError(null);
     setFeedUrl("");
@@ -399,7 +423,7 @@ export function App() {
     setPendingArticleAction(null);
     setNotice(null);
     hasLoadedSettingsForSession.current = false;
-    hasAppliedDefaultHomeViewForSession.current = false;
+    hasAppliedDefaultHomeViewForSession.current = hasExplicitUrlPageIntent.current;
     openedArticleIds.current.clear();
     ignoredArticleIds.current.clear();
     articleRequestVersion.current += 1;
@@ -503,6 +527,7 @@ export function App() {
           const currentAppPage = appPageRef.current;
           if (
             !hasAppliedDefaultHomeViewForSession.current &&
+            !hasExplicitUrlPageIntent.current &&
             currentAppPage.type === "reader" &&
             currentAppPage.view !== settings.ui.defaultHomeView
           ) {
@@ -587,6 +612,23 @@ export function App() {
     }
   }, [t.errors.api]);
 
+  const loadAllRecommendationClusters = useCallback(async () => {
+    setIsAllClustersLoading(true);
+    setAllClustersError(null);
+
+    try {
+      const result = await dibaoApi.listRecommendationClusters("all");
+      setAllRecommendationClusters(result.items);
+      setAllRecommendationClusterTotal(result.total);
+    } catch (error) {
+      setAllRecommendationClusters([]);
+      setAllRecommendationClusterTotal(0);
+      setAllClustersError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsAllClustersLoading(false);
+    }
+  }, [t.errors.api]);
+
   const loadFeeds = useCallback(async () => {
     setIsFeedsLoading(true);
     setFeedError(null);
@@ -636,9 +678,6 @@ export function App() {
     setLoadMoreError(null);
     setNextArticleCursor(null);
     setArticles([]);
-    setSelectedArticleId(null);
-    setArticleDetail(null);
-    setRankExplanation(null);
     if (view !== "recommended" && appPage.type !== "algorithm-transparency") {
       setRecommendationStatus(null);
       setIsRecommendationStatusLoading(false);
@@ -665,7 +704,6 @@ export function App() {
       );
       setUnreadCount(response.meta.unreadCount);
       setNextArticleCursor(response.page.nextCursor);
-      setSelectedArticleId(null);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
         return;
@@ -674,7 +712,6 @@ export function App() {
       setArticles([]);
       setUnreadCount(0);
       articleStateById.current.clear();
-      setSelectedArticleId(null);
       setNextArticleCursor(null);
     } finally {
       if (requestVersion === articleRequestVersion.current) {
@@ -711,7 +748,9 @@ export function App() {
   useEffect(() => {
     if (
       appStage.type !== "reader" ||
-      (appPage.type !== "reader" && appPage.type !== "algorithm-transparency") ||
+      (appPage.type !== "reader" &&
+        appPage.type !== "algorithm-transparency" &&
+        appPage.type !== "algorithm-clusters") ||
       (appPage.type === "reader" && appPage.view !== "recommended")
     ) {
       setRecommendationStatus(null);
@@ -724,36 +763,42 @@ export function App() {
   }, [appPage, appStage.type, loadRecommendationStatus]);
 
   useEffect(() => {
-    selectedArticleIdRef.current = selectedArticleId;
-  }, [selectedArticleId]);
+    if (appStage.type !== "reader" || appPage.type !== "algorithm-clusters") {
+      return;
+    }
 
-  useEffect(() => {
-    isExplanationOpenRef.current = isExplanationOpen;
-  }, [isExplanationOpen]);
+    void loadAllRecommendationClusters();
+  }, [appPage.type, appStage.type, loadAllRecommendationClusters]);
 
   useEffect(() => {
     function handlePopState() {
-      if (mobileExplanationHistoryDepth.current > 0 && isExplanationOpenRef.current) {
-        mobileExplanationHistoryDepth.current -= 1;
-        setIsExplanationOpen(false);
-        return;
-      }
+      const route = routeFromLocation(appSettings.ui.defaultHomeView);
+      hasExplicitUrlPageIntent.current = route.hasExplicitPage;
+      setIsExplanationOpen(false);
+      setIsSourceDrawerOpen(false);
 
-      if (mobileArticleHistoryDepth.current <= 0) {
-        return;
+      const currentPage = appPageRef.current;
+      if (
+        currentPage.type !== route.page.type ||
+        (currentPage.type === "reader" &&
+          route.page.type === "reader" &&
+          currentPage.view !== route.page.view)
+      ) {
+        resetArticleListForPendingQuery();
       }
-
-      mobileArticleHistoryDepth.current -= 1;
-      if (selectedArticleIdRef.current) {
-        clearSelectedArticle();
-      }
+      setAppPage(route.page);
+      setSelectedArticleId(route.articleId);
+      setUnreadOnly(urlBooleanParam("unread"));
+      setTodayOnly(urlBooleanParam("today"));
+      setFavoriteSort(urlFavoriteSortParam() ?? defaultFavoriteArticleSort);
+      setReadLaterSort(urlReadLaterSortParam() ?? defaultReadLaterArticleSort);
     }
 
     window.addEventListener("popstate", handlePopState);
     return () => {
       window.removeEventListener("popstate", handlePopState);
     };
-  }, []);
+  }, [appSettings.ui.defaultHomeView]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1212,6 +1257,32 @@ export function App() {
     }
   }
 
+  async function handleRunRecommendationMaintenanceTask(
+    task: RecommendationMaintenanceTask,
+    label: string
+  ) {
+    setRunningMaintenanceTask(task);
+    setRecommendationStatusError(null);
+    setNotice(null);
+
+    try {
+      const result = await dibaoApi.runRecommendationMaintenanceTask(task);
+      setNotice({
+        type: "recommendationMaintenanceQueued",
+        label,
+        existing: maintenanceResultWasExisting(result)
+      });
+      await loadRecommendationStatus();
+      if (task === "keyword_rebuild" || task === "recent_intent_rebuild") {
+        await loadAllRecommendationClusters();
+      }
+    } catch (error) {
+      setRecommendationStatusError(userMessageForError(error, t.errors.api));
+    } finally {
+      setRunningMaintenanceTask(null);
+    }
+  }
+
   async function handleLoadMoreArticles() {
     if (!nextArticleCursor) {
       return;
@@ -1341,22 +1412,38 @@ export function App() {
 
   function handleSelectArticle(articleId: string) {
     setIsExplanationOpen(false);
-    if (isMobileArticleHistoryEnabled() && selectedArticleId !== articleId) {
-      window.history.pushState({ dibaoArticleId: articleId }, "", window.location.href);
-      mobileArticleHistoryDepth.current += 1;
+    const href = urlForArticle(currentArticleView, articleId, {
+      favoriteSort,
+      readLaterSort,
+      todayOnly,
+      unreadOnly
+    });
+    if (selectedArticleId !== articleId) {
+      window.history.pushState({ dibaoArticleId: articleId }, "", href);
     }
     setSelectedArticleId(articleId);
+    setIsSourceDrawerOpen(false);
+  }
+
+  function navigateToAppPage(page: AppPage) {
+    window.history.pushState({ dibaoPage: page.type }, "", urlForAppPage(page, {
+      favoriteSort,
+      readLaterSort,
+      todayOnly,
+      unreadOnly
+    }));
+    if (page.type === "reader") {
+      handleArticleViewChange(page.view);
+    } else {
+      resetArticleListForPendingQuery();
+      setAppPage(page);
+    }
     setIsSourceDrawerOpen(false);
   }
 
   function handleOpenExplanation() {
     if (!shouldLoadRankExplanation(currentArticleView)) {
       return;
-    }
-
-    if (isMobileArticleHistoryEnabled() && !isExplanationOpen) {
-      window.history.pushState({ dibaoExplanation: true }, "", window.location.href);
-      mobileExplanationHistoryDepth.current += 1;
     }
 
     setIsExplanationOpen(true);
@@ -1392,11 +1479,6 @@ export function App() {
   }
 
   function handleCloseExplanation() {
-    if (isMobileArticleHistoryEnabled() && mobileExplanationHistoryDepth.current > 0) {
-      window.history.back();
-      return;
-    }
-
     setIsExplanationOpen(false);
   }
 
@@ -1406,27 +1488,29 @@ export function App() {
       return;
     }
 
-    if (isMobileArticleHistoryEnabled() && mobileArticleHistoryDepth.current > 0) {
-      window.history.back();
-      return;
-    }
-
+    window.history.pushState(
+      { dibaoPage: currentArticleView },
+      "",
+      urlForAppPage({ type: "reader", view: currentArticleView }, {
+        favoriteSort,
+        readLaterSort,
+        todayOnly,
+        unreadOnly
+      })
+    );
     clearSelectedArticle();
   }
 
   function handleNavigationClick(event: MouseEvent<HTMLAnchorElement>, item: NavigationItemKey) {
+    if (shouldLetBrowserHandleLinkClick(event)) {
+      return;
+    }
     event.preventDefault();
     const page = pageForNavigationItem(item);
     if (!page) {
       return;
     }
-
-    setIsSourceDrawerOpen(false);
-    if (page.type === "reader") {
-      handleArticleViewChange(page.view);
-    } else {
-      setAppPage(page);
-    }
+    navigateToAppPage(page);
   }
 
   const noticeText = notice ? noticeTextFor(notice, t) : null;
@@ -1435,7 +1519,7 @@ export function App() {
       ? t.feedManagement.pageTitle
       : appPage.type === "settings"
         ? t.settings.pageTitle
-        : appPage.type === "algorithm-transparency"
+        : appPage.type === "algorithm-transparency" || appPage.type === "algorithm-clusters"
           ? t.algorithmTransparency.pageTitle
           : t.shell.pageTitles[currentArticleView];
   const topbarStatus =
@@ -1453,6 +1537,11 @@ export function App() {
             (isRecommendationStatusLoading
               ? t.recommendationStatus.loading
               : t.algorithmTransparency.status)
+          : appPage.type === "algorithm-clusters"
+            ? allClustersError ??
+              (isAllClustersLoading
+                ? t.recommendationStatus.loading
+                : t.algorithmTransparency.status)
           : noticeText ??
             (isArticlesLoading ? t.shell.loadingArticles : t.shell.viewStatus[currentArticleView]);
 
@@ -1524,7 +1613,12 @@ export function App() {
           {navigationItems.map((item) => (
             <a
               className={isNavigationItemActive(item, appPage) ? styles.navItemActive : styles.navItem}
-              href="#"
+              href={urlForNavigationItem(item, {
+                favoriteSort,
+                readLaterSort,
+                todayOnly,
+                unreadOnly
+              })}
               key={item}
               onClick={(event) => handleNavigationClick(event, item)}
               title={t.navigation.items[item]}
@@ -1601,7 +1695,7 @@ export function App() {
             onDeleteEmbeddingProvider={handleDeleteEmbeddingProvider}
             onPreviewSettings={handlePreviewSettings}
             onRebuildEmbeddingIndex={handleRebuildEmbeddingIndex}
-            onOpenAlgorithmTransparency={() => setAppPage({ type: "algorithm-transparency" })}
+            onOpenAlgorithmTransparency={() => navigateToAppPage({ type: "algorithm-transparency" })}
             onSaveSettings={handleSaveSettings}
             onSaveEmbeddingProvider={handleSaveEmbeddingProvider}
             onTestEmbeddingProvider={handleTestEmbeddingProvider}
@@ -1611,8 +1705,19 @@ export function App() {
           <AlgorithmTransparencyPage
             error={recommendationStatusError}
             isLoading={isRecommendationStatusLoading}
-            onBack={() => setAppPage({ type: "settings" })}
+            onBack={() => navigateToAppPage({ type: "settings" })}
+            onOpenAllClusters={() => navigateToAppPage({ type: "algorithm-clusters" })}
+            onRunMaintenanceTask={handleRunRecommendationMaintenanceTask}
+            runningMaintenanceTask={runningMaintenanceTask}
             status={recommendationStatus}
+          />
+        ) : appPage.type === "algorithm-clusters" ? (
+          <AlgorithmClustersPage
+            clusters={allRecommendationClusters}
+            error={allClustersError}
+            isLoading={isAllClustersLoading}
+            onBack={() => navigateToAppPage({ type: "algorithm-transparency" })}
+            total={allRecommendationClusterTotal}
           />
         ) : (
           <div
@@ -2011,6 +2116,7 @@ export function SettingsWorkspace(props: {
   );
   const [localError, setLocalError] = useState<string | null>(null);
   const [providerLocalError, setProviderLocalError] = useState<string | null>(null);
+  const [usageWindow, setUsageWindow] = useState<"24h" | "7d" | "30d">("24h");
 
   useEffect(() => {
     setDraft(draftForSettings(props.settings));
@@ -2140,8 +2246,11 @@ export function SettingsWorkspace(props: {
             <p>{t.settings.sections.behavior.body}</p>
             <a
               className={styles.textLink}
-              href="#"
+              href={urlForAppPage({ type: "algorithm-transparency" })}
               onClick={(event) => {
+                if (shouldLetBrowserHandleLinkClick(event)) {
+                  return;
+                }
                 event.preventDefault();
                 props.onOpenAlgorithmTransparency();
               }}
@@ -2518,6 +2627,23 @@ export function SettingsWorkspace(props: {
             <div>
               <h3 id="settings-indexes-title">{t.settings.sections.provider.indexesTitle}</h3>
               <p>{t.settings.sections.provider.indexesBody}</p>
+              <div className={styles.segmentedControl} aria-label={t.settings.sections.provider.usageWindowLabel}>
+                {(["24h", "7d", "30d"] as const).map((windowKey) => (
+                  <button
+                    aria-pressed={usageWindow === windowKey}
+                    className={
+                      usageWindow === windowKey
+                        ? styles.segmentedControlActive
+                        : styles.segmentedControlButton
+                    }
+                    key={windowKey}
+                    onClick={() => setUsageWindow(windowKey)}
+                    type="button"
+                  >
+                    {t.settings.sections.provider.usageWindows[windowKey]}
+                  </button>
+                ))}
+              </div>
             </div>
             {selectedProviderIndexes.length === 0 ? (
               <div className={styles.setupStatusBox}>
@@ -2554,6 +2680,13 @@ export function SettingsWorkspace(props: {
                     ) : index.failedJobs > 0 ? null : (
                       <p>{t.settings.sections.provider.noJobFailures}</p>
                     )}
+                    <p className={styles.embeddingUsageLine}>
+                      <ActionIcon name="sparkle" />
+                      {t.settings.sections.provider.usage(
+                        index.usage.windows[usageWindow].requestCount,
+                        index.usage.windows[usageWindow].estimatedTokens
+                      )}
+                    </p>
                   </div>
                   <button
                     className={styles.secondaryButton}
@@ -2589,6 +2722,9 @@ export function AlgorithmTransparencyPage(props: {
   error: string | null;
   isLoading: boolean;
   onBack: () => void;
+  onOpenAllClusters: () => void;
+  onRunMaintenanceTask: (task: RecommendationMaintenanceTask, label: string) => Promise<void>;
+  runningMaintenanceTask: RecommendationMaintenanceTask | null;
   status: RecommendationStatus | null;
 }) {
   const { t, formatDate } = useI18n();
@@ -2808,7 +2944,66 @@ export function AlgorithmTransparencyPage(props: {
           ) : (
             <p>{t.algorithmTransparency.clusters.empty}</p>
           )}
+          {props.status?.clusters.items && props.status.clusters.items.length >= 12 ? (
+            <a
+              className={styles.textLink}
+              href={urlForAppPage({ type: "algorithm-clusters" })}
+              onClick={(event) => {
+                if (shouldLetBrowserHandleLinkClick(event)) {
+                  return;
+                }
+                event.preventDefault();
+                props.onOpenAllClusters();
+              }}
+            >
+              {t.algorithmTransparency.clusters.openAll}
+            </a>
+          ) : null}
         </section>
+
+        {transparency ? (
+          <section className={classNames(styles.settingsSection, "algorithm-card")}>
+            <div>
+              <h3>{t.algorithmTransparency.sections.maintenance}</h3>
+              <p>{t.algorithmTransparency.maintenance.body}</p>
+            </div>
+            <div className={styles.maintenanceTaskGrid}>
+              {maintenanceTasks(t).map((task) => {
+                const schedule = transparency.maintenance.schedule?.find(
+                  (state) => state.taskKey === task.scheduleKey
+                );
+                return (
+                  <article className={styles.maintenanceTaskCard} key={task.key}>
+                    <div>
+                      <strong>{task.label}</strong>
+                      <p>{task.description}</p>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>{t.algorithmTransparency.maintenance.remoteUse}</dt>
+                        <dd>{task.remoteUse}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.algorithmTransparency.maintenance.lastState}</dt>
+                        <dd>{formatMaintenanceTaskSchedule(schedule, t)}</dd>
+                      </div>
+                    </dl>
+                    <button
+                      className={styles.secondaryButton}
+                      disabled={props.runningMaintenanceTask === task.key}
+                      onClick={() => void props.onRunMaintenanceTask(task.key, task.label)}
+                      type="button"
+                    >
+                      {props.runningMaintenanceTask === task.key
+                        ? t.algorithmTransparency.maintenance.running
+                        : t.algorithmTransparency.maintenance.run}
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
@@ -2885,6 +3080,90 @@ export function AlgorithmTransparencyPage(props: {
           </div>
           <p>{t.algorithmTransparency.copy.localData}</p>
           <p>{t.algorithmTransparency.copy.fallback}</p>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function AlgorithmClustersPage(props: {
+  clusters: RecommendationClusterItem[];
+  error: string | null;
+  isLoading: boolean;
+  onBack: () => void;
+  total: number;
+}) {
+  const { t, formatDate } = useI18n();
+
+  return (
+    <section
+      className={classNames(styles.settingsWorkspace, "algorithm-board-page")}
+      aria-labelledby="algorithm-clusters-title"
+    >
+      <div className={classNames(styles.settingsHeader, "algorithm-hero")}>
+        <div>
+          <p className={styles.kicker}>{t.algorithmTransparency.pageTitle}</p>
+          <h2 id="algorithm-clusters-title">{t.algorithmTransparency.clusters.allTitle}</h2>
+        </div>
+        <button className={styles.secondaryButton} onClick={props.onBack} type="button">
+          {t.algorithmTransparency.clusters.back}
+        </button>
+      </div>
+      <div className={classNames(styles.settingsContent, "algorithm-board")}>
+        <section className={classNames(styles.settingsSection, "algorithm-card")}>
+          <div>
+            <h3>{t.algorithmTransparency.clusters.allTitle}</h3>
+            <p>{t.algorithmTransparency.clusters.allSummary(props.total)}</p>
+          </div>
+          {props.isLoading ? (
+            <p className={styles.settingsNotice}>{t.recommendationStatus.loading}</p>
+          ) : null}
+          {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+          {!props.isLoading && !props.error && props.clusters.length > 0 ? (
+            <div className={styles.algorithmClusterGrid}>
+              {props.clusters.map((cluster, index) => (
+                <article
+                  className={styles.algorithmClusterCard}
+                  data-polarity={cluster.polarity}
+                  key={cluster.id}
+                >
+                  <span>
+                    {cluster.polarity === "positive"
+                      ? t.algorithmTransparency.clusters.positive
+                      : t.algorithmTransparency.clusters.negative}
+                  </span>
+                  <strong>{clusterDisplayName(cluster, index, t)}</strong>
+                  <p>
+                    {t.algorithmTransparency.clusters.details(
+                      formatCompactNumber(cluster.weight),
+                      cluster.sampleCount,
+                      formatDate(cluster.updatedAt)
+                    )}
+                  </p>
+                  {cluster.diagnostics ? (
+                    <p>
+                      <strong>
+                        {t.algorithmTransparency.clusters.risk[
+                          cluster.diagnostics.overfitRisk
+                        ]}
+                      </strong>
+                      <br />
+                      {t.algorithmTransparency.clusters.diagnostics(
+                        cluster.diagnostics.supportArticleCount,
+                        cluster.diagnostics.sourceCount,
+                        formatPercent(cluster.diagnostics.strongSignalRatio),
+                        formatPercent(cluster.diagnostics.topSourceShare),
+                        formatPercent(cluster.diagnostics.averageSimilarity)
+                      )}
+                    </p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : null}
+          {!props.isLoading && !props.error && props.clusters.length === 0 ? (
+            <p>{t.algorithmTransparency.clusters.empty}</p>
+          ) : null}
         </section>
       </div>
     </section>
@@ -3237,10 +3516,21 @@ export function ArticleListPanel(props: {
               data-read-later={article.state.readLater ? "true" : undefined}
               key={article.id}
             >
-              <button
+              <a
                 className={styles.articleMain}
-                onClick={() => props.onSelectArticle(article.id)}
-                type="button"
+                href={urlForArticle(props.articleView, article.id, {
+                  favoriteSort: props.favoriteSort,
+                  readLaterSort: props.readLaterSort,
+                  todayOnly: props.todayOnly,
+                  unreadOnly: props.unreadOnly
+                })}
+                onClick={(event) => {
+                  if (shouldLetBrowserHandleLinkClick(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  props.onSelectArticle(article.id);
+                }}
               >
                 <span className={styles.meta}>
                   {t.articles.itemMeta(
@@ -3252,7 +3542,7 @@ export function ArticleListPanel(props: {
                 {article.summary ? (
                   <span className={styles.summary}>{plainTextSummary(article.summary)}</span>
                 ) : null}
-              </button>
+              </a>
               <ArticleRowActions
                 article={article}
                 onAction={(intent) => props.onArticleAction?.(article, intent)}
@@ -3453,9 +3743,13 @@ function ArticleDetailPanel(props: {
   const { t, formatDate } = useI18n();
   const readerPanelRef = useRef<HTMLElement>(null);
   const safeHtml = useMemo(
-    () => (props.article?.contentHtml ? sanitizeArticleHtml(props.article.contentHtml) : null),
-    [props.article?.contentHtml]
+    () =>
+      props.article?.contentHtml
+        ? sanitizeArticleHtml(props.article.contentHtml, props.article.url)
+        : null,
+    [props.article?.contentHtml, props.article?.url]
   );
+  const showReaderActions = useReaderActionVisibility(readerPanelRef, props.article?.id ?? null);
 
   useReaderReadProgress({
     article: props.article,
@@ -3527,6 +3821,7 @@ function ArticleDetailPanel(props: {
           <ArticleActionControls
             actionError={null}
             article={props.article}
+            hidden={!showReaderActions}
             onAction={(intent) => props.onArticleAction(props.article as ArticleDetail, intent)}
             pendingAction={props.pendingAction}
             placement="bottom"
@@ -3616,6 +3911,7 @@ function ArticleRowActions(props: {
 export function ArticleActionControls(props: {
   actionError: string | null;
   article: Pick<ArticleDetail, "id" | "state">;
+  hidden?: boolean;
   onAction: (intent: ArticleActionIntent) => void;
   pendingAction: ArticleActionIntent | null;
   placement?: "top" | "bottom";
@@ -3629,7 +3925,8 @@ export function ArticleActionControls(props: {
       className={classNames(
         styles.readerActions,
         props.placement === "top" ? styles.readerActionsTop : null,
-        props.placement === "bottom" ? styles.readerActionsBottom : null
+        props.placement === "bottom" ? styles.readerActionsBottom : null,
+        props.hidden ? styles.readerActionsHidden : null
       )}
       aria-label={t.actions.aria.group}
       aria-live="polite"
@@ -3989,6 +4286,46 @@ function ReaderSkeleton() {
       <span />
     </div>
   );
+}
+
+function useReaderActionVisibility(
+  scrollContainerRef: RefObject<HTMLElement | null>,
+  articleId: string | null
+): boolean {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    setVisible(true);
+    const element = scrollContainerRef.current;
+    if (!element || !articleId) {
+      return;
+    }
+    const scrollElement: HTMLElement = element;
+
+    let lastScrollTop = scrollElement.scrollTop;
+    function handleScroll() {
+      const nextScrollTop = scrollElement.scrollTop;
+      const delta = nextScrollTop - lastScrollTop;
+      const nearTop = nextScrollTop < 72;
+      const nearBottom =
+        scrollElement.scrollHeight - scrollElement.clientHeight - nextScrollTop < 160;
+
+      if (nearTop || nearBottom || delta < -8) {
+        setVisible(true);
+      } else if (delta > 12 && nextScrollTop > 96) {
+        setVisible(false);
+      }
+
+      lastScrollTop = nextScrollTop;
+    }
+
+    scrollElement.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      scrollElement.removeEventListener("scroll", handleScroll);
+    };
+  }, [articleId, scrollContainerRef]);
+
+  return visible;
 }
 
 const readProgressThresholds = [0.25, 0.5, 0.75, 0.9] as const;
@@ -4592,6 +4929,144 @@ function sortExplanationForView(view: ArticleView, t: Dictionary): string {
   }
 }
 
+type UrlState = {
+  favoriteSort?: FavoriteArticleSort;
+  readLaterSort?: ReadLaterArticleSort;
+  todayOnly?: boolean;
+  unreadOnly?: boolean;
+};
+
+function routeFromLocation(defaultView: ArticleView): AppRoute {
+  if (typeof window === "undefined") {
+    return {
+      page: { type: "reader", view: defaultView },
+      articleId: null,
+      hasExplicitPage: false
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const view = parseUrlView(params.get("view"));
+  const page = parseUrlPage(params.get("page"), view ?? defaultView);
+  const articleId = page.type === "reader" ? params.get("article") : null;
+  return {
+    page,
+    articleId: articleId && articleId.trim() ? articleId : null,
+    hasExplicitPage: params.has("page") || params.has("view") || params.has("article")
+  };
+}
+
+function urlForNavigationItem(item: NavigationItemKey, state: UrlState = {}): string {
+  const page = pageForNavigationItem(item);
+  return page ? urlForAppPage(page, state) : "/";
+}
+
+function urlForArticle(articleView: ArticleView, articleId: string, state: UrlState = {}): string {
+  const params = paramsForReaderView(articleView, state);
+  params.set("article", articleId);
+  return `/?${params.toString()}`;
+}
+
+function urlForAppPage(page: AppPage, state: UrlState = {}): string {
+  if (page.type === "reader") {
+    return `/?${paramsForReaderView(page.view, state).toString()}`;
+  }
+
+  const params = new URLSearchParams();
+  params.set("page", page.type);
+  return `/?${params.toString()}`;
+}
+
+function paramsForReaderView(view: ArticleView, state: UrlState): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set("view", view);
+  if (view === "favorites" && state.favoriteSort && state.favoriteSort !== defaultFavoriteArticleSort) {
+    params.set("sort", state.favoriteSort);
+  }
+  if (view === "read_later" && state.readLaterSort && state.readLaterSort !== defaultReadLaterArticleSort) {
+    params.set("sort", state.readLaterSort);
+  }
+  if (supportsQuickFilters(view) && state.todayOnly) {
+    params.set("today", "1");
+  }
+  if (supportsUnreadOnly(view) && state.unreadOnly) {
+    params.set("unread", "1");
+  }
+  return params;
+}
+
+function parseUrlPage(value: string | null, view: ArticleView): AppPage {
+  switch (value) {
+    case "feeds":
+    case "feed-management":
+      return { type: "feed-management" };
+    case "settings":
+      return { type: "settings" };
+    case "algorithm":
+    case "algorithm-transparency":
+      return { type: "algorithm-transparency" };
+    case "algorithm-clusters":
+      return { type: "algorithm-clusters" };
+    default:
+      return { type: "reader", view };
+  }
+}
+
+function parseUrlView(value: string | null): ArticleView | null {
+  return value === "latest" ||
+    value === "recommended" ||
+    value === "favorites" ||
+    value === "read_later"
+    ? value
+    : null;
+}
+
+function urlBooleanParam(name: string): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const value = new URLSearchParams(window.location.search).get(name);
+  return value === "1" || value === "true";
+}
+
+function urlFavoriteSortParam(): FavoriteArticleSort | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const value = new URLSearchParams(window.location.search).get("sort");
+  return value === "favorited_desc" ||
+    value === "favorited_asc" ||
+    value === "published_desc" ||
+    value === "published_asc"
+    ? value
+    : null;
+}
+
+function urlReadLaterSortParam(): ReadLaterArticleSort | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const value = new URLSearchParams(window.location.search).get("sort");
+  return value === "ranked" ||
+    value === "read_later_desc" ||
+    value === "read_later_asc" ||
+    value === "published_desc" ||
+    value === "published_asc"
+    ? value
+    : null;
+}
+
+function shouldLetBrowserHandleLinkClick(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  );
+}
+
 function isMobileArticleHistoryEnabled(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -4688,7 +5163,7 @@ function isNavigationItemActive(item: NavigationItemKey, page: AppPage): boolean
     return item === "feeds";
   }
 
-  if (page.type === "algorithm-transparency") {
+  if (page.type === "algorithm-transparency" || page.type === "algorithm-clusters") {
     return item === "settings";
   }
 
@@ -4723,6 +5198,8 @@ function noticeTextFor(notice: Notice, t: Dictionary): string {
       return t.settings.sections.provider.notices.rebuildQueued;
     case "embeddingIndexBackfillQueued":
       return t.settings.sections.provider.notices.backfillQueued;
+    case "recommendationMaintenanceQueued":
+      return t.algorithmTransparency.maintenance.notice(notice.label, notice.existing);
   }
 }
 
@@ -4805,6 +5282,87 @@ function formatMaintenanceSchedule(
       return `${item.taskKey}: ${last}`;
     });
   return `${enabled} · ${latest.join(" · ")}`;
+}
+
+type MaintenanceScheduleItem = NonNullable<
+  RecommendationTransparency["transparency"]["maintenance"]["schedule"]
+>[number];
+
+function formatMaintenanceTaskSchedule(
+  schedule: MaintenanceScheduleItem | undefined,
+  t: Dictionary
+): string {
+  if (!schedule) {
+    return t.algorithmTransparency.maintenance.neverRun;
+  }
+
+  if (schedule.lastSkippedReason) {
+    return `${t.algorithmTransparency.maintenance.skipped}: ${schedule.lastSkippedReason}`;
+  }
+
+  const last = schedule.lastCompletedAt ?? schedule.lastEnqueuedAt ?? schedule.updatedAt;
+  return last ? last : t.algorithmTransparency.maintenance.neverRun;
+}
+
+function maintenanceResultWasExisting(result: RecommendationMaintenanceTaskResponse): boolean {
+  return "existing" in result ? result.existing : false;
+}
+
+function maintenanceTasks(t: Dictionary): Array<{
+  key: RecommendationMaintenanceTask;
+  scheduleKey: string;
+  label: string;
+  description: string;
+  remoteUse: string;
+}> {
+  const copy = t.algorithmTransparency.maintenance.tasks;
+  return [
+    {
+      key: "ranking_recalculate",
+      scheduleKey: "ranking_recalculate_daily",
+      ...copy.ranking_recalculate
+    },
+    {
+      key: "fingerprint_backfill",
+      scheduleKey: "duplicate_hourly",
+      ...copy.fingerprint_backfill
+    },
+    {
+      key: "duplicate_rebuild",
+      scheduleKey: "duplicate_daily",
+      ...copy.duplicate_rebuild
+    },
+    {
+      key: "keyword_rebuild",
+      scheduleKey: "keyword_profile_daily",
+      ...copy.keyword_rebuild
+    },
+    {
+      key: "recent_intent_rebuild",
+      scheduleKey: "recent_intent_daily",
+      ...copy.recent_intent_rebuild
+    },
+    {
+      key: "ftrl_train",
+      scheduleKey: "ftrl_train_daily",
+      ...copy.ftrl_train
+    },
+    {
+      key: "evaluation",
+      scheduleKey: "evaluation_periodic",
+      ...copy.evaluation
+    },
+    {
+      key: "ftrl_promote",
+      scheduleKey: "ftrl_promote_daily",
+      ...copy.ftrl_promote
+    },
+    {
+      key: "ftrl_reset",
+      scheduleKey: "ftrl_reset_manual",
+      ...copy.ftrl_reset
+    }
+  ];
 }
 
 function plainTextSummary(value: string): string {
@@ -4951,7 +5509,7 @@ function formatCompactNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
-function sanitizeArticleHtml(html: string): string {
+function sanitizeArticleHtml(html: string, baseUrl?: string | null): string {
   const parser = new DOMParser();
   const document = parser.parseFromString(`<main>${html}</main>`, "text/html");
   const allowedTags = new Set([
@@ -4965,6 +5523,7 @@ function sanitizeArticleHtml(html: string): string {
     "H3",
     "H4",
     "I",
+    "IMG",
     "LI",
     "OL",
     "P",
@@ -4996,10 +5555,28 @@ function sanitizeArticleHtml(html: string): string {
     const element = document.createElement(node.tagName.toLowerCase());
     if (node.tagName === "A") {
       const href = node.getAttribute("href");
-      if (href && /^(https?:|mailto:)/i.test(href)) {
-        element.setAttribute("href", href);
+      const safeHref = safeArticleUrl(href, baseUrl, ["http:", "https:", "mailto:"]);
+      if (safeHref) {
+        element.setAttribute("href", safeHref);
         element.setAttribute("rel", "noreferrer");
         element.setAttribute("target", "_blank");
+      }
+    }
+    if (node.tagName === "IMG") {
+      const src = node.getAttribute("src");
+      const safeSrc = safeArticleUrl(src, baseUrl, ["http:", "https:", "data:"]);
+      if (!safeSrc || (safeSrc.startsWith("data:") && !safeSrc.startsWith("data:image/"))) {
+        return null;
+      }
+      element.setAttribute("src", safeSrc);
+      element.setAttribute("alt", node.getAttribute("alt") ?? "");
+      element.setAttribute("loading", "lazy");
+      element.setAttribute("decoding", "async");
+      for (const attribute of ["title", "width", "height"]) {
+        const value = node.getAttribute(attribute);
+        if (value) {
+          element.setAttribute(attribute, value);
+        }
       }
     }
 
@@ -5022,4 +5599,21 @@ function sanitizeArticleHtml(html: string): string {
   }
 
   return output.innerHTML;
+}
+
+function safeArticleUrl(
+  value: string | null,
+  baseUrl: string | null | undefined,
+  protocols: string[]
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value, baseUrl ?? window.location.origin);
+    return protocols.includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
 }

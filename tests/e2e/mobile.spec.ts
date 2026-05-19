@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 test("mobile MVP reader smoke has visible controls and no horizontal overflow", async ({ page }) => {
   await login(page);
 
-  await expect(page.getByRole("button", { name: /E2E Article Alpha/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /E2E Article Alpha/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "打开来源" })).toBeVisible();
 
   const initialLayout = await page.evaluate(mobilePanelState);
@@ -27,7 +27,7 @@ test("mobile MVP reader smoke has visible controls and no horizontal overflow", 
     .getByRole("button", { name: "关闭来源" })
     .click();
 
-  await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
+  await page.getByRole("link", { name: /E2E Article Alpha/ }).click();
   await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
   await expect(page.getByRole("button", { name: "返回列表" })).toBeVisible();
   const readerPanel = page.getByTestId("reader-scroll-container");
@@ -39,7 +39,7 @@ test("mobile MVP reader smoke has visible controls and no horizontal overflow", 
   expect(readingLayout.readerDisplay).toBe("block");
 
   await page.getByRole("button", { name: "返回列表" }).click();
-  await expect(page.getByRole("button", { name: /E2E Article Alpha/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /E2E Article Alpha/ })).toBeVisible();
   const backLayout = await page.evaluate(mobilePanelState);
   expect(backLayout.listDisplay).toBe("block");
   expect(backLayout.readerDisplay).toBe("none");
@@ -58,7 +58,7 @@ test("mobile recommended list keeps a dense first screen without horizontal over
   await page.getByRole("link", { name: "推荐" }).click();
   await expect(page.getByRole("heading", { name: "推荐" })).toBeVisible();
   await expect(page.getByText("推荐状态", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /E2E Article Alpha/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /E2E Article Alpha/ })).toBeVisible();
 
   const visibleArticles = await page.evaluate(visibleArticleCountInListViewport);
   expect(visibleArticles).toBeGreaterThanOrEqual(5);
@@ -74,7 +74,7 @@ test("mobile recommended article exposes algorithm transparency details", async 
 
   await page.getByRole("link", { name: "推荐" }).click();
   await expect(page.getByRole("heading", { name: "推荐" })).toBeVisible();
-  await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
+  await page.getByRole("link", { name: /E2E Article Alpha/ }).click();
 
   await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
   await expect(page.getByRole("button", { name: "查看完整理由" })).toBeVisible();
@@ -83,7 +83,7 @@ test("mobile recommended article exposes algorithm transparency details", async 
   await expect(
     page.getByRole("dialog").getByText("新鲜度", { exact: true })
   ).toBeVisible();
-  await page.goBack();
+  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
   await expect(page.getByRole("heading", { name: "为什么推荐" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
 });
@@ -91,7 +91,7 @@ test("mobile recommended article exposes algorithm transparency details", async 
 test("mobile article actions expose selected favorite and read-later state", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /E2E Article Extra 22/ }).click();
+  await page.getByRole("link", { name: /E2E Article Extra 22/ }).click();
   await expect(page.getByRole("heading", { name: "E2E Article Extra 22" })).toBeVisible();
 
   const readerPanel = page.getByTestId("reader-scroll-container");
@@ -113,10 +113,10 @@ test("mobile article actions expose selected favorite and read-later state", asy
 test("mobile browser history back returns from article detail to the list", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
+  await page.getByRole("link", { name: /E2E Article Alpha/ }).click();
   await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
   await page.goBack();
-  await expect(page.getByRole("button", { name: /E2E Article Alpha/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /E2E Article Alpha/ })).toBeVisible();
   const backLayout = await page.evaluate(mobilePanelState);
   expect(backLayout.listDisplay).toBe("block");
   expect(backLayout.readerDisplay).toBe("none");
@@ -149,14 +149,14 @@ test("read-later page can open a saved article", async ({ page }) => {
   await expect(page.getByLabel("排序")).toHaveValue("ranked");
   await page.getByLabel("排序").selectOption("read_later_desc");
   await expect(page.getByLabel("排序")).toHaveValue("read_later_desc");
-  await page.getByRole("button", { name: /E2E Article Extra 23/ }).click();
+  await page.getByRole("link", { name: /E2E Article Extra 23/ }).click();
   await expect(page.getByRole("heading", { name: "E2E Article Extra 23" })).toBeVisible();
 });
 
 test("liking an article exposes visible pressed UI state", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("button", { name: /E2E Article Alpha/ }).click();
+  await page.getByRole("link", { name: /E2E Article Alpha/ }).click();
   await expect(page.getByRole("heading", { name: "E2E Article Alpha" })).toBeVisible();
   const readerPanel = page.getByTestId("reader-scroll-container");
   await readerPanel.getByRole("button", { name: "点赞这篇文章" }).first().click();
@@ -196,7 +196,7 @@ async function blockExternalBrowserRequests(page: Page): Promise<void> {
 
 async function favoriteArticle(page: Page, title: string): Promise<void> {
   await page.getByRole("link", { name: "最新" }).click();
-  await page.getByRole("button", { name: new RegExp(title) }).click();
+  await page.getByRole("link", { name: new RegExp(title) }).click();
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
   const readerPanel = page.getByTestId("reader-scroll-container");
   const favorite = readerPanel.getByRole("button", { name: "收藏这篇文章" }).first();
@@ -208,12 +208,12 @@ async function favoriteArticle(page: Page, title: string): Promise<void> {
     );
   }
   await page.goBack();
-  await expect(page.getByRole("button", { name: new RegExp(title) })).toBeVisible();
+  await expect(page.getByRole("link", { name: new RegExp(title) })).toBeVisible();
 }
 
 async function saveArticleForLater(page: Page, title: string): Promise<void> {
   await page.getByRole("link", { name: "最新" }).click();
-  await page.getByRole("button", { name: new RegExp(title) }).click();
+  await page.getByRole("link", { name: new RegExp(title) }).click();
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
   const readerPanel = page.getByTestId("reader-scroll-container");
   const readLater = readerPanel.getByRole("button", { name: "稍后读这篇文章" }).first();
@@ -225,12 +225,12 @@ async function saveArticleForLater(page: Page, title: string): Promise<void> {
     );
   }
   await page.goBack();
-  await expect(page.getByRole("button", { name: new RegExp(title) })).toBeVisible();
+  await expect(page.getByRole("link", { name: new RegExp(title) })).toBeVisible();
 }
 
 async function firstArticleTitle(page: Page): Promise<string> {
   return page.getByTestId("article-list-scroll-container").evaluate((element) => {
-    const button = Array.from(element.querySelectorAll("button")).find((candidate) =>
+    const button = Array.from(element.querySelectorAll("a")).find((candidate) =>
       candidate.textContent?.includes("E2E Article")
     );
     return button?.textContent ?? "";

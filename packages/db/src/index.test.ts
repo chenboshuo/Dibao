@@ -145,6 +145,7 @@ describe("db package", () => {
         "ranking_eval_items",
         "recommendation_backfill_state",
         "recommendation_maintenance_schedule_state",
+        "embedding_usage_events",
         "jobs"
       ]) {
         expect(hasTableOrView(db, name), name).toBe(true);
@@ -157,6 +158,8 @@ describe("db package", () => {
       expect(hasColumn(db, "rank_model_weights", "n")).toBe(true);
       expect(hasColumn(db, "feed_stats", "clear_positive")).toBe(true);
       expect(hasColumn(db, "feed_stats", "source_confidence")).toBe(true);
+      expect(hasColumn(db, "interest_cluster_evidence", "article_title_snapshot")).toBe(true);
+      expect(hasColumn(db, "interest_cluster_evidence", "vector_blob_snapshot")).toBe(true);
       expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
     } finally {
       db.close();
@@ -177,13 +180,16 @@ describe("db package", () => {
         "003",
         "004",
         "005",
-        "006"
+        "006",
+        "007"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
       expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
       expect(hasColumn(db, "feed_stats", "clear_signal_count")).toBe(true);
       expect(hasTableOrView(db, "recommendation_maintenance_schedule_state")).toBe(true);
+      expect(hasTableOrView(db, "embedding_usage_events")).toBe(true);
+      expect(hasColumn(db, "interest_cluster_evidence", "feed_title_snapshot")).toBe(true);
 
       db.prepare(
         `
@@ -328,7 +334,8 @@ describe("db package", () => {
 
       expect(runMigrations(db, loadDefaultMigrations(), () => 2000).map((migration) => migration.version)).toEqual([
         "005",
-        "006"
+        "006",
+        "007"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -341,6 +348,7 @@ describe("db package", () => {
       expect(hasColumn(db, "feed_stats", "smoothed_positive_rate")).toBe(true);
       expect(hasIndex(db, "idx_duplicate_group_members_article_reason")).toBe(true);
       expect(hasTableOrView(db, "recommendation_maintenance_schedule_state")).toBe(true);
+      expect(hasTableOrView(db, "embedding_usage_events")).toBe(true);
     } finally {
       db.close();
     }
