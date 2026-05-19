@@ -95,6 +95,7 @@ export class FeedManagementService {
     const input = readObjectBody(body);
     const title = input.title === undefined ? undefined : parseTitle(input.title, "title");
     const folderId = input.folderId === undefined ? undefined : parseFolderId(input.folderId);
+    const feedUrl = input.feedUrl === undefined ? undefined : parseFeedUrl(input.feedUrl);
     const enabled = input.enabled === undefined ? undefined : parseBoolean(input.enabled, "enabled");
     const sourceWeight =
       input.sourceWeight === undefined ? undefined : parseSourceWeight(input.sourceWeight);
@@ -105,6 +106,7 @@ export class FeedManagementService {
       id,
       ...(title !== undefined ? { title } : {}),
       ...(folderId !== undefined ? { folderId } : {}),
+      ...(feedUrl !== undefined ? { feedUrl } : {}),
       ...(enabled !== undefined ? { enabled } : {}),
       ...(sourceWeight !== undefined ? { sourceWeight } : {}),
       now: this.now()
@@ -183,6 +185,31 @@ function parseFolderId(value: unknown): string | null {
   }
 
   return trimmed;
+}
+
+function parseFeedUrl(value: unknown): string {
+  if (typeof value !== "string") {
+    throw validationError("feedUrl must be a string", { field: "feedUrl" });
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw validationError("feedUrl is required", { field: "feedUrl" });
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw validationError("feedUrl must be a valid URL", { field: "feedUrl" });
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw validationError("feedUrl must use http or https", { field: "feedUrl" });
+  }
+
+  url.hash = "";
+  return url.toString();
 }
 
 function parseBoolean(value: unknown, field: string): boolean {

@@ -4,16 +4,20 @@ import {
   MAX_ARTICLE_RETENTION_DAYS,
   MIN_ARTICLE_RETENTION_DAYS,
   RETENTION_ARTICLE_DAYS_SETTING_KEY,
+  RETENTION_SETTINGS_KEY,
   parseRetentionDays
 } from "./article-retention-service.js";
 
 export const UI_LOCALE_SETTING_KEY = "ui.locale";
+export const UI_DEFAULT_HOME_VIEW_SETTING_KEY = "ui.defaultHomeView";
 export const READER_SETTINGS_KEY = "reader.settings";
 export const BEHAVIOR_SETTINGS_KEY = "behavior.settings";
 export const RECOMMENDATION_SETTINGS_KEY = "recommendation.settings";
 
 export const supportedSettingsLocales = ["zh-CN", "en-US"] as const;
 export type SettingsLocale = (typeof supportedSettingsLocales)[number];
+export const supportedDefaultHomeViews = ["recommended", "latest"] as const;
+export type DefaultHomeView = (typeof supportedDefaultHomeViews)[number];
 
 export type ReaderSettings = {
   fontSize: number;
@@ -26,6 +30,7 @@ export type ReaderSettings = {
 export type AppSettings = {
   ui: {
     locale: SettingsLocale;
+    defaultHomeView: DefaultHomeView;
   };
   reader: ReaderSettings;
   behavior: {
@@ -34,8 +39,8 @@ export type AppSettings = {
   };
   retention: {
     retentionDays: number;
-    keepFavorites: true;
-    keepReadLater: true;
+    keepFavorites: boolean;
+    keepReadLater: boolean;
   };
   ranking: {
     preferFreshness: number;
@@ -63,9 +68,14 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
 };
 
 const DEFAULT_LOCALE: SettingsLocale = "zh-CN";
+const DEFAULT_HOME_VIEW: DefaultHomeView = "recommended";
 const DEFAULT_BEHAVIOR_SETTINGS = {
   markScrolledArticlesIgnored: true,
   removeReadLaterOnReadComplete: false
+} as const;
+const DEFAULT_RETENTION_SETTINGS = {
+  keepFavorites: true,
+  keepReadLater: true
 } as const;
 const DEFAULT_RANKING_SETTINGS = {
   preferFreshness: 0.5,
@@ -92,10 +102,13 @@ type ReaderSettingsPatch = Partial<
 type SettingsPatch = {
   ui?: {
     locale?: SettingsLocale;
+    defaultHomeView?: DefaultHomeView;
   };
   reader?: ReaderSettingsPatch;
   retention?: {
     retentionDays?: number;
+    keepFavorites?: boolean;
+    keepReadLater?: boolean;
   };
   behavior?: {
     markScrolledArticlesIgnored?: boolean;
@@ -140,14 +153,14 @@ export class SettingsService {
   getSettings(): AppSettings {
     return {
       ui: {
-        locale: this.readLocale()
+        locale: this.readLocale(),
+        defaultHomeView: this.readDefaultHomeView()
       },
       reader: this.readReaderSettings(),
       behavior: this.readBehaviorSettings(),
       retention: {
         retentionDays: this.readRetentionDays(),
-        keepFavorites: true,
-        keepReadLater: true
+        ...this.readRetentionSettings()
       },
       ranking: {
         ...this.readRecommendationSettings()
@@ -161,6 +174,14 @@ export class SettingsService {
 
     if (patch.ui?.locale !== undefined) {
       this.options.settings.setJson(UI_LOCALE_SETTING_KEY, patch.ui.locale, now);
+    }
+
+    if (patch.ui?.defaultHomeView !== undefined) {
+      this.options.settings.setJson(
+        UI_DEFAULT_HOME_VIEW_SETTING_KEY,
+        patch.ui.defaultHomeView,
+        now
+      );
     }
 
     if (patch.reader !== undefined && Object.keys(patch.reader).length > 0) {
@@ -178,6 +199,25 @@ export class SettingsService {
       this.options.settings.setJson(
         RETENTION_ARTICLE_DAYS_SETTING_KEY,
         patch.retention.retentionDays,
+        now
+      );
+    }
+
+    if (
+      patch.retention?.keepFavorites !== undefined ||
+      patch.retention?.keepReadLater !== undefined
+    ) {
+      this.options.settings.setJson(
+        RETENTION_SETTINGS_KEY,
+        {
+          ...this.readRetentionSettings(),
+          ...(patch.retention.keepFavorites !== undefined
+            ? { keepFavorites: patch.retention.keepFavorites }
+            : {}),
+          ...(patch.retention.keepReadLater !== undefined
+            ? { keepReadLater: patch.retention.keepReadLater }
+            : {})
+        },
         now
       );
     }
@@ -216,6 +256,11 @@ export class SettingsService {
   private readLocale(): SettingsLocale {
     const locale = this.options.settings.getJson<unknown>(UI_LOCALE_SETTING_KEY);
     return isSettingsLocale(locale) ? locale : DEFAULT_LOCALE;
+  }
+
+  private readDefaultHomeView(): DefaultHomeView {
+    const view = this.options.settings.getJson<unknown>(UI_DEFAULT_HOME_VIEW_SETTING_KEY);
+    return isDefaultHomeView(view) ? view : DEFAULT_HOME_VIEW;
   }
 
   private readReaderSettings(): ReaderSettings {
@@ -270,6 +315,22 @@ export class SettingsService {
         typeof input.removeReadLaterOnReadComplete === "boolean"
           ? input.removeReadLaterOnReadComplete
           : DEFAULT_BEHAVIOR_SETTINGS.removeReadLaterOnReadComplete
+    };
+  }
+
+  private readRetentionSettings(): Pick<AppSettings["retention"], "keepFavorites" | "keepReadLater"> {
+    const stored = this.options.settings.getJson<unknown>(RETENTION_SETTINGS_KEY);
+    const input = isPlainObject(stored) ? stored : {};
+
+    return {
+      keepFavorites:
+        typeof input.keepFavorites === "boolean"
+          ? input.keepFavorites
+          : DEFAULT_RETENTION_SETTINGS.keepFavorites,
+      keepReadLater:
+        typeof input.keepReadLater === "boolean"
+          ? input.keepReadLater
+          : DEFAULT_RETENTION_SETTINGS.keepReadLater
     };
   }
 
@@ -415,22 +476,31 @@ function parseBehaviorPatch(value: unknown): SettingsPatch["behavior"] {
 
 function parseUiPatch(value: unknown): SettingsPatch["ui"] {
   const input = readSectionObject(value, "ui");
-  rejectUnknownKeys(input, ["locale"], "ui");
+  rejectUnknownKeys(input, ["locale", "defaultHomeView"], "ui");
 
-  if (!Object.hasOwn(input, "locale")) {
-    return {};
+  const patch: NonNullable<SettingsPatch["ui"]> = {};
+
+  if (Object.hasOwn(input, "locale")) {
+    if (!isSettingsLocale(input.locale)) {
+      throw validationError("ui.locale must be zh-CN or en-US", {
+        field: "ui.locale",
+        allowed: supportedSettingsLocales
+      });
+    }
+    patch.locale = input.locale;
   }
 
-  if (!isSettingsLocale(input.locale)) {
-    throw validationError("ui.locale must be zh-CN or en-US", {
-      field: "ui.locale",
-      allowed: supportedSettingsLocales
-    });
+  if (Object.hasOwn(input, "defaultHomeView")) {
+    if (!isDefaultHomeView(input.defaultHomeView)) {
+      throw validationError("ui.defaultHomeView must be recommended or latest", {
+        field: "ui.defaultHomeView",
+        allowed: supportedDefaultHomeViews
+      });
+    }
+    patch.defaultHomeView = input.defaultHomeView;
   }
 
-  return {
-    locale: input.locale
-  };
+  return patch;
 }
 
 function parseReaderPatch(value: unknown): ReaderSettingsPatch {
@@ -469,33 +539,43 @@ function parseReaderPatch(value: unknown): ReaderSettingsPatch {
 
 function parseRetentionPatch(value: unknown): SettingsPatch["retention"] {
   const input = readSectionObject(value, "retention");
-  rejectUnknownKeys(input, ["retentionDays"], "retention");
+  rejectUnknownKeys(input, ["retentionDays", "keepFavorites", "keepReadLater"], "retention");
 
-  if (!Object.hasOwn(input, "retentionDays")) {
-    return {};
+  const patch: NonNullable<SettingsPatch["retention"]> = {};
+
+  if (Object.hasOwn(input, "retentionDays")) {
+    if (typeof input.retentionDays !== "number") {
+      throw validationError("retention.retentionDays must be a number", {
+        field: "retention.retentionDays"
+      });
+    }
+
+    const retentionDays = parseRetentionDays(input.retentionDays);
+    if (retentionDays === null) {
+      throw validationError(
+        `retention.retentionDays must be an integer between ${MIN_ARTICLE_RETENTION_DAYS} and ${MAX_ARTICLE_RETENTION_DAYS}`,
+        {
+          field: "retention.retentionDays",
+          min: MIN_ARTICLE_RETENTION_DAYS,
+          max: MAX_ARTICLE_RETENTION_DAYS
+        }
+      );
+    }
+    patch.retentionDays = retentionDays;
   }
 
-  if (typeof input.retentionDays !== "number") {
-    throw validationError("retention.retentionDays must be a number", {
-      field: "retention.retentionDays"
-    });
-  }
-
-  const retentionDays = parseRetentionDays(input.retentionDays);
-  if (retentionDays === null) {
-    throw validationError(
-      `retention.retentionDays must be an integer between ${MIN_ARTICLE_RETENTION_DAYS} and ${MAX_ARTICLE_RETENTION_DAYS}`,
-      {
-        field: "retention.retentionDays",
-        min: MIN_ARTICLE_RETENTION_DAYS,
-        max: MAX_ARTICLE_RETENTION_DAYS
+  for (const key of ["keepFavorites", "keepReadLater"] as const) {
+    if (Object.hasOwn(input, key)) {
+      if (typeof input[key] !== "boolean") {
+        throw validationError(`retention.${key} must be a boolean`, {
+          field: `retention.${key}`
+        });
       }
-    );
+      patch[key] = input[key];
+    }
   }
 
-  return {
-    retentionDays
-  };
+  return patch;
 }
 
 function readBodyObject(value: unknown): Record<string, unknown> {
@@ -609,6 +689,13 @@ function isSettingsLocale(value: unknown): value is SettingsLocale {
   return (
     typeof value === "string" &&
     (supportedSettingsLocales as readonly string[]).includes(value)
+  );
+}
+
+function isDefaultHomeView(value: unknown): value is DefaultHomeView {
+  return (
+    typeof value === "string" &&
+    (supportedDefaultHomeViews as readonly string[]).includes(value)
   );
 }
 

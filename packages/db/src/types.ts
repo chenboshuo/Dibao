@@ -124,6 +124,7 @@ export type UpdateFeedInput = {
   id: string;
   title?: string;
   folderId?: string | null;
+  feedUrl?: string;
   enabled?: boolean;
   sourceWeight?: number;
   now?: number;

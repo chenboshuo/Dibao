@@ -65,7 +65,12 @@ export interface ArticleRepository {
     articleIds?: string[];
     limit?: number;
   }): ArticleEmbeddingCandidateRow[];
-  listRetentionCandidates(input: { cutoff: number; limit?: number }): ArticleRetentionCandidateRow[];
+  listRetentionCandidates(input: {
+    cutoff: number;
+    keepFavorites?: boolean;
+    keepReadLater?: boolean;
+    limit?: number;
+  }): ArticleRetentionCandidateRow[];
   list(input?: ArticleListInput): ArticleListResult;
   upsert(input: UpsertArticleInput): ArticleRow;
   upsertContent(input: UpsertArticleContentInput): void;
@@ -217,9 +222,26 @@ export class SqliteArticleRepository implements ArticleRepository {
 
   listRetentionCandidates(input: {
     cutoff: number;
+    keepFavorites?: boolean;
+    keepReadLater?: boolean;
     limit?: number;
   }): ArticleRetentionCandidateRow[] {
     const limit = normalizeLimit(input.limit);
+    const conditions = [
+      "a.deleted_at is null",
+      "a.status != 'deleted'",
+      "coalesce(a.published_at, a.discovered_at) < ?"
+    ];
+    const params: unknown[] = [input.cutoff];
+
+    if (input.keepFavorites ?? true) {
+      conditions.push("s.favorited_at is null");
+    }
+
+    if (input.keepReadLater ?? true) {
+      conditions.push("s.read_later_at is null");
+    }
+    params.push(limit);
 
     return (
       this.db
@@ -230,16 +252,12 @@ export class SqliteArticleRepository implements ArticleRepository {
               coalesce(a.published_at, a.discovered_at) as retainedAt
             from articles a
             left join article_states s on s.article_id = a.id
-            where a.deleted_at is null
-              and a.status != 'deleted'
-              and coalesce(a.published_at, a.discovered_at) < ?
-              and s.favorited_at is null
-              and s.read_later_at is null
+            where ${conditions.join("\n              and ")}
             order by coalesce(a.published_at, a.discovered_at), a.id
             limit ?
           `
         )
-        .all(input.cutoff, limit) as ArticleRetentionCandidateRow[]
+        .all(...params) as ArticleRetentionCandidateRow[]
     );
   }
 

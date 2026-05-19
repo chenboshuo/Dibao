@@ -155,7 +155,8 @@ describe("web API client", () => {
 
       const settings = {
         ui: {
-          locale: "en-US"
+          locale: "en-US",
+          defaultHomeView: "latest"
         },
         reader: {
           fontSize: 20,
@@ -166,7 +167,7 @@ describe("web API client", () => {
         },
         retention: {
           retentionDays: 45,
-          keepFavorites: true,
+          keepFavorites: false,
           keepReadLater: true
         },
         ranking: {
@@ -197,22 +198,26 @@ describe("web API client", () => {
 
     await expect(api.getSettings()).resolves.toMatchObject({
       ui: {
-        locale: "en-US"
+        locale: "en-US",
+        defaultHomeView: "latest"
       },
       retention: {
-        retentionDays: 45
+        retentionDays: 45,
+        keepFavorites: false
       }
     });
     await expect(
       api.updateSettings({
         ui: {
-          locale: "en-US"
+          locale: "en-US",
+          defaultHomeView: "latest"
         },
         reader: {
           fontSize: 20
         },
         retention: {
-          retentionDays: 45
+          retentionDays: 45,
+          keepFavorites: false
         }
       })
     ).resolves.toMatchObject({
@@ -235,13 +240,15 @@ describe("web API client", () => {
         method: "PATCH",
         body: {
           ui: {
-            locale: "en-US"
+            locale: "en-US",
+            defaultHomeView: "latest"
           },
           reader: {
             fontSize: 20
           },
           retention: {
-            retentionDays: 45
+            retentionDays: 45,
+            keepFavorites: false
           }
         }
       }
@@ -539,6 +546,7 @@ describe("web API client", () => {
     await api.deleteFeedFolder("folder/design");
     await api.updateFeed("feed/design", {
       title: "Design Feed",
+      feedUrl: "https://example.com/design.xml",
       folderId: "folder_design",
       enabled: false,
       sourceWeight: 0.2
@@ -579,6 +587,7 @@ describe("web API client", () => {
         method: "PATCH",
         body: {
           title: "Design Feed",
+          feedUrl: "https://example.com/design.xml",
           folderId: "folder_design",
           enabled: false,
           sourceWeight: 0.2

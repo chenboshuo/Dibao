@@ -184,7 +184,10 @@ export const zhCN = {
         body: "选择界面语言。设置保存后刷新页面仍会生效。",
         localeLabel: "界面语言",
         zhCN: "简体中文",
-        enUS: "English"
+        enUS: "English",
+        defaultHomeViewLabel: "首页默认打开",
+        defaultHomeViewRecommended: "推荐",
+        defaultHomeViewLatest: "最新"
       },
       behavior: {
         title: "行为记录",
@@ -205,7 +208,7 @@ export const zhCN = {
       },
       retention: {
         title: "文章保留",
-        body: "超过保留天数的普通文章会由后台清理；填 0 表示永久保留。收藏和稍后读保留策略本轮固定开启。",
+        body: "超过保留天数的文章会由后台清理；填 0 表示永久保留。收藏和稍后读可单独选择是否始终保留。",
         retentionDays: "保留天数",
         keepFavorites: "保留收藏文章",
         keepReadLater: "保留稍后读文章",
@@ -376,11 +379,17 @@ export const zhCN = {
     sections: {
       currentStatus: "当前推荐状态",
       currentClusters: "当前兴趣簇",
+      algorithmExplanation: "算法解释",
       terms: "先解释几个词",
       scoreTable: "行为积分表",
       rankingFlow: "排序流程图",
       channelRules: "频道排序规则",
       dataAndFallback: "本地数据与 fallback"
+    },
+    statusTones: {
+      normal: "正常",
+      warning: "警告",
+      stopped: "停摆"
     },
     fields: {
       provider: "Provider",
@@ -422,6 +431,11 @@ export const zhCN = {
     },
     terms: [
       {
+        term: "Embedding",
+        description:
+          "Embedding 是文章内容的向量表示。邸报用它比较文章和兴趣簇的语义距离；provider 只负责生成向量，不决定最终排序。"
+      },
+      {
         term: "用户模型卡",
         description:
           "邸报不会为每篇文章写一张静态卡片，而是把你的行为沉淀成一组正向/负向兴趣簇、来源偏好和文章状态。推荐排序时会拿候选文章向量与这些兴趣簇比较。"
@@ -440,6 +454,41 @@ export const zhCN = {
         term: "基础排序",
         description:
           "没有 provider、没有 embedding 或画像还不足时，系统使用基础排序：主要看发布时间、来源权重和显式状态，不做语义相似度匹配。"
+      },
+      {
+        term: "MMR",
+        description:
+          "MMR 用来在相似文章之间做轻量分散，避免同一主题连续占满推荐列表；信息茧房水平会影响它的分散强度。"
+      }
+    ],
+    algorithmExplanation: [
+      {
+        name: "候选收集",
+        role: "根据当前频道、来源、分组、未读/今日筛选和分页产生候选池。"
+      },
+      {
+        name: "可见性过滤",
+        role: "隐藏、不感兴趣、已删除文章会从普通列表中移除；收藏和稍后读频道保留各自队列语义。"
+      },
+      {
+        name: "语义匹配",
+        role: "有 active embedding index 时，计算候选文章与正向/负向兴趣簇的相似度。"
+      },
+      {
+        name: "来源与新鲜度",
+        role: "叠加手动来源权重、feed_stats 来源偏好和发布时间衰减，保证 RSS 时间线仍可解释。"
+      },
+      {
+        name: "状态与负反馈",
+        role: "收藏、点赞、稍后读、阅读进度提升短期排序；不感兴趣会清除其他状态并压低相似主题。"
+      },
+      {
+        name: "去重与 MMR",
+        role: "近重复、曝光和多样性惩罚会在最后阶段修正排序，减少重复主题挤占列表。"
+      },
+      {
+        name: "Fallback",
+        role: "当 provider、index、coverage 或画像不足时，系统退回基础排序，但阅读与列表仍可用。"
       }
     ],
     scoreTable: {
@@ -892,7 +941,10 @@ export const enUS = {
         body: "Choose the interface language. Saved settings remain after refresh.",
         localeLabel: "Interface language",
         zhCN: "简体中文",
-        enUS: "English"
+        enUS: "English",
+        defaultHomeViewLabel: "Default home view",
+        defaultHomeViewRecommended: "Recommended",
+        defaultHomeViewLatest: "Latest"
       },
       behavior: {
         title: "Behavior tracking",
@@ -913,7 +965,7 @@ export const enUS = {
       },
       retention: {
         title: "Article retention",
-        body: "Background cleanup removes ordinary articles older than the retention window. Use 0 to keep articles forever. Favorite and read-later retention stay enabled in this version.",
+        body: "Background cleanup removes articles older than the retention window. Use 0 to keep articles forever. Favorites and read-later items can be kept independently.",
         retentionDays: "Retention days",
         keepFavorites: "Keep favorited articles",
         keepReadLater: "Keep read-later articles",
@@ -1084,11 +1136,17 @@ export const enUS = {
     sections: {
       currentStatus: "Current recommendation status",
       currentClusters: "Current interest clusters",
+      algorithmExplanation: "Algorithm explanation",
       terms: "Terms",
       scoreTable: "Behavior score table",
       rankingFlow: "Ranking flow",
       channelRules: "Channel rules",
       dataAndFallback: "Local data and fallback"
+    },
+    statusTones: {
+      normal: "Normal",
+      warning: "Warning",
+      stopped: "Stopped"
     },
     fields: {
       provider: "Provider",
@@ -1130,6 +1188,11 @@ export const enUS = {
     },
     terms: [
       {
+        term: "Embedding",
+        description:
+          "An embedding is the vector representation of article content. Dibao uses it to compare articles with interest clusters; the provider generates vectors but does not decide the final ranking."
+      },
+      {
         term: "User profile card",
         description:
           "Dibao does not write one static card per article. It turns your behavior into positive and negative interest clusters, source preferences, and article state. Ranking compares candidate article vectors with those clusters."
@@ -1148,6 +1211,41 @@ export const enUS = {
         term: "Baseline ranking",
         description:
           "When there is no provider, no embedding, or not enough profile signal, Dibao uses baseline ranking: time, source weight, and explicit article state, without semantic similarity matching."
+      },
+      {
+        term: "MMR",
+        description:
+          "MMR lightly diversifies similar articles so one topic does not fill the list. Cocoon level changes how much diversity is applied."
+      }
+    ],
+    algorithmExplanation: [
+      {
+        name: "Candidate collection",
+        role: "Builds the candidate pool from channel, source, folder, unread/today filters, and pagination."
+      },
+      {
+        name: "Visibility filter",
+        role: "Hidden, not-interested, and deleted articles leave normal lists while favorites and read-later keep their queue semantics."
+      },
+      {
+        name: "Semantic matching",
+        role: "When an active embedding index exists, compares candidate articles with positive and negative interest clusters."
+      },
+      {
+        name: "Source and freshness",
+        role: "Combines manual source weight, feed_stats source preference, and time decay so the RSS timeline remains explainable."
+      },
+      {
+        name: "State and negative feedback",
+        role: "Favorites, likes, read-later saves, and reading progress boost ranking; not interested clears other states and lowers similar topics."
+      },
+      {
+        name: "Dedupe and MMR",
+        role: "Near-duplicate, exposure, and diversity corrections are applied near the end to reduce repeated topics."
+      },
+      {
+        name: "Fallback",
+        role: "If provider, index, coverage, or profile data is insufficient, Dibao falls back to baseline ranking while reading remains available."
       }
     ],
     scoreTable: {

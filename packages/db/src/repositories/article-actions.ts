@@ -34,6 +34,7 @@ type ArticleStateDbRow = {
   readingProgress: number;
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
+  notInterestedAt: number | null;
 };
 
 export interface ArticleActionRepository {
@@ -233,7 +234,17 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
       case "not_interested":
         return {
           sql:
-            "update article_states set not_interested_at = ?, updated_at = ? where article_id = ?",
+            `update article_states
+             set
+               read_at = null,
+               favorited_at = null,
+               liked_at = null,
+               read_later_at = null,
+               hidden_at = null,
+               not_interested_at = ?,
+               reading_progress = 0,
+               updated_at = ?
+             where article_id = ?`,
           params: [input.now, input.now, input.articleId]
         };
       case "read_progress":
@@ -280,7 +291,8 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
               from behavior_events be
               where be.article_id = article_states.article_id
                 and be.event_type = 'impression'
-            ) as lastIgnoredAt
+            ) as lastIgnoredAt,
+            not_interested_at as notInterestedAt
           from article_states
           where article_id = ?
         `
@@ -301,16 +313,15 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
       readingProgress: row.readingProgress,
       interactionStatus: interactionStatusForState(row),
       openedAt: row.lastOpenedAt,
-      ignoredAt:
-        row.lastIgnoredAt !== null &&
-        (row.lastOpenedAt === null || row.lastIgnoredAt > row.lastOpenedAt)
-          ? row.lastIgnoredAt
-          : null
+      ignoredAt: ignoredAtForState(row)
     };
   }
 }
 
 function interactionStatusForState(row: ArticleStateDbRow): ArticleInteractionStatus {
+  if (row.notInterested === 1) {
+    return "ignored";
+  }
   if (row.read === 1 || row.readingProgress >= 0.9) {
     return "read";
   }
@@ -324,6 +335,17 @@ function interactionStatusForState(row: ArticleStateDbRow): ArticleInteractionSt
     return "ignored";
   }
   return "unseen";
+}
+
+function ignoredAtForState(row: ArticleStateDbRow): number | null {
+  if (row.notInterestedAt !== null) {
+    return row.notInterestedAt;
+  }
+
+  return row.lastIgnoredAt !== null &&
+    (row.lastOpenedAt === null || row.lastIgnoredAt > row.lastOpenedAt)
+    ? row.lastIgnoredAt
+    : null;
 }
 
 function serializeMetadata(input: RecordArticleActionInput): string | null {

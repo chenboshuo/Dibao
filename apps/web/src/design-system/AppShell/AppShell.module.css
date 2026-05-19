@@ -146,11 +146,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: var(--color-ink);
-  color: var(--color-surface);
-  font-family: var(--font-reader-serif);
-  font-size: 21px;
-  font-weight: var(--weight-bold);
-  line-height: 1;
+  object-fit: cover;
 }
 
 .nav {
@@ -287,6 +283,12 @@
   background: var(--color-surface);
 }
 
+.feedManagementSection {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
 .managementSection:last-child {
   border-right: 0;
 }
@@ -382,6 +384,13 @@
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 1fr);
   min-height: 0;
+}
+
+.feedManagementGrid > .managementList,
+.feedManagementGrid > .managementEditor {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .managementFeedItem,
@@ -551,6 +560,76 @@
   color: var(--color-muted);
   font-size: var(--text-sm);
   line-height: 1.6;
+}
+
+.algorithmStatusGrid,
+.algorithmExplanationList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+
+.algorithmStatusCard,
+.algorithmExplanationList article {
+  display: grid;
+  gap: var(--space-1);
+  border: var(--border-subtle);
+  padding: var(--space-3);
+  background: var(--color-paper);
+}
+
+.algorithmStatusCard {
+  border-left: 3px solid var(--color-matsu);
+}
+
+.algorithmStatusCard[data-status="warning"] {
+  border-left-color: var(--color-ochre);
+}
+
+.algorithmStatusCard[data-status="stopped"] {
+  border-left-color: var(--color-vermilion);
+}
+
+.algorithmStatusCard strong,
+.algorithmExplanationList strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.algorithmStatusCard p,
+.algorithmExplanationList p {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.algorithmStatusNormal,
+.algorithmStatusWarning,
+.algorithmStatusStopped {
+  width: fit-content;
+  border: var(--border-subtle);
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.algorithmStatusNormal {
+  border-color: var(--color-matsu);
+  background: var(--color-matsu-soft);
+  color: var(--color-matsu);
+}
+
+.algorithmStatusWarning {
+  border-color: var(--color-ochre);
+  background: var(--color-ochre-soft);
+  color: var(--color-ochre);
+}
+
+.algorithmStatusStopped {
+  border-color: var(--color-vermilion);
+  background: var(--color-vermilion-soft);
+  color: var(--color-vermilion);
 }
 
 .algorithmClusterGrid {
@@ -1688,17 +1767,14 @@
 .explanationBox {
   display: grid;
   gap: var(--space-2);
-  border: var(--border-subtle);
-  border-left: 3px solid var(--color-pine);
   border-radius: 0;
-  padding: var(--space-4);
-  background: var(--color-pine-soft);
+  padding: 0;
+  background: transparent;
   font-family: var(--font-ui);
 }
 
 .explanationInlineCard {
-  border-left-width: 2px;
-  background: var(--color-surface);
+  background: transparent;
 }
 
 .explanationHeader {
@@ -1813,6 +1889,7 @@
 .explanationPopover {
   width: min(420px, calc(100vw - 32px));
   border: var(--border-default);
+  border-left: 3px solid var(--color-pine);
   border-radius: 0;
   background: var(--color-surface);
   box-shadow: var(--shadow-popover);
@@ -2394,7 +2471,7 @@
     overflow: auto;
     border-right: 0;
     border-bottom: 0;
-    border-left: 0;
+    border-left: 3px solid var(--color-pine);
     border-radius: 0;
     padding: var(--space-4);
   }

@@ -28,6 +28,7 @@ export type FeedFolder = {
 export type UpdateFeedInput = {
   title?: string;
   folderId?: string | null;
+  feedUrl?: string;
   enabled?: boolean;
   sourceWeight?: number;
 };
@@ -162,6 +163,7 @@ export type SetupStatus = {
 };
 
 export type SettingsLocale = "zh-CN" | "en-US";
+export type DefaultHomeView = "recommended" | "latest";
 
 export type ReaderSettings = {
   fontSize: number;
@@ -174,6 +176,7 @@ export type ReaderSettings = {
 export type AppSettings = {
   ui: {
     locale: SettingsLocale;
+    defaultHomeView: DefaultHomeView;
   };
   reader: ReaderSettings;
   behavior: {
@@ -182,8 +185,8 @@ export type AppSettings = {
   };
   retention: {
     retentionDays: number;
-    keepFavorites: true;
-    keepReadLater: true;
+    keepFavorites: boolean;
+    keepReadLater: boolean;
   };
   ranking: {
     preferFreshness: number;
@@ -200,6 +203,7 @@ export type AppSettings = {
 export type UpdateSettingsInput = {
   ui?: {
     locale?: SettingsLocale;
+    defaultHomeView?: DefaultHomeView;
   };
   reader?: Partial<
     Pick<ReaderSettings, "fontSize" | "lineHeight" | "paragraphGap" | "readerWidth">
@@ -210,6 +214,8 @@ export type UpdateSettingsInput = {
   };
   retention?: {
     retentionDays?: number;
+    keepFavorites?: boolean;
+    keepReadLater?: boolean;
   };
   ranking?: {
     cocoonLevel?: number;
@@ -401,6 +407,12 @@ export type RecommendationTransparency = RecommendationStatus & {
       duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active";
       evidence: "dynamic_fallback" | "reconstructed" | "live_evidence";
     };
+    algorithmModules: Array<{
+      id: string;
+      name: string;
+      status: "normal" | "warning" | "stopped";
+      summary: string;
+    }>;
     failureStates: Record<string, boolean>;
   };
 };
@@ -451,7 +463,8 @@ export type RefreshAllFeedsResponse = {
 
 export const defaultAppSettings: AppSettings = {
   ui: {
-    locale: "zh-CN"
+    locale: "zh-CN",
+    defaultHomeView: "recommended"
   },
   reader: {
     fontSize: 18,

@@ -1686,7 +1686,7 @@ function rankReasonsFor(
     });
   }
 
-  if (bm25Score > MIN_REASON_SCORE) {
+  if (bm25Score > MIN_REASON_SCORE && (rank.semanticScore ?? rank.interestScore) <= MIN_REASON_SCORE) {
     candidates.push({
       type: "interest",
       label: "Keyword/BM25 match",

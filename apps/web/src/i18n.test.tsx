@@ -402,6 +402,72 @@ describe("web i18n", () => {
     expect(html).toContain("兴趣簇 +1 / -0");
   });
 
+  it("renders article summaries as plain text in the list", () => {
+    const article: ArticleListItem = {
+      id: "article_html_summary",
+      feedId: "feed_design",
+      feedTitle: "Design Feed",
+      title: "HTML summary",
+      url: "https://example.com/article",
+      author: null,
+      summary: "<p>摘要 <strong>正文</strong> &amp; 线索</p>",
+      publishedAt: "2026-05-14T08:00:00.000Z",
+      discoveredAt: "2026-05-14T08:00:00.000Z",
+      state: {
+        read: false,
+        favorited: false,
+        liked: false,
+        readLater: false,
+        hidden: false,
+        notInterested: false,
+        readingProgress: 0,
+        interactionStatus: "unseen",
+        openedAt: null,
+        ignoredAt: null
+      }
+    };
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleListPanel
+          articleError={null}
+          articleView="latest"
+          articles={[article]}
+          favoriteSort="favorited_desc"
+          readLaterSort="ranked"
+          feedCount={1}
+          isIgnoreTelemetryEnabled={false}
+          isArticlesLoading={false}
+          isLoadingMore={false}
+          isRecommendationStatusLoading={false}
+          loadMoreError={null}
+          nextCursor={null}
+          onFavoriteSortChange={() => undefined}
+          onReadLaterSortChange={() => undefined}
+          onIgnoreArticle={() => undefined}
+          onLoadMore={() => undefined}
+          onOpenSources={() => undefined}
+          onExplainArticle={() => undefined}
+          onSelectArticle={() => undefined}
+          onTodayOnlyChange={() => undefined}
+          onUnreadOnlyChange={() => undefined}
+          recommendationStatus={null}
+          recommendationStatusError={null}
+          selectedArticleId={null}
+          selectedFeed={null}
+          selectedFolder={null}
+          showRecommendationStatus={false}
+          showQuickFilters={true}
+          todayOnly={false}
+          unreadCount={1}
+          unreadOnly={false}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("摘要 正文 &amp; 线索");
+    expect(html).not.toContain("&lt;strong&gt;");
+  });
+
   it("only renders row recommendation explain actions for personalized views", () => {
     const article = articleListItem("article_fixture", "unseen");
     const latestHtml = renderToStaticMarkup(
@@ -666,8 +732,11 @@ describe("web i18n", () => {
     expect(html).toContain("支撑文章 2");
     expect(html).toContain("SINGLE_SOURCE_DOMINANT");
     expect(html).toContain("用户模型卡");
+    expect(html).toContain("Embedding");
+    expect(html).toContain("MMR");
+    expect(html).toContain("算法解释");
+    expect(html).toContain("候选收集");
     expect(html).toContain("+8.0");
-    expect(html).toContain("排序流程图");
     expect(html).toContain("收藏：是资料库/书签");
     expect(html).toContain("fallback 到基础排序");
   });
@@ -777,6 +846,7 @@ onDeleteEmbeddingProvider={() => Promise.resolve()}
 
     expect(html).toContain("设置");
     expect(html).toContain("界面语言");
+    expect(html).toContain("首页默认打开");
     expect(html).toContain("查看算法透明说明");
     expect(html).toContain("稍后读中的文章读完后，自动移出稍后读");
     expect(html).toContain("type=\"range\"");

@@ -36,6 +36,9 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("textbox", { name: "访问密码" }).fill(accessPassword);
     await page.getByRole("button", { name: "登录" }).click();
 
+    await expect(page.getByRole("heading", { name: "推荐文章" })).toBeVisible();
+    await page.getByRole("link", { name: "最新" }).click();
+    await expect(page.getByRole("heading", { name: "最新文章" })).toBeVisible();
     await expect(page.getByRole("button", { name: /E2E Article Beta/ })).toBeVisible();
     await page.getByRole("button", { name: "只看未读" }).click();
     await page.getByTestId("article-list-scroll-container").evaluate((element) => {
@@ -145,7 +148,8 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("link", { name: "查看算法透明说明" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "算法透明说明" })).toBeVisible();
     await expect(page.getByText("当前推荐状态")).toBeVisible();
-    await expect(page.getByText("排序流程图")).toBeVisible();
+    await expect(page.getByText("算法解释")).toBeVisible();
+    await expect(page.getByText("候选收集")).toBeVisible();
 
     await page.getByRole("link", { name: "订阅源" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "订阅源管理" })).toBeVisible();

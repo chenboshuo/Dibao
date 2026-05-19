@@ -6,6 +6,7 @@ import type {
 import type { VectorStore } from "@dibao/db";
 
 export const RETENTION_ARTICLE_DAYS_SETTING_KEY = "retention.articleDays";
+export const RETENTION_SETTINGS_KEY = "retention.settings";
 export const DEFAULT_ARTICLE_RETENTION_DAYS = 60;
 export const MIN_ARTICLE_RETENTION_DAYS = 0;
 export const MAX_ARTICLE_RETENTION_DAYS = 3650;
@@ -50,9 +51,25 @@ export class ArticleRetentionService {
     return DEFAULT_ARTICLE_RETENTION_DAYS;
   }
 
+  getRetentionPolicy(): { keepFavorites: boolean; keepReadLater: boolean } {
+    const stored = this.options.settings.getJson<unknown>(RETENTION_SETTINGS_KEY);
+    const input =
+      typeof stored === "object" && stored !== null && !Array.isArray(stored)
+        ? (stored as Record<string, unknown>)
+        : {};
+
+    return {
+      keepFavorites:
+        typeof input.keepFavorites === "boolean" ? input.keepFavorites : true,
+      keepReadLater:
+        typeof input.keepReadLater === "boolean" ? input.keepReadLater : true
+    };
+  }
+
   runCleanup(): ArticleRetentionSummary {
     const now = this.now();
     const retentionDays = this.getRetentionDays();
+    const retentionPolicy = this.getRetentionPolicy();
     const cutoff = retentionDays === 0 ? 0 : now - retentionDays * DAY_IN_MS;
     let vectorsDeleted = 0;
     let candidateArticles = 0;
@@ -77,6 +94,8 @@ export class ArticleRetentionService {
     while (true) {
       const candidates = this.options.articles.listRetentionCandidates({
         cutoff,
+        keepFavorites: retentionPolicy.keepFavorites,
+        keepReadLater: retentionPolicy.keepReadLater,
         limit: RETENTION_CLEANUP_BATCH_SIZE
       });
       if (candidates.length === 0) {

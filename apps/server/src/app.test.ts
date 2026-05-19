@@ -528,6 +528,16 @@ describe("server API vertical slice", () => {
               duplicate: "not_built",
               evidence: "dynamic_fallback"
             },
+            algorithmModules: expect.arrayContaining([
+              expect.objectContaining({
+                id: "provider",
+                status: "warning"
+              }),
+              expect.objectContaining({
+                id: "embedding_index",
+                status: "stopped"
+              })
+            ]),
             failureStates: {
               bm25ProfileTermsActive: false,
               recentIntentMissing: true,
@@ -1769,7 +1779,8 @@ describe("server API vertical slice", () => {
       expect(defaults.json()).toEqual({
         data: {
           ui: {
-            locale: "zh-CN"
+            locale: "zh-CN",
+            defaultHomeView: "recommended"
           },
           reader: {
             fontSize: 18,
@@ -1802,14 +1813,17 @@ describe("server API vertical slice", () => {
 
       const updated = await injectJsonWithCookie(app, "PATCH", "/api/settings", cookie, {
         ui: {
-          locale: "en-US"
+          locale: "en-US",
+          defaultHomeView: "latest"
         },
         reader: {
           fontSize: 20,
           lineHeight: 1.8
         },
         retention: {
-          retentionDays: 45
+          retentionDays: 45,
+          keepFavorites: false,
+          keepReadLater: true
         },
         behavior: {
           markScrolledArticlesIgnored: false,
@@ -1825,7 +1839,8 @@ describe("server API vertical slice", () => {
           ok: true,
           settings: {
             ui: {
-              locale: "en-US"
+              locale: "en-US",
+              defaultHomeView: "latest"
             },
             reader: {
               fontSize: 20,
@@ -1834,7 +1849,9 @@ describe("server API vertical slice", () => {
               readerWidth: 720
             },
             retention: {
-              retentionDays: 45
+              retentionDays: 45,
+              keepFavorites: false,
+              keepReadLater: true
             },
             behavior: {
               markScrolledArticlesIgnored: false,
@@ -2406,6 +2423,7 @@ describe("server API vertical slice", () => {
     try {
       const updated = await injectJson(app, "PATCH", "/api/feeds/feed_manage", {
         title: "Managed Feed",
+        feedUrl: "https://example.com/managed.xml",
         folderId: folder.id,
         enabled: false,
         sourceWeight: 0.2
@@ -2415,6 +2433,7 @@ describe("server API vertical slice", () => {
         data: {
           id: "feed_manage",
           title: "Managed Feed",
+          feedUrl: "https://example.com/managed.xml",
           folderId: "folder_design",
           enabled: false,
           sourceWeight: 0.2,
@@ -4084,25 +4103,41 @@ describe("server API vertical slice", () => {
     const app = buildServer({ db, logger: false, now: () => 5400 });
 
     try {
+      await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "favorite",
+        value: true
+      });
+      await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "like",
+        value: true
+      });
+      await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "read_later",
+        value: true
+      });
       const response = await postJson(app, "/api/articles/article_recommended/actions", {
         type: "not_interested"
       });
 
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json().data.state).toMatchObject({
+        favorited: false,
+        liked: false,
+        readLater: false,
+        interactionStatus: "ignored",
         notInterested: true
       });
       expect(getArticleStateRow(db, "article_recommended")).toMatchObject({
         notInterestedAt: 5400,
         updatedAt: 5400
       });
-      expect(listBehaviorEvents(db, "article_recommended")).toEqual([
+      expect(listBehaviorEvents(db, "article_recommended").at(-1)).toEqual(
         {
           eventType: "not_interested",
           eventWeight: -1,
           metadataJson: null
         }
-      ]);
+      );
 
       const articles = await app.inject({
         method: "GET",

@@ -173,6 +173,7 @@ export class SqliteFeedRepository implements FeedRepository {
           set
             title = ?,
             folder_id = ?,
+            feed_url = ?,
             enabled = ?,
             source_weight = ?,
             updated_at = ?
@@ -182,6 +183,7 @@ export class SqliteFeedRepository implements FeedRepository {
       .run(
         input.title ?? existing.title,
         input.folderId === undefined ? existing.folderId : input.folderId,
+        input.feedUrl ?? existing.feedUrl,
         input.enabled === undefined ? (existing.enabled ? 1 : 0) : input.enabled ? 1 : 0,
         input.sourceWeight ?? existing.sourceWeight,
         now,

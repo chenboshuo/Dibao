@@ -171,7 +171,10 @@ export function App() {
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [sourceSelection, setSourceSelection] = useState<SourceSelection>({ type: "all" });
-  const [appPage, setAppPage] = useState<AppPage>({ type: "reader", view: "latest" });
+  const [appPage, setAppPage] = useState<AppPage>({
+    type: "reader",
+    view: defaultAppSettings.ui.defaultHomeView
+  });
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [todayOnly, setTodayOnly] = useState(false);
   const [favoriteSort, setFavoriteSort] = useState<FavoriteArticleSort>(
@@ -223,6 +226,8 @@ export function App() {
   const articleRequestVersion = useRef(0);
   const listExplanationRequestVersion = useRef(0);
   const hasLoadedSettingsForSession = useRef(false);
+  const hasAppliedDefaultHomeViewForSession = useRef(false);
+  const appPageRef = useRef<AppPage>(appPage);
   const mobileArticleHistoryDepth = useRef(0);
   const mobileExplanationHistoryDepth = useRef(0);
   const selectedArticleIdRef = useRef<string | null>(null);
@@ -347,7 +352,7 @@ export function App() {
     setUnreadCount(0);
     articleStateById.current.clear();
     setSourceSelection({ type: "all" });
-    setAppPage({ type: "reader", view: "latest" });
+    setAppPage({ type: "reader", view: defaultAppSettings.ui.defaultHomeView });
     setUnreadOnly(false);
     setTodayOnly(false);
     setFavoriteSort(defaultFavoriteArticleSort);
@@ -394,6 +399,7 @@ export function App() {
     setPendingArticleAction(null);
     setNotice(null);
     hasLoadedSettingsForSession.current = false;
+    hasAppliedDefaultHomeViewForSession.current = false;
     openedArticleIds.current.clear();
     ignoredArticleIds.current.clear();
     articleRequestVersion.current += 1;
@@ -475,6 +481,10 @@ export function App() {
   );
 
   useEffect(() => {
+    appPageRef.current = appPage;
+  }, [appPage]);
+
+  useEffect(() => {
     if (appStage.type !== "reader" || hasLoadedSettingsForSession.current) {
       return;
     }
@@ -490,11 +500,22 @@ export function App() {
         const settings = await dibaoApi.getSettings();
         if (!cancelled) {
           applySettings(settings);
+          const currentAppPage = appPageRef.current;
+          if (
+            !hasAppliedDefaultHomeViewForSession.current &&
+            currentAppPage.type === "reader" &&
+            currentAppPage.view !== settings.ui.defaultHomeView
+          ) {
+            resetArticleListForPendingQuery();
+            setAppPage({ type: "reader", view: settings.ui.defaultHomeView });
+          }
+          hasAppliedDefaultHomeViewForSession.current = true;
         }
       } catch (error) {
         if (!cancelled) {
           setSettingsError(userMessageForError(error, t.errors.api));
           applySettings(defaultAppSettings);
+          hasAppliedDefaultHomeViewForSession.current = true;
         }
       } finally {
         if (!cancelled) {
@@ -1240,15 +1261,20 @@ export function App() {
   async function handleArticleAction(article: ArticleActionTarget, intent: ArticleActionIntent) {
     setPendingArticleAction({ articleId: article.id, intent });
     setArticleActionError(null);
+    const previousState =
+      articleStateById.current.get(article.id) ??
+      (articleDetail?.id === article.id ? articleDetail.state : article.state);
+    applyArticleState(article.id, optimisticStateForArticleAction(intent, previousState));
 
     try {
       const result = await dibaoApi.postArticleAction(
         article.id,
-        requestForArticleAction(intent, article.state)
+        requestForArticleAction(intent, previousState)
       );
       applyArticleState(article.id, result.state);
       void refreshArticleExplanation(article.id);
     } catch {
+      applyArticleState(article.id, previousState);
       setArticleActionError(actionErrorMessageFor(intent, t));
     } finally {
       setPendingArticleAction((current) =>
@@ -1488,7 +1514,7 @@ export function App() {
     <main className={styles.shell}>
       <aside className={styles.sidebar} aria-label={t.navigation.ariaLabel}>
         <div className={styles.brand}>
-          <span className={styles.brandMark}>{t.common.brandMark}</span>
+          <img alt="" className={styles.brandMark} src="/logo-64.png" />
           <span>
             <strong>{t.common.brandName}</strong>
             <small>{t.common.brandSubtitle}</small>
@@ -1622,7 +1648,8 @@ export function App() {
               feedCount={feeds.length}
               isIgnoreTelemetryEnabled={
                 appSettings.behavior.markScrolledArticlesIgnored &&
-                (currentArticleView === "latest" || currentArticleView === "recommended")
+                (currentArticleView === "latest" || currentArticleView === "recommended") &&
+                !(selectedArticleId && isMobileArticleHistoryEnabled())
               }
               isArticlesLoading={isArticlesLoading}
               isLoadingMore={isLoadingMoreArticles}
@@ -1707,7 +1734,7 @@ export function SetupWelcomePanel(props: { onStart: () => void }) {
   return (
     <section className={styles.authPanel} aria-labelledby="setup-welcome-title">
       <div className={styles.brand}>
-        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <img alt="" className={styles.brandMark} src="/logo-64.png" />
         <span>
           <strong>{t.common.brandName}</strong>
           <small>{t.common.brandSubtitle}</small>
@@ -1738,7 +1765,7 @@ export function AuthGatePanel(props: {
     return (
       <section className={styles.authPanel} aria-live="polite">
         <div className={styles.brand}>
-          <span className={styles.brandMark}>{t.common.brandMark}</span>
+          <img alt="" className={styles.brandMark} src="/logo-64.png" />
           <span>
             <strong>{t.common.brandName}</strong>
             <small>{t.common.brandSubtitle}</small>
@@ -1761,7 +1788,7 @@ export function AuthGatePanel(props: {
   return (
     <section className={styles.authPanel} aria-labelledby="auth-title">
       <div className={styles.brand}>
-        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <img alt="" className={styles.brandMark} src="/logo-64.png" />
         <span>
           <strong>{t.common.brandName}</strong>
           <small>{t.common.brandSubtitle}</small>
@@ -1809,7 +1836,7 @@ export function SetupSourcesPanel(props: {
   return (
     <section className={styles.authPanel} aria-labelledby="setup-sources-title">
       <div className={styles.brand}>
-        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <img alt="" className={styles.brandMark} src="/logo-64.png" />
         <span>
           <strong>{t.common.brandName}</strong>
           <small>{t.common.brandSubtitle}</small>
@@ -1891,7 +1918,7 @@ export function SetupProviderPlaceholderPanel(props: { onContinue: () => void })
   return (
     <section className={styles.authPanel} aria-labelledby="setup-provider-title">
       <div className={styles.brand}>
-        <span className={styles.brandMark}>{t.common.brandMark}</span>
+        <img alt="" className={styles.brandMark} src="/logo-64.png" />
         <span>
           <strong>{t.common.brandName}</strong>
           <small>{t.common.brandSubtitle}</small>
@@ -1915,6 +1942,7 @@ export function SetupProviderPlaceholderPanel(props: { onContinue: () => void })
 
 type SettingsDraft = {
   locale: AppSettings["ui"]["locale"];
+  defaultHomeView: AppSettings["ui"]["defaultHomeView"];
   markScrolledArticlesIgnored: boolean;
   removeReadLaterOnReadComplete: boolean;
   fontSize: string;
@@ -1922,6 +1950,8 @@ type SettingsDraft = {
   paragraphGap: string;
   readerWidth: string;
   retentionDays: string;
+  keepFavorites: boolean;
+  keepReadLater: boolean;
   cocoonLevel: string;
 };
 
@@ -2083,6 +2113,25 @@ export function SettingsWorkspace(props: {
               <option value="en-US">{t.settings.sections.language.enUS}</option>
             </select>
           </label>
+          <label className={styles.settingsField} htmlFor="settings-default-home-view">
+            <span>{t.settings.sections.language.defaultHomeViewLabel}</span>
+            <select
+              id="settings-default-home-view"
+              onChange={(event) =>
+                applyDraft({
+                  ...draft,
+                  defaultHomeView:
+                    event.target.value === "latest" ? "latest" : "recommended"
+                })
+              }
+              value={draft.defaultHomeView}
+            >
+              <option value="recommended">
+                {t.settings.sections.language.defaultHomeViewRecommended}
+              </option>
+              <option value="latest">{t.settings.sections.language.defaultHomeViewLatest}</option>
+            </select>
+          </label>
         </section>
 
         <section className={classNames(styles.settingsSection, "settings-card")} aria-labelledby="settings-behavior-title">
@@ -2206,22 +2255,28 @@ export function SettingsWorkspace(props: {
             unit={t.settings.units.days}
             value={draft.retentionDays}
           />
-          <div className={styles.settingsInlineStatus}>
+          <label className={styles.settingsInlineStatus} htmlFor="settings-keep-favorites">
             <span>{t.settings.sections.retention.keepFavorites}</span>
-            <strong>
-              {props.settings.retention.keepFavorites
-                ? t.settings.sections.retention.enabled
-                : t.settings.sections.retention.disabled}
-            </strong>
-          </div>
-          <div className={styles.settingsInlineStatus}>
+            <input
+              checked={draft.keepFavorites}
+              id="settings-keep-favorites"
+              onChange={(event) =>
+                applyDraft({ ...draft, keepFavorites: event.target.checked })
+              }
+              type="checkbox"
+            />
+          </label>
+          <label className={styles.settingsInlineStatus} htmlFor="settings-keep-read-later">
             <span>{t.settings.sections.retention.keepReadLater}</span>
-            <strong>
-              {props.settings.retention.keepReadLater
-                ? t.settings.sections.retention.enabled
-                : t.settings.sections.retention.disabled}
-            </strong>
-          </div>
+            <input
+              checked={draft.keepReadLater}
+              id="settings-keep-read-later"
+              onChange={(event) =>
+                applyDraft({ ...draft, keepReadLater: event.target.checked })
+              }
+              type="checkbox"
+            />
+          </label>
           <p className={styles.managementHint}>{t.settings.sections.retention.mappingHint}</p>
         </section>
 
@@ -2676,6 +2731,23 @@ export function AlgorithmTransparencyPage(props: {
               ) : null}
             </dl>
           ) : null}
+          {transparency?.algorithmModules ? (
+            <div className={styles.algorithmStatusGrid}>
+              {transparency.algorithmModules.map((module) => (
+                <article
+                  className={styles.algorithmStatusCard}
+                  data-status={module.status}
+                  key={module.id}
+                >
+                  <span className={algorithmStatusClassName(module.status)}>
+                    {t.algorithmTransparency.statusTones[module.status]}
+                  </span>
+                  <strong>{module.name}</strong>
+                  <p>{module.summary}</p>
+                </article>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
@@ -2734,6 +2806,20 @@ export function AlgorithmTransparencyPage(props: {
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
+            <h3>{t.algorithmTransparency.sections.algorithmExplanation}</h3>
+          </div>
+          <div className={styles.algorithmExplanationList}>
+            {t.algorithmTransparency.algorithmExplanation.map((item) => (
+              <article key={item.name}>
+                <strong>{item.name}</strong>
+                <p>{item.role}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className={classNames(styles.settingsSection, "algorithm-card")}>
+          <div>
             <h3>{t.algorithmTransparency.sections.terms}</h3>
           </div>
           <dl className={styles.algorithmTermList}>
@@ -2773,25 +2859,6 @@ export function AlgorithmTransparencyPage(props: {
                 ))}
               </tbody>
             </table>
-          </div>
-        </section>
-
-        <section className={classNames(styles.settingsSection, "algorithm-card")}>
-          <div>
-            <h3>{t.algorithmTransparency.sections.rankingFlow}</h3>
-          </div>
-          <div className={styles.algorithmFlowDiagram} role="list">
-            {t.algorithmTransparency.rankingFlowDiagram.map((step, index) => (
-              <article className={styles.algorithmFlowNode} key={step.title} role="listitem">
-                <span className={styles.algorithmFlowConnector} aria-hidden="true" />
-                <span className={styles.algorithmFlowIndex}>{String(index + 1).padStart(2, "0")}</span>
-                <div className={styles.algorithmFlowContent}>
-                  <span className={styles.algorithmFlowPhase}>{step.phase}</span>
-                  <strong>{step.title}</strong>
-                  <p>{step.description}</p>
-                </div>
-              </article>
-            ))}
           </div>
         </section>
 
@@ -3176,7 +3243,9 @@ export function ArticleListPanel(props: {
                   )}
                 </span>
                 <strong>{article.title}</strong>
-                {article.summary ? <span className={styles.summary}>{article.summary}</span> : null}
+                {article.summary ? (
+                  <span className={styles.summary}>{plainTextSummary(article.summary)}</span>
+                ) : null}
               </button>
               <ArticleRowActions
                 article={article}
@@ -3265,6 +3334,9 @@ function useArticleListIgnoreTelemetry(props: {
 
   useEffect(() => {
     selectedArticleIdRef.current = props.selectedArticleId;
+    if (props.selectedArticleId) {
+      seenVisibleIds.current.clear();
+    }
   }, [props.selectedArticleId]);
 
   useEffect(() => {
@@ -4195,6 +4267,7 @@ function clearReadProgressTimer(session: ReadProgressSession): void {
 function draftForSettings(settings: AppSettings): SettingsDraft {
   return {
     locale: settings.ui.locale,
+    defaultHomeView: settings.ui.defaultHomeView,
     markScrolledArticlesIgnored: settings.behavior.markScrolledArticlesIgnored,
     removeReadLaterOnReadComplete: settings.behavior.removeReadLaterOnReadComplete,
     fontSize: String(settings.reader.fontSize),
@@ -4202,6 +4275,8 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
     paragraphGap: String(settings.reader.paragraphGap),
     readerWidth: String(settings.reader.readerWidth),
     retentionDays: String(settings.retention.retentionDays),
+    keepFavorites: settings.retention.keepFavorites,
+    keepReadLater: settings.retention.keepReadLater,
     cocoonLevel: String(settings.ranking.cocoonLevel)
   };
 }
@@ -4315,7 +4390,8 @@ function parseSettingsDraft(
   const settings: AppSettings = {
     ...current,
     ui: {
-      locale: draft.locale
+      locale: draft.locale,
+      defaultHomeView: draft.defaultHomeView
     },
     reader: {
       ...current.reader,
@@ -4331,7 +4407,9 @@ function parseSettingsDraft(
     },
     retention: {
       ...current.retention,
-      retentionDays
+      retentionDays,
+      keepFavorites: draft.keepFavorites,
+      keepReadLater: draft.keepReadLater
     },
     ranking: {
       ...current.ranking,
@@ -4344,7 +4422,8 @@ function parseSettingsDraft(
     settings,
     input: {
       ui: {
-        locale: draft.locale
+        locale: draft.locale,
+        defaultHomeView: draft.defaultHomeView
       },
       reader: {
         fontSize,
@@ -4357,7 +4436,9 @@ function parseSettingsDraft(
         removeReadLaterOnReadComplete: draft.removeReadLaterOnReadComplete
       },
       retention: {
-        retentionDays
+        retentionDays,
+        keepFavorites: draft.keepFavorites,
+        keepReadLater: draft.keepReadLater
       },
       ranking: {
         cocoonLevel
@@ -4664,6 +4745,17 @@ function recommendationStatusMetrics(
   ];
 }
 
+function algorithmStatusClassName(status: "normal" | "warning" | "stopped"): string {
+  switch (status) {
+    case "normal":
+      return styles.algorithmStatusNormal;
+    case "warning":
+      return styles.algorithmStatusWarning;
+    case "stopped":
+      return styles.algorithmStatusStopped;
+  }
+}
+
 function embeddingCoverageText(index: EmbeddingIndex, t: Dictionary): string {
   if (
     typeof index.candidateCount !== "number" ||
@@ -4682,6 +4774,21 @@ function embeddingCoverageText(index: EmbeddingIndex, t: Dictionary): string {
 
 function formatPercent(value: number): string {
   return `${Math.round(clampNumber(value, 0, 1) * 100)}%`;
+}
+
+function plainTextSummary(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function downloadTextFile(filename: string, content: string, type: string): void {
@@ -4719,6 +4826,33 @@ function requestForArticleAction(
       return {
         type: "not_interested",
         value: true
+      };
+  }
+}
+
+function optimisticStateForArticleAction(
+  intent: ArticleActionIntent,
+  state: ArticleState
+): ArticleState {
+  switch (intent) {
+    case "favorite":
+      return { ...state, favorited: !state.favorited };
+    case "like":
+      return { ...state, liked: !state.liked };
+    case "readLater":
+      return { ...state, readLater: !state.readLater };
+    case "notInterested":
+      return {
+        ...state,
+        read: false,
+        favorited: false,
+        liked: false,
+        readLater: false,
+        hidden: false,
+        notInterested: true,
+        readingProgress: 0,
+        interactionStatus: "ignored",
+        ignoredAt: Date.now()
       };
   }
 }

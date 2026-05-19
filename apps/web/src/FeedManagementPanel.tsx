@@ -21,6 +21,7 @@ type PendingManagementAction =
 
 type FeedDraft = {
   title: string;
+  feedUrl: string;
   folderId: string;
   enabled: boolean;
   sourceWeight: string;
@@ -167,6 +168,11 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
       setError(t.feedManagement.errors.feedTitleRequired);
       return;
     }
+    const feedUrl = feedDraft.feedUrl.trim();
+    if (!feedUrl) {
+      setError(t.feeds.feedUrlRequired);
+      return;
+    }
 
     const sourceWeight = Number(feedDraft.sourceWeight);
     if (!Number.isFinite(sourceWeight) || sourceWeight < -1 || sourceWeight > 1) {
@@ -177,6 +183,7 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
     await runManagementAction("updateFeed", async () => {
       await props.onUpdateFeed(selectedFeed.id, {
         title,
+        feedUrl,
         folderId:
           feedDraft.folderId === UNGROUPED_FOLDER_VALUE ? null : feedDraft.folderId,
         enabled: feedDraft.enabled,
@@ -371,7 +378,10 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
         </div>
       </section>
 
-      <section className={styles.managementSection} aria-labelledby="feed-management-title">
+      <section
+        className={`${styles.managementSection} ${styles.feedManagementSection}`}
+        aria-labelledby="feed-management-title"
+      >
         <div className={styles.managementHeader}>
           <div>
             <p className={styles.kicker}>{t.feedManagement.feeds.kicker}</p>
@@ -478,7 +488,18 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                   <label htmlFor="managed-feed-url">
                     {t.feedManagement.editor.feedUrlLabel}
                   </label>
-                  <input id="managed-feed-url" readOnly value={selectedFeed.feedUrl} />
+                  <input
+                    id="managed-feed-url"
+                    inputMode="url"
+                    onChange={(event) =>
+                      setFeedDraft((current) => ({
+                        ...current,
+                        feedUrl: event.target.value
+                      }))
+                    }
+                    type="url"
+                    value={feedDraft.feedUrl}
+                  />
 
                   <label htmlFor="managed-feed-folder">
                     {t.feedManagement.editor.folderLabel}
@@ -611,6 +632,7 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
 function draftForFeed(feed: Feed): FeedDraft {
   return {
     title: feed.title,
+    feedUrl: feed.feedUrl,
     folderId: feed.folderId ?? UNGROUPED_FOLDER_VALUE,
     enabled: feed.enabled,
     sourceWeight: String(feed.sourceWeight)
@@ -620,6 +642,7 @@ function draftForFeed(feed: Feed): FeedDraft {
 function emptyFeedDraft(): FeedDraft {
   return {
     title: "",
+    feedUrl: "",
     folderId: UNGROUPED_FOLDER_VALUE,
     enabled: true,
     sourceWeight: "0"

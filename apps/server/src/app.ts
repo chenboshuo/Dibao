@@ -1402,6 +1402,7 @@ function getRecommendationTransparency(options: {
         allowedRemoteDependency: "one embedding provider"
       },
       moduleStatus,
+      algorithmModules: recommendationAlgorithmModules(status, moduleStatus),
       maintenance: {
         schemaMigration: "005_recommendation_v2_completion",
         backfillState: "tracked in recommendation_backfill_state",
@@ -1424,6 +1425,121 @@ function getRecommendationTransparency(options: {
       }
     }
   };
+}
+
+function recommendationAlgorithmModules(
+  status: ReturnType<typeof getRecommendationStatus>,
+  moduleStatus: ReturnType<typeof recommendationModuleStatus>
+): Array<{
+  id: string;
+  name: string;
+  status: "normal" | "warning" | "stopped";
+  summary: string;
+}> {
+  return [
+    {
+      id: "provider",
+      name: "Embedding provider",
+      status:
+        status.activeProvider?.lastTestStatus === "failed"
+          ? "stopped"
+          : status.activeProvider
+            ? "normal"
+            : "warning",
+      summary: status.activeProvider
+        ? `${status.activeProvider.name} · ${status.activeProvider.model}`
+        : "No active provider; baseline ranking remains available."
+    },
+    {
+      id: "embedding_index",
+      name: "Embedding index",
+      status:
+        status.activeIndex?.status === "active"
+          ? "normal"
+          : status.activeIndex
+            ? "warning"
+            : "stopped",
+      summary: status.activeIndex
+        ? `${status.activeIndex.model} · ${status.activeIndex.status}`
+        : "No active index; semantic matching is unavailable."
+    },
+    {
+      id: "coverage_backfill",
+      name: "Coverage and backfill",
+      status:
+        status.coverage.failedJobs > 0
+          ? "stopped"
+          : status.coverage.pendingJobs > 0 || status.coverage.coverageRatio < 0.8
+            ? "warning"
+            : "normal",
+      summary: `${Math.round(status.coverage.coverageRatio * 100)}% coverage · ${status.coverage.pendingJobs} pending · ${status.coverage.failedJobs} failed`
+    },
+    {
+      id: "profile_clusters",
+      name: "Profile clusters",
+      status:
+        status.clusters.positive + status.clusters.negative > 0
+          ? "normal"
+          : Object.values(status.behaviorCounts).some((count) => count > 0)
+            ? "warning"
+            : "stopped",
+      summary: `${status.clusters.positive} positive · ${status.clusters.negative} negative`
+    },
+    {
+      id: "semantic_ranking",
+      name: "Semantic ranking",
+      status: status.mode === "personalized" || status.mode === "embedding" ? "normal" : "warning",
+      summary:
+        status.mode === "baseline"
+          ? "Using freshness, source, and state fallback."
+          : "Combining semantic score with freshness, source, state, and penalties."
+    },
+    {
+      id: "negative_feedback",
+      name: "Negative feedback",
+      status: "normal",
+      summary: "Hidden and not-interested articles are removed from normal lists and penalize similar candidates."
+    },
+    {
+      id: "dedupe_exposure",
+      name: "Dedupe and exposure",
+      status:
+        moduleStatus.duplicate === "near_duplicate_active"
+          ? "normal"
+          : moduleStatus.duplicate === "exact_scaffold"
+            ? "warning"
+            : "stopped",
+      summary: `Duplicate module: ${moduleStatus.duplicate}; evidence: ${moduleStatus.evidence}.`
+    },
+    {
+      id: "mmr_diversity",
+      name: "MMR diversity",
+      status: "normal",
+      summary: `Cocoon level ${status.algorithm.cocoonLevel}; MMR lambda ${status.algorithm.cocoonParameters.mmrLambda}.`
+    },
+    {
+      id: "local_learning",
+      name: "Local learning",
+      status:
+        moduleStatus.ftrl === "active"
+          ? "normal"
+          : status.algorithm.localLearning.enabled
+            ? "warning"
+            : "stopped",
+      summary: `FTRL: ${moduleStatus.ftrl}; shadow mode: ${status.algorithm.localLearning.shadowMode}.`
+    },
+    {
+      id: "evaluation",
+      name: "Evaluation replay",
+      status:
+        moduleStatus.evaluation === "lightweight_replay_diagnostic"
+          ? "normal"
+          : status.algorithm.evaluation.enabled
+            ? "warning"
+            : "stopped",
+      summary: `Evaluation: ${moduleStatus.evaluation}.`
+    }
+  ];
 }
 
 function mapRecommendationCluster(

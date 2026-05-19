@@ -65,14 +65,44 @@ describe("settings service", () => {
         reader: {
           theme: "paper"
         }
-      },
-      {
-        retention: {
-          keepFavorites: false
-        }
       }
     ]) {
       expect(() => service.updateSettings(payload)).toThrow(SettingsServiceError);
     }
+  });
+
+  it("persists default home view and retention policy switches", () => {
+    const settings = new MemorySettingsRepository();
+    const service = new SettingsService({ settings });
+
+    expect(service.getSettings()).toMatchObject({
+      ui: {
+        defaultHomeView: "recommended"
+      },
+      retention: {
+        keepFavorites: true,
+        keepReadLater: true
+      }
+    });
+
+    expect(
+      service.updateSettings({
+        ui: {
+          defaultHomeView: "latest"
+        },
+        retention: {
+          keepFavorites: false,
+          keepReadLater: false
+        }
+      }).settings
+    ).toMatchObject({
+      ui: {
+        defaultHomeView: "latest"
+      },
+      retention: {
+        keepFavorites: false,
+        keepReadLater: false
+      }
+    });
   });
 });
