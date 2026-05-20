@@ -41,7 +41,7 @@ curl http://localhost:8080/api/system/health
 
 Dockerfile 内置 HEALTHCHECK 不依赖 `curl`/`wget`，而是用 Node `fetch()` 检查 `/api/system/health`。
 
-Docker 镜像内置 Corpus Topic Snapshot 的 Python runner 环境，包括 BERTopic、jieba 和 Janome。它不会随服务启动自动运行，只在你手动点击“生成语料主题快照”或 enqueue `topic_snapshot_rebuild` 后作为后台 job 读取已有 `article_embeddings.vector_blob`。如果你从源码直接运行 Node server，需要自行安装 `scripts/topic-snapshot/requirements.txt` 并设置 `DIBAO_TOPIC_SNAPSHOT_COMMAND`。
+Docker 镜像内置 Corpus Topic Snapshot 的 Python runner 环境，包括 BERTopic、jieba 和 Janome。镜像会以 `--no-deps` 安装 BERTopic，并显式安装运行所需依赖，避免把 `sentence-transformers`、`torch`、模型权重或 CUDA 包带进 runtime。它不会随服务启动自动运行，只在你手动点击“生成语料主题快照”或 enqueue `topic_snapshot_rebuild` 后作为后台 job 读取已有 `article_embeddings.vector_blob`。如果你从源码直接运行 Node server，需要按 `scripts/topic-snapshot/README.md` 安装 runner 并设置 `DIBAO_TOPIC_SNAPSHOT_COMMAND`。
 
 ## 首次设置
 

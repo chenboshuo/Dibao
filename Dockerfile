@@ -33,7 +33,9 @@ COPY scripts/topic-snapshot/requirements.txt scripts/topic-snapshot/requirements
 
 RUN python3 -m venv /opt/dibao-topic-snapshot \
   && /opt/dibao-topic-snapshot/bin/python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
-  && /opt/dibao-topic-snapshot/bin/python -m pip install --no-cache-dir -r scripts/topic-snapshot/requirements.txt
+  && /opt/dibao-topic-snapshot/bin/python -m pip install --no-cache-dir --no-deps "bertopic>=0.17,<0.18" \
+  && /opt/dibao-topic-snapshot/bin/python -m pip install --no-cache-dir -r scripts/topic-snapshot/requirements.txt \
+  && /opt/dibao-topic-snapshot/bin/python -c "import importlib.util; raise SystemExit(1 if importlib.util.find_spec('sentence_transformers') or importlib.util.find_spec('torch') else 0)"
 
 FROM node:22-bookworm-slim AS runtime
 

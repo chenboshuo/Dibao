@@ -19,8 +19,14 @@ Install manually in a separate Python environment:
 ```bash
 python3 -m venv .tmp/topic-snapshot-venv
 . .tmp/topic-snapshot-venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install --no-deps "bertopic>=0.17,<0.18"
 pip install -r scripts/topic-snapshot/requirements.txt
 ```
+
+`bertopic` is installed with `--no-deps` on purpose. The runner uses
+precomputed Dibao article embeddings only, so it must not install
+`sentence-transformers`, `torch`, model weights, or CUDA packages.
 
 Run manually:
 

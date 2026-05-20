@@ -35,7 +35,7 @@ Migration `010_corpus_topic_snapshots` 新增：
 
 ## Runner
 
-BERTopic runner 运行在独立 Python 环境中，不是 Node server 的 npm 依赖。Docker 镜像默认内置 runner 及其 Python 依赖，并设置 `DIBAO_TOPIC_SNAPSHOT_COMMAND`，因此自托管 Docker 用户可以直接在 UI 中手动触发“生成语料主题快照”。从源码或自定义 runtime 运行时，如果未安装 Python / BERTopic，或未配置 `DIBAO_TOPIC_SNAPSHOT_COMMAND`，主服务仍正常启动，但 rebuild API 会返回 `TOPIC_SNAPSHOT_RUNNER_UNAVAILABLE`。
+BERTopic runner 运行在独立 Python 环境中，不是 Node server 的 npm 依赖。Docker 镜像默认内置 runner 及其 Python 依赖，并设置 `DIBAO_TOPIC_SNAPSHOT_COMMAND`，因此自托管 Docker 用户可以直接在 UI 中手动触发“生成语料主题快照”。镜像以 `--no-deps` 安装 BERTopic，再显式安装 hdbscan / UMAP / scikit-learn / pandas / plotly / jieba / Janome 等运行依赖，避免安装 `sentence-transformers`、`torch`、模型权重或 CUDA 包。从源码或自定义 runtime 运行时，如果未安装 Python / BERTopic，或未配置 `DIBAO_TOPIC_SNAPSHOT_COMMAND`，主服务仍正常启动，但 rebuild API 会返回 `TOPIC_SNAPSHOT_RUNNER_UNAVAILABLE`。
 
 Runner 默认使用 `mixed` tokenizer 支持中、日、英三语 topic terms：中文文本使用 jieba，日文文本使用 Janome，英文/技术词使用 regex 保留。jieba / Janome 只影响 BERTopic c-TF-IDF / topic terms，不参与 embedding，不生成向量，不调用 embedding provider，也不下载模型。BERTopic 仍然通过 `embedding_model=None` 和 `model.fit_transform(docs, embeddings)` 消费已有 `article_embeddings.vector_blob`。
 
