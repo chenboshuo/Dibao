@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from importlib.metadata import version
 from pathlib import Path
 
 try:
+    import jieba
     import numpy as np
     from bertopic import BERTopic
     from sklearn.feature_extraction.text import CountVectorizer
@@ -17,10 +19,78 @@ except Exception as exc:  # pragma: no cover - documented manual runner path
 
 DAY_MS = 24 * 60 * 60 * 1000
 CONTENT_TEXT_LIMIT = 3000
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+LATIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+.#-]{1,}")
+URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+HTML_TAG_RE = re.compile(r"<[^>]+>")
+HTML_ENTITY_RE = re.compile(r"&(?:[a-zA-Z]+|#\d+);")
+TOKEN_EDGE_RE = re.compile(r"^[^\w\u4e00-\u9fff+.#-]+|[^\w\u4e00-\u9fff+.#-]+$")
+
+CUSTOM_TERMS = [
+    "邸报",
+    "人工智能",
+    "大模型",
+    "本地模型",
+    "开源模型",
+    "向量数据库",
+    "语义搜索",
+    "推荐系统",
+    "信息茧房",
+    "科技向善",
+    "RSS",
+    "SQLite",
+    "sqlite-vec",
+    "BERTopic",
+    "LLM",
+    "AI Agent",
+    "OpenAI",
+    "Ollama",
+    "API",
+    "FTRL",
+]
+
+STOPWORDS = {
+    "一个",
+    "一种",
+    "这个",
+    "那个",
+    "这些",
+    "那些",
+    "我们",
+    "你们",
+    "他们",
+    "自己",
+    "今天",
+    "昨天",
+    "目前",
+    "进行",
+    "通过",
+    "相关",
+    "问题",
+    "内容",
+    "文章",
+    "记者",
+    "表示",
+    "认为",
+    "https",
+    "http",
+    "www",
+    "com",
+    "html",
+    "utm",
+    "href",
+    "src",
+}
 
 
 def main() -> int:
     args = parse_args()
+    try:
+        configure_jieba(args.jieba_userdict)
+    except Exception as exc:
+        print(f"Failed to load jieba user dictionary: {exc}", file=sys.stderr)
+        return 2
+
     rows = load_rows(
         db_path=args.db,
         embedding_index_id=args.embedding_index_id,
@@ -48,7 +118,14 @@ def main() -> int:
     article_ids = [row["article_id"] for row in rows]
     docs = [document_text(row) for row in rows]
     embeddings = np.vstack([row["vector"] for row in rows]).astype(np.float32)
-    vectorizer = CountVectorizer(ngram_range=(1, 2), stop_words="english")
+    vectorizer = CountVectorizer(
+        tokenizer=mixed_zh_en_tokenizer,
+        token_pattern=None,
+        lowercase=False,
+        ngram_range=(1, 2),
+        min_df=2,
+        max_df=0.6,
+    )
     model = BERTopic(
         embedding_model=None,
         min_topic_size=args.min_topic_size,
@@ -116,7 +193,49 @@ def parse_args():
     parser.add_argument("--scope-days", type=int, required=True)
     parser.add_argument("--min-topic-size", type=int, required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--jieba-userdict")
     return parser.parse_args()
+
+
+def configure_jieba(userdict: str | None) -> None:
+    for term in CUSTOM_TERMS:
+        jieba.add_word(term)
+    if userdict:
+        jieba.load_userdict(userdict)
+
+
+def mixed_zh_en_tokenizer(text: str) -> list[str]:
+    cleaned = clean_tokenizer_text(text)
+    tokens = []
+    for token in jieba.cut_for_search(cleaned, HMM=True):
+        normalized = normalize_token(token)
+        if is_useful_token(normalized):
+            tokens.append(normalized)
+    for token in LATIN_TOKEN_RE.findall(cleaned):
+        normalized = normalize_token(token)
+        if is_useful_token(normalized):
+            tokens.append(normalized)
+    return tokens
+
+
+def clean_tokenizer_text(text: str) -> str:
+    without_urls = URL_RE.sub(" ", text)
+    without_markup = HTML_TAG_RE.sub(" ", without_urls)
+    return HTML_ENTITY_RE.sub(" ", without_markup)
+
+
+def normalize_token(token: str) -> str:
+    return TOKEN_EDGE_RE.sub("", token.strip())
+
+
+def is_useful_token(token: str) -> bool:
+    if not token or len(token) > 32:
+        return False
+    if token.lower() in STOPWORDS or token in STOPWORDS:
+        return False
+    if CJK_RE.search(token):
+        return len(token) >= 2
+    return LATIN_TOKEN_RE.fullmatch(token) is not None
 
 
 def load_rows(db_path: str, embedding_index_id: str, max_articles: int, scope_days: int):

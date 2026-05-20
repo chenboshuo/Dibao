@@ -37,6 +37,8 @@ Migration `010_corpus_topic_snapshots` 新增：
 
 BERTopic 是可选 Python runner，不是主 server runtime 依赖。未安装 Python / BERTopic，或未配置 `DIBAO_TOPIC_SNAPSHOT_COMMAND` 时，主服务仍正常启动。
 
+Runner 默认使用 jieba 做中文分词，以改善 BERTopic c-TF-IDF / topic terms。jieba 只影响主题词抽取，不参与 embedding，不生成向量，不调用 embedding provider，也不下载模型。BERTopic 仍然通过 `embedding_model=None` 和 `model.fit_transform(docs, embeddings)` 消费已有 `article_embeddings.vector_blob`。
+
 手动安装与运行见：
 
 ```text
@@ -47,6 +49,34 @@ scripts/topic-snapshot/README.md
 
 ```bash
 DIBAO_TOPIC_SNAPSHOT_COMMAND="python scripts/topic-snapshot/bertopic_snapshot.py"
+```
+
+可选传入用户词典：
+
+```bash
+python scripts/topic-snapshot/bertopic_snapshot.py \
+  --db /data/dibao.sqlite \
+  --embedding-index-id <active-index-id> \
+  --max-articles 3000 \
+  --scope-days 60 \
+  --min-topic-size 15 \
+  --jieba-userdict /path/to/userdict.txt \
+  --output /tmp/dibao-topic-snapshot.json
+```
+
+用户词典格式示例：
+
+```text
+邸报 100 nz
+科技向善 100 n
+大模型 100 n
+本地模型 100 n
+语义搜索 100 n
+向量数据库 100 n
+信息茧房 100 n
+RSS 100 nz
+sqlite-vec 100 nz
+BERTopic 100 nz
 ```
 
 API 只会 enqueue 后台 job，不会在请求路径同步跑 BERTopic。
