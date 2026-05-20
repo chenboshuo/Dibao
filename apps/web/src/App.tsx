@@ -38,7 +38,9 @@ import {
 import {
   articleInteractionStatusForState,
   articleListAfterStateUpdate,
+  articleListWithKnownLocalStates,
   articlesVisibleForUnreadFilter,
+  unreadCountWithKnownLocalStates,
   unreadCountAfterStateChange
 } from "./articleListState.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
@@ -246,6 +248,7 @@ export function App() {
   const openedArticleIds = useRef(new Set<string>());
   const ignoredArticleIds = useRef(new Set<string>());
   const articleStateById = useRef(new Map<string, ArticleState>());
+  const locallyUpdatedArticleIds = useRef(new Set<string>());
   const articleRequestVersion = useRef(0);
   const listExplanationRequestVersion = useRef(0);
   const hasLoadedSettingsForSession = useRef(false);
@@ -275,6 +278,7 @@ export function App() {
       articleStateById.current.get(articleId) ??
       (articleDetail?.id === articleId ? articleDetail.state : null);
     articleStateById.current.set(articleId, state);
+    locallyUpdatedArticleIds.current.add(articleId);
     if (previousState) {
       setUnreadCount((current) =>
         unreadCountAfterStateChange(current, previousState, state)
@@ -314,6 +318,7 @@ export function App() {
     setArticles([]);
     setUnreadCount(0);
     articleStateById.current.clear();
+    locallyUpdatedArticleIds.current.clear();
     setNextArticleCursor(null);
     clearSelectedArticle();
     clearListExplanation();
@@ -371,6 +376,7 @@ export function App() {
     setArticles([]);
     setUnreadCount(0);
     articleStateById.current.clear();
+    locallyUpdatedArticleIds.current.clear();
     setSourceSelection({ type: "all" });
     setAppPage({ type: "reader", view: defaultAppSettings.ui.defaultHomeView });
     setUnreadOnly(false);
@@ -427,6 +433,7 @@ export function App() {
     hasAppliedDefaultHomeViewForSession.current = hasExplicitUrlPageIntent.current;
     openedArticleIds.current.clear();
     ignoredArticleIds.current.clear();
+    locallyUpdatedArticleIds.current.clear();
     articleRequestVersion.current += 1;
   }, [setLocale]);
 
@@ -699,11 +706,23 @@ export function App() {
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
-      rememberArticleStates(response.data, articleStateById.current);
-      setArticles(
-        articlesVisibleForUnreadFilter(response.data, supportsUnreadOnly(view) && onlyUnread)
+      const responseArticles = articleListWithKnownLocalStates(
+        response.data,
+        articleStateById.current,
+        locallyUpdatedArticleIds.current
       );
-      setUnreadCount(response.meta.unreadCount);
+      rememberArticleStates(responseArticles, articleStateById.current);
+      setArticles(
+        articlesVisibleForUnreadFilter(responseArticles, supportsUnreadOnly(view) && onlyUnread)
+      );
+      setUnreadCount(
+        unreadCountWithKnownLocalStates(
+          response.meta.unreadCount,
+          response.data,
+          articleStateById.current,
+          locallyUpdatedArticleIds.current
+        )
+      );
       setNextArticleCursor(response.page.nextCursor);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
@@ -713,6 +732,7 @@ export function App() {
       setArticles([]);
       setUnreadCount(0);
       articleStateById.current.clear();
+      locallyUpdatedArticleIds.current.clear();
       setNextArticleCursor(null);
     } finally {
       if (requestVersion === articleRequestVersion.current) {
@@ -814,8 +834,12 @@ export function App() {
       try {
         const detail = await dibaoApi.getArticle(articleId);
         if (!cancelled) {
-          articleStateById.current.set(articleId, detail.state);
-          setArticleDetail(detail);
+          const knownState = locallyUpdatedArticleIds.current.has(articleId)
+            ? articleStateById.current.get(articleId)
+            : null;
+          const detailWithKnownState = knownState ? { ...detail, state: knownState } : detail;
+          articleStateById.current.set(articleId, detailWithKnownState.state);
+          setArticleDetail(detailWithKnownState);
           setArticleActionError(null);
           setIsDetailLoading(false);
         }
@@ -1333,17 +1357,29 @@ export function App() {
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
-      rememberArticleStates(response.data, articleStateById.current);
+      const responseArticles = articleListWithKnownLocalStates(
+        response.data,
+        articleStateById.current,
+        locallyUpdatedArticleIds.current
+      );
+      rememberArticleStates(responseArticles, articleStateById.current);
       setArticles((current) =>
         appendUniqueArticles(
           current,
           articlesVisibleForUnreadFilter(
-            response.data,
+            responseArticles,
             supportsUnreadOnly(currentArticleView) && unreadOnly
           )
         )
       );
-      setUnreadCount(response.meta.unreadCount);
+      setUnreadCount(
+        unreadCountWithKnownLocalStates(
+          response.meta.unreadCount,
+          response.data,
+          articleStateById.current,
+          locallyUpdatedArticleIds.current
+        )
+      );
       setNextArticleCursor(response.page.nextCursor);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
@@ -2774,6 +2810,102 @@ export function AlgorithmTransparencyPage(props: {
         ? t.recommendationStatus.loading
         : t.recommendationStatus.fallback;
   const behaviorEntries = props.status ? Object.entries(props.status.behaviorCounts) : [];
+  const recommendationStatusRows: Array<{ label: string; value: string }> = props.status
+    ? [
+        {
+          label: t.algorithmTransparency.fields.provider,
+          value: props.status.activeProvider
+            ? `${props.status.activeProvider.name} · ${props.status.activeProvider.model}`
+            : t.settings.sections.provider.disabled
+        },
+        {
+          label: t.algorithmTransparency.fields.index,
+          value: props.status.activeIndex
+            ? `${props.status.activeIndex.model} · ${props.status.activeIndex.status}`
+            : t.settings.sections.provider.coverageUnavailable
+        },
+        {
+          label: t.algorithmTransparency.fields.coverage,
+          value: t.settings.sections.provider.coverage(
+            props.status.coverage.coveredArticleCount ?? props.status.coverage.embeddingCount,
+            props.status.coverage.candidateCount,
+            formatPercent(props.status.coverage.coverageRatio)
+          )
+        },
+        {
+          label: t.algorithmTransparency.fields.behaviorCounts,
+          value:
+            behaviorEntries.length > 0
+              ? behaviorEntries.map(([name, count]) => `${name}: ${count}`).join(" · ")
+              : t.recommendationStatus.metrics.unknown
+        },
+        {
+          label: t.algorithmTransparency.fields.clusters,
+          value: t.recommendationStatus.metrics.clusters(
+            props.status.clusters.positive,
+            props.status.clusters.negative
+          )
+        },
+        {
+          label: t.algorithmTransparency.fields.lastUpdates,
+          value: t.recommendationStatus.metrics.lastUpdate(
+            props.status.lastRankingUpdate
+              ? formatDate(props.status.lastRankingUpdate)
+              : t.recommendationStatus.metrics.unknown,
+            props.status.lastProfileUpdate
+              ? formatDate(props.status.lastProfileUpdate)
+              : t.recommendationStatus.metrics.unknown
+          )
+        },
+        {
+          label: t.algorithmTransparency.fields.warnings,
+          value:
+            props.status.warnings.length > 0
+              ? props.status.warnings
+                  .map((warning) => `${warning.code}: ${warning.message}`)
+                  .join(" · ")
+              : t.algorithmTransparency.noWarnings
+        },
+        ...(props.status.algorithm
+          ? [
+              {
+                label: t.algorithmTransparency.fields.cocoon,
+                value: `${props.status.algorithm.cocoonLevel} · MMR λ ${
+                  props.status.algorithm.cocoonParameters.mmrLambda
+                } · ${t.algorithmTransparency.fields.exploration}: ${
+                  props.status.algorithm.exploration.enabled
+                    ? t.settings.sections.retention.enabled
+                    : t.settings.sections.retention.disabled
+                }`
+              }
+            ]
+          : []),
+        ...(transparency
+          ? [
+              {
+                label: t.algorithmTransparency.fields.formula,
+                value: transparency.currentFormula
+              },
+              ...(transparency.maintenance
+                ? [
+                    {
+                      label: t.algorithmTransparency.fields.automaticMaintenance,
+                      value: formatMaintenanceSchedule(transparency.maintenance)
+                    }
+                  ]
+                : []),
+              {
+                label: t.algorithmTransparency.fields.failureStates,
+                value:
+                  Object.entries(transparency.failureStates)
+                    .filter(([, active]) => active)
+                    .map(([name]) => name)
+                    .join(" · ") || t.algorithmTransparency.noWarnings
+              }
+            ]
+          : [])
+      ]
+    : [];
 
   return (
     <section
@@ -2782,7 +2914,6 @@ export function AlgorithmTransparencyPage(props: {
     >
       <div className={classNames(styles.settingsHeader, "algorithm-hero")}>
         <div>
-          <p className={styles.kicker}>{t.settings.pageTitle}</p>
           <h2 id="algorithm-transparency-title">{t.algorithmTransparency.pageTitle}</h2>
         </div>
         <button className={styles.secondaryButton} onClick={props.onBack} type="button">
@@ -2801,127 +2932,44 @@ export function AlgorithmTransparencyPage(props: {
             <h3>{t.algorithmTransparency.sections.currentStatus}</h3>
             <p>{statusText}</p>
           </div>
-          {props.status ? (
-            <dl className={styles.managementStatusRows}>
-              <div>
-                <dt>{t.algorithmTransparency.fields.provider}</dt>
-                <dd>
-                  {props.status.activeProvider
-                    ? `${props.status.activeProvider.name} · ${props.status.activeProvider.model}`
-                    : t.settings.sections.provider.disabled}
-                </dd>
-              </div>
-              <div>
-                <dt>{t.algorithmTransparency.fields.index}</dt>
-                <dd>
-                  {props.status.activeIndex
-                    ? `${props.status.activeIndex.model} · ${props.status.activeIndex.status}`
-                    : t.settings.sections.provider.coverageUnavailable}
-                </dd>
-              </div>
-              <div>
-                <dt>{t.algorithmTransparency.fields.coverage}</dt>
-                <dd>
-                  {t.settings.sections.provider.coverage(
-                    props.status.coverage.coveredArticleCount ?? props.status.coverage.embeddingCount,
-                    props.status.coverage.candidateCount,
-                    formatPercent(props.status.coverage.coverageRatio)
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>{t.algorithmTransparency.fields.behaviorCounts}</dt>
-                <dd>
-                  {behaviorEntries.length > 0
-                    ? behaviorEntries.map(([name, count]) => `${name}: ${count}`).join(" · ")
-                    : t.recommendationStatus.metrics.unknown}
-                </dd>
-              </div>
-              <div>
-                <dt>{t.algorithmTransparency.fields.clusters}</dt>
-                <dd>
-                  {t.recommendationStatus.metrics.clusters(
-                    props.status.clusters.positive,
-                    props.status.clusters.negative
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>{t.algorithmTransparency.fields.lastUpdates}</dt>
-                <dd>
-                  {t.recommendationStatus.metrics.lastUpdate(
-                    props.status.lastRankingUpdate
-                      ? formatDate(props.status.lastRankingUpdate)
-                      : t.recommendationStatus.metrics.unknown,
-                    props.status.lastProfileUpdate
-                      ? formatDate(props.status.lastProfileUpdate)
-                      : t.recommendationStatus.metrics.unknown
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>{t.algorithmTransparency.fields.warnings}</dt>
-                <dd>
-                  {props.status.warnings.length > 0
-                    ? props.status.warnings
-                        .map((warning) => `${warning.code}: ${warning.message}`)
-                        .join(" · ")
-                    : t.algorithmTransparency.noWarnings}
-                </dd>
-              </div>
-              {props.status.algorithm ? (
-                <div>
-                  <dt>{t.algorithmTransparency.fields.cocoon}</dt>
-                  <dd>
-                    {props.status.algorithm.cocoonLevel} · MMR λ{" "}
-                    {props.status.algorithm.cocoonParameters.mmrLambda} ·{" "}
-                    {t.algorithmTransparency.fields.exploration}:{" "}
-                    {props.status.algorithm.exploration.enabled
-                      ? t.settings.sections.retention.enabled
-                      : t.settings.sections.retention.disabled}
-                  </dd>
-                </div>
-              ) : null}
-              {transparency ? (
-                <div>
-                  <dt>{t.algorithmTransparency.fields.formula}</dt>
-                  <dd>{transparency.currentFormula}</dd>
-                </div>
-              ) : null}
-              {transparency?.maintenance ? (
-                <div>
-                  <dt>{t.algorithmTransparency.fields.automaticMaintenance}</dt>
-                  <dd>{formatMaintenanceSchedule(transparency.maintenance)}</dd>
-                </div>
-              ) : null}
-              {transparency ? (
-                <div>
-                  <dt>{t.algorithmTransparency.fields.failureStates}</dt>
-                  <dd>
-                    {Object.entries(transparency.failureStates)
-                      .filter(([, active]) => active)
-                      .map(([name]) => name)
-                      .join(" · ") || t.algorithmTransparency.noWarnings}
-                  </dd>
-                </div>
-              ) : null}
-            </dl>
+          {recommendationStatusRows.length > 0 ? (
+            <div className={styles.algorithmStatusTableWrap}>
+              <table className={styles.algorithmStatusTable}>
+                <tbody>
+                  {recommendationStatusRows.map((row) => (
+                    <tr key={row.label}>
+                      <th scope="row">{row.label}</th>
+                      <td>{row.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : null}
           {transparency?.algorithmModules ? (
-            <div className={styles.algorithmStatusGrid}>
-              {transparency.algorithmModules.map((module) => (
-                <article
-                  className={styles.algorithmStatusCard}
-                  data-status={module.status}
-                  key={module.id}
-                >
-                  <span className={algorithmStatusClassName(module.status)}>
-                    {t.algorithmTransparency.statusTones[module.status]}
-                  </span>
-                  <strong>{module.name}</strong>
-                  <p>{module.summary}</p>
-                </article>
-              ))}
+            <div className={styles.algorithmStatusTableWrap}>
+              <table className={styles.algorithmStatusTable}>
+                <thead>
+                  <tr>
+                    <th>{t.algorithmTransparency.statusTable.module}</th>
+                    <th>{t.algorithmTransparency.statusTable.status}</th>
+                    <th>{t.algorithmTransparency.statusTable.summary}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transparency.algorithmModules.map((module) => (
+                    <tr key={module.id}>
+                      <th scope="row">{module.name}</th>
+                      <td>
+                        <span className={algorithmStatusClassName(module.status)}>
+                          {t.algorithmTransparency.statusTones[module.status]}
+                        </span>
+                      </td>
+                      <td>{module.summary}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : null}
         </section>
@@ -2963,49 +3011,19 @@ export function AlgorithmTransparencyPage(props: {
           ) : null}
         </section>
 
-        {transparency ? (
-          <section className={classNames(styles.settingsSection, "algorithm-card")}>
-            <div>
-              <h3>{t.algorithmTransparency.sections.maintenance}</h3>
-              <p>{t.algorithmTransparency.maintenance.body}</p>
-            </div>
-            <div className={styles.maintenanceTaskGrid}>
-              {maintenanceTasks(t).map((task) => {
-                const schedule = transparency.maintenance.schedule?.find(
-                  (state) => state.taskKey === task.scheduleKey
-                );
-                return (
-                  <article className={styles.maintenanceTaskCard} key={task.key}>
-                    <div>
-                      <strong>{task.label}</strong>
-                      <p>{task.description}</p>
-                    </div>
-                    <dl>
-                      <div>
-                        <dt>{t.algorithmTransparency.maintenance.remoteUse}</dt>
-                        <dd>{task.remoteUse}</dd>
-                      </div>
-                      <div>
-                        <dt>{t.algorithmTransparency.maintenance.lastState}</dt>
-                        <dd>{formatMaintenanceTaskSchedule(schedule, t)}</dd>
-                      </div>
-                    </dl>
-                    <button
-                      className={styles.secondaryButton}
-                      disabled={props.runningMaintenanceTask === task.key}
-                      onClick={() => void props.onRunMaintenanceTask(task.key, task.label)}
-                      type="button"
-                    >
-                      {props.runningMaintenanceTask === task.key
-                        ? t.algorithmTransparency.maintenance.running
-                        : t.algorithmTransparency.maintenance.run}
-                    </button>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
+        <section className={classNames(styles.settingsSection, "algorithm-card")}>
+          <div>
+            <h3>{t.algorithmTransparency.sections.terms}</h3>
+          </div>
+          <dl className={styles.algorithmTermList}>
+            {t.algorithmTransparency.terms.map((item) => (
+              <div key={item.term}>
+                <dt>{item.term}</dt>
+                <dd>{item.description}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
@@ -3019,20 +3037,6 @@ export function AlgorithmTransparencyPage(props: {
               </article>
             ))}
           </div>
-        </section>
-
-        <section className={classNames(styles.settingsSection, "algorithm-card")}>
-          <div>
-            <h3>{t.algorithmTransparency.sections.terms}</h3>
-          </div>
-          <dl className={styles.algorithmTermList}>
-            {t.algorithmTransparency.terms.map((item) => (
-              <div key={item.term}>
-                <dt>{item.term}</dt>
-                <dd>{item.description}</dd>
-              </div>
-            ))}
-          </dl>
         </section>
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
@@ -3083,6 +3087,57 @@ export function AlgorithmTransparencyPage(props: {
           <p>{t.algorithmTransparency.copy.localData}</p>
           <p>{t.algorithmTransparency.copy.fallback}</p>
         </section>
+
+        {transparency ? (
+          <section className={classNames(styles.settingsSection, "algorithm-card")}>
+            <details className={styles.maintenanceDisclosure}>
+              <summary>
+                <span className={styles.maintenanceSummaryText}>
+                  <span className={styles.maintenanceSummaryTitle}>
+                    {t.algorithmTransparency.sections.maintenance}
+                  </span>
+                  <span>{t.algorithmTransparency.maintenance.disclosureHint}</span>
+                </span>
+              </summary>
+              <p className={styles.settingsNotice}>{t.algorithmTransparency.maintenance.body}</p>
+              <div className={styles.maintenanceTaskList}>
+                {maintenanceTasks(t).map((task) => {
+                  const schedule = transparency.maintenance.schedule?.find(
+                    (state) => state.taskKey === task.scheduleKey
+                  );
+                  return (
+                    <div className={styles.maintenanceTaskRow} key={task.key}>
+                      <div className={styles.maintenanceTaskMain}>
+                        <strong>{task.label}</strong>
+                        <p>{task.description}</p>
+                      </div>
+                      <dl className={styles.maintenanceTaskMeta}>
+                        <div>
+                          <dt>{t.algorithmTransparency.maintenance.remoteUse}</dt>
+                          <dd>{task.remoteUse}</dd>
+                        </div>
+                        <div>
+                          <dt>{t.algorithmTransparency.maintenance.lastState}</dt>
+                          <dd>{formatMaintenanceTaskSchedule(schedule, t)}</dd>
+                        </div>
+                      </dl>
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={props.runningMaintenanceTask === task.key}
+                        onClick={() => void props.onRunMaintenanceTask(task.key, task.label)}
+                        type="button"
+                      >
+                        {props.runningMaintenanceTask === task.key
+                          ? t.algorithmTransparency.maintenance.running
+                          : t.algorithmTransparency.maintenance.run}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          </section>
+        ) : null}
       </div>
     </section>
   );

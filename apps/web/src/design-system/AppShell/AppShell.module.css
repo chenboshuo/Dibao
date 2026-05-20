@@ -645,6 +645,51 @@
   color: var(--color-muted);
 }
 
+.algorithmStatusTableWrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: var(--border-default);
+}
+
+.algorithmStatusTable {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.algorithmStatusTable th,
+.algorithmStatusTable td {
+  border-bottom: var(--border-subtle);
+  padding: var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.algorithmStatusTable tr:last-child th,
+.algorithmStatusTable tr:last-child td {
+  border-bottom: 0;
+}
+
+.algorithmStatusTable thead th {
+  color: var(--color-faint);
+  font-weight: var(--weight-bold);
+  background: var(--color-paper);
+}
+
+.algorithmStatusTable tbody th {
+  width: 170px;
+  color: var(--color-ink);
+  font-weight: var(--weight-bold);
+}
+
+.algorithmStatusTable td {
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
 .algorithmClusterGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -729,6 +774,122 @@
 .clusterLabelActions .secondaryButton {
   min-height: 32px;
   font-size: var(--text-xs);
+}
+
+.maintenanceDisclosure {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.maintenanceDisclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  cursor: pointer;
+  list-style: none;
+}
+
+.maintenanceDisclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.maintenanceDisclosure summary::after {
+  content: "+";
+  width: 28px;
+  height: 28px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: var(--border-default);
+  border-radius: var(--button-radius);
+  color: var(--color-muted);
+  font-weight: var(--weight-bold);
+}
+
+.maintenanceDisclosure[open] summary::after {
+  content: "-";
+}
+
+.maintenanceSummaryText {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.maintenanceSummaryText span:not(.maintenanceSummaryTitle) {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.maintenanceSummaryTitle {
+  color: var(--color-ink);
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  line-height: 1.3;
+}
+
+.maintenanceTaskList {
+  display: grid;
+  border-top: var(--border-default);
+}
+
+.maintenanceTaskRow {
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.75fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  border-bottom: var(--border-subtle);
+  padding: var(--space-3) 0;
+}
+
+.maintenanceTaskRow:last-child {
+  border-bottom: 0;
+}
+
+.maintenanceTaskMain {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.maintenanceTaskMain strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
+.maintenanceTaskMain p {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.maintenanceTaskMeta {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.maintenanceTaskMeta div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.maintenanceTaskMeta dt,
+.maintenanceTaskMeta dd {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.maintenanceTaskMeta dt {
+  color: var(--color-faint);
+}
+
+.maintenanceTaskMeta dd {
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
 }
 
 .maintenanceTaskGrid {
@@ -2553,7 +2714,7 @@
 
   .readerActionsBottom {
     position: sticky;
-    bottom: 74px;
+    bottom: calc(env(safe-area-inset-bottom) + var(--space-3));
     z-index: 2;
     margin-top: var(--space-5);
     border: var(--border-default);
@@ -2584,6 +2745,15 @@
     width: 100%;
     min-height: 44px;
     min-width: 0;
+  }
+
+  .maintenanceTaskRow {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .maintenanceTaskRow .secondaryButton {
+    width: 100%;
   }
 
   .articleRowActions .actionButton,

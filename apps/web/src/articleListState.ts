@@ -43,6 +43,33 @@ export function articleListAfterStateUpdate(
     );
 }
 
+export function articleListWithKnownLocalStates<T extends { id: string; state: ArticleState }>(
+  articles: T[],
+  knownStates: Map<string, ArticleState>,
+  locallyUpdatedIds: Set<string>
+): T[] {
+  return articles.map((article) => {
+    const knownState = knownStates.get(article.id);
+    return knownState && locallyUpdatedIds.has(article.id)
+      ? { ...article, state: knownState }
+      : article;
+  });
+}
+
+export function unreadCountWithKnownLocalStates<T extends { id: string; state: ArticleState }>(
+  current: number,
+  articles: T[],
+  knownStates: Map<string, ArticleState>,
+  locallyUpdatedIds: Set<string>
+): number {
+  return articles.reduce((count, article) => {
+    const knownState = knownStates.get(article.id);
+    return knownState && locallyUpdatedIds.has(article.id)
+      ? unreadCountAfterStateChange(count, article.state, knownState)
+      : count;
+  }, current);
+}
+
 export function unreadCountAfterStateChange(
   current: number,
   previous: ArticleState,

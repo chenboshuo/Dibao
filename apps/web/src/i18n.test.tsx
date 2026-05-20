@@ -21,7 +21,9 @@ import {
 } from "./App.js";
 import {
   articleListAfterStateUpdate,
+  articleListWithKnownLocalStates,
   articlesVisibleForUnreadFilter,
+  unreadCountWithKnownLocalStates,
   unreadCountAfterStateChange
 } from "./articleListState.js";
 import { defaultAppSettings, type ArticleListItem } from "./api.js";
@@ -168,6 +170,36 @@ describe("web i18n", () => {
         hidden: true
       })
     ).toBe(10);
+  });
+
+  it("preserves locally updated article states when a stale list response arrives late", () => {
+    const staleUnreadArticle = articleListItem("article_unread", "unseen");
+    const openedState = {
+      ...staleUnreadArticle.state,
+      interactionStatus: "opened" as const,
+      openedAt: Date.parse("2026-05-14T08:31:00.000Z")
+    };
+    const knownStates = new Map([[staleUnreadArticle.id, openedState]]);
+    const locallyUpdatedIds = new Set([staleUnreadArticle.id]);
+
+    expect(
+      articleListWithKnownLocalStates(
+        [staleUnreadArticle],
+        knownStates,
+        locallyUpdatedIds
+      )[0].state
+    ).toMatchObject({
+      interactionStatus: "opened",
+      openedAt: openedState.openedAt
+    });
+    expect(
+      unreadCountWithKnownLocalStates(
+        12,
+        [staleUnreadArticle],
+        knownStates,
+        locallyUpdatedIds
+      )
+    ).toBe(11);
   });
 
   it("renders setup and login auth gate copy from the dictionary", () => {

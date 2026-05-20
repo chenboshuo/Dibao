@@ -401,6 +401,11 @@ export const zhCN = {
       stopped: "停摆",
       disabled: "未启用"
     },
+    statusTable: {
+      module: "模块",
+      status: "状态",
+      summary: "说明"
+    },
     fields: {
       provider: "Provider",
       index: "Index",
@@ -472,6 +477,7 @@ export const zhCN = {
       back: "返回算法透明说明"
     },
     maintenance: {
+      disclosureHint: "如系统运行正常，无需手动执行以下操作。",
       body:
         "这些任务只维护本地推荐状态。会请求 provider 的任务已单独标注；不确定时优先运行重算排序或近期意图重建。",
       run: "手动触发",
@@ -1264,6 +1270,11 @@ export const enUS = {
       stopped: "Stopped",
       disabled: "Disabled"
     },
+    statusTable: {
+      module: "Module",
+      status: "Status",
+      summary: "Summary"
+    },
     fields: {
       provider: "Provider",
       index: "Index",
@@ -1335,6 +1346,7 @@ export const enUS = {
       back: "Back to transparency"
     },
     maintenance: {
+      disclosureHint: "If the system is running normally, you do not need to run these manually.",
       body:
         "These tasks maintain local recommendation state. Tasks that might call the provider are called out separately; when unsure, start with ranking recalculation or recent intent rebuild.",
       run: "Run",
