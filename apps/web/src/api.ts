@@ -899,8 +899,19 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       return (await request<EmbeddingIndex[]>("/api/embedding/indexes")).data;
     },
 
-    async getRecommendationStatus(): Promise<RecommendationStatus> {
-      return (await request<RecommendationStatus>("/api/recommendation/status")).data;
+    async getRecommendationStatus(
+      input: { includeClusterItems?: boolean } = {}
+    ): Promise<RecommendationStatus> {
+      const params = new URLSearchParams();
+      if (input.includeClusterItems === false) {
+        params.set("includeClusterItems", "false");
+      }
+      const query = params.toString();
+      return (
+        await request<RecommendationStatus>(
+          query ? `/api/recommendation/status?${query}` : "/api/recommendation/status"
+        )
+      ).data;
     },
 
     async getRecommendationTransparency(): Promise<RecommendationTransparency> {

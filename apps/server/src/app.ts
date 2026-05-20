@@ -220,6 +220,10 @@ type RecommendationClusterQuery = {
   limit?: string;
 };
 
+type RecommendationStatusQuery = {
+  includeClusterItems?: string;
+};
+
 type RecommendationMergeCandidateQuery = {
   status?: string;
   limit?: string;
@@ -759,17 +763,34 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
-  app.get("/api/recommendation/status", async () => ({
-    data: getRecommendationStatus({
-      db,
-      embeddings,
-      profiles,
-      rankings,
-      rankingService,
-      clusterLabels: clusterLabelService,
-      settings: settingsService.getSettings().ranking
-    })
-  }));
+  app.get<{ Querystring: RecommendationStatusQuery }>(
+    "/api/recommendation/status",
+    async (request, reply) => {
+      const includeClusterItems = parseBooleanParam(request.query.includeClusterItems);
+      if (includeClusterItems === null) {
+        return sendApiError(
+          reply,
+          400,
+          "VALIDATION_ERROR",
+          "includeClusterItems must be true or false",
+          { field: "includeClusterItems" }
+        );
+      }
+
+      return {
+        data: getRecommendationStatus({
+          db,
+          embeddings,
+          profiles,
+          rankings,
+          rankingService,
+          clusterLabels: clusterLabelService,
+          settings: settingsService.getSettings().ranking,
+          includeClusterItems: includeClusterItems ?? true
+        })
+      };
+    }
+  );
 
   app.get("/api/recommendation/transparency", async () => ({
     data: getRecommendationTransparency({
@@ -1606,7 +1627,9 @@ function getRecommendationStatus(options: {
   rankingService: RecommendationRankingService;
   clusterLabels: InterestClusterLabelService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
+  includeClusterItems?: boolean;
 }) {
+  const includeClusterItems = options.includeClusterItems ?? true;
   const activeProvider = options.embeddings.findActiveProvider();
   const indexes = options.embeddings.listIndexes();
   const activeIndex = activeProvider ? activeDiagnosticIndexFor(activeProvider.id, indexes) : null;
@@ -1618,26 +1641,28 @@ function getRecommendationStatus(options: {
   const clusters = options.profiles.countClusters({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
-  const clusterEvidence = activeIndex
+  const clusterEvidence = activeIndex && includeClusterItems
     ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 2000 })
     : [];
-  const clusterMergeDiagnostics = activeIndex
+  const clusterMergeDiagnostics = activeIndex && includeClusterItems
     ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
     : new Map<string, ClusterMergeDiagnostics>();
-  const clusterItems = options.profiles
-    .listClusters({
-      ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
-    })
-    .slice(0, 12)
-    .map((cluster, index) =>
-      mapRecommendationCluster(
-        cluster,
-        index + 1,
-        clusterEvidence,
-        options.clusterLabels,
-        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
-      )
-    );
+  const clusterItems = includeClusterItems
+    ? options.profiles
+        .listClusters({
+          ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
+        })
+        .slice(0, 12)
+        .map((cluster, index) =>
+          mapRecommendationCluster(
+            cluster,
+            index + 1,
+            clusterEvidence,
+            options.clusterLabels,
+            clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
+          )
+        )
+    : [];
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
@@ -2239,23 +2264,41 @@ function mergeDiagnosticsByCluster(
 }
 
 function clusterDiagnostics(cluster: InterestClusterRow, evidence: InterestClusterEvidenceRow[]) {
-  const centroid = fromVectorBlob(cluster.centroidVectorBlob);
+  const hasPersistedClusterEvidence = evidence.some((item) => typeof item.clusterId === "string");
+  const evidenceForCluster = hasPersistedClusterEvidence
+    ? evidence.filter((item) => item.clusterId === cluster.id)
+    : evidence;
   const similarityThreshold =
     cluster.polarity === "positive"
       ? profileAlgorithmDefaults.positiveCreateThreshold
       : profileAlgorithmDefaults.negativeCreateThreshold;
-  const matches = evidence
-    .map((item) => ({
-      item,
-      similarity: cosineSimilarity(centroid, fromVectorBlob(item.vectorBlob))
-    }))
-    .filter(({ item, similarity }) => {
+
+  let centroid: number[] | null = null;
+  const matches: Array<{ item: InterestClusterEvidenceRow; similarity: number }> = [];
+  for (const item of evidenceForCluster) {
+    const storedSimilarity =
+      typeof item.similarity === "number" && Number.isFinite(item.similarity)
+        ? item.similarity
+        : null;
+    if (storedSimilarity === null && centroid === null) {
+      centroid = fromVectorBlob(cluster.centroidVectorBlob);
+    }
+    const similarity =
+      storedSimilarity ?? cosineSimilarity(centroid ?? [], fromVectorBlob(item.vectorBlob));
+    if (!Number.isFinite(similarity)) {
+      continue;
+    }
+    if (!hasPersistedClusterEvidence) {
       if (similarity < similarityThreshold) {
-        return false;
+        continue;
       }
-      const polarity = profilePolarityForEvent(item);
-      return polarity === cluster.polarity;
-    });
+    }
+    const polarity = profilePolarityForEvent(item);
+    if (polarity !== cluster.polarity) {
+      continue;
+    }
+    matches.push({ item, similarity });
+  }
 
   const articleIds = new Set(matches.map(({ item }) => item.articleId));
   const sourceCounts = new Map<string, number>();

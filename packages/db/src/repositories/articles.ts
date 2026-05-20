@@ -15,6 +15,14 @@ import type {
 } from "../types.js";
 import { BASE_RANK_CONTEXT } from "./ranking.js";
 
+const EMBEDDING_ELIGIBLE_TEXT_PREDICATE = `
+  (
+    trim(coalesce(a.title, '')) != ''
+    or trim(coalesce(a.summary, '')) != ''
+    or trim(substr(coalesce(ac.content_text, ''), 1, 256)) != ''
+  )
+`;
+
 type ArticleDbRow = {
   id: string;
   feedId: string;
@@ -206,7 +214,7 @@ export class SqliteArticleRepository implements ArticleRepository {
               and a.status != 'deleted'
               and f.deleted_at is null
               and f.enabled = 1
-              and trim(coalesce(a.title, '') || ' ' || coalesce(a.summary, '') || ' ' || coalesce(ac.content_text, '')) != ''
+              and ${EMBEDDING_ELIGIBLE_TEXT_PREDICATE}
               and (
                 ae.article_id is null
                 or ae.content_hash != coalesce(a.content_hash, a.id || ':' || a.updated_at)

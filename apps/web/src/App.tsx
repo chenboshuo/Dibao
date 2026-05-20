@@ -642,6 +642,25 @@ export function App() {
     }
   }, [t.errors.api]);
 
+  const loadRecommendationSummaryStatus = useCallback(async () => {
+    setIsRecommendationStatusLoading(true);
+    setRecommendationStatusError(null);
+
+    try {
+      const status = await dibaoApi.getRecommendationStatus({ includeClusterItems: false });
+      setRecommendationStatus(status);
+      setClusterLabelLexicon(null);
+      setMergeCandidates([]);
+    } catch (error) {
+      setRecommendationStatus(null);
+      setClusterLabelLexicon(null);
+      setMergeCandidates([]);
+      setRecommendationStatusError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsRecommendationStatusLoading(false);
+    }
+  }, [t.errors.api]);
+
   const loadAllRecommendationClusters = useCallback(async () => {
     setIsAllClustersLoading(true);
     setAllClustersError(null);
@@ -789,21 +808,27 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (
-      appStage.type !== "reader" ||
-      (appPage.type !== "reader" &&
-        appPage.type !== "algorithm-transparency" &&
-        appPage.type !== "algorithm-clusters") ||
-      (appPage.type === "reader" && appPage.view !== "recommended")
-    ) {
+    if (appStage.type !== "reader") {
       setRecommendationStatus(null);
       setRecommendationStatusError(null);
       setIsRecommendationStatusLoading(false);
       return;
     }
 
-    void loadRecommendationStatus();
-  }, [appPage, appStage.type, loadRecommendationStatus]);
+    if (appPage.type === "reader" && appPage.view === "recommended") {
+      void loadRecommendationSummaryStatus();
+      return;
+    }
+
+    if (appPage.type === "algorithm-transparency" || appPage.type === "algorithm-clusters") {
+      void loadRecommendationStatus();
+      return;
+    }
+
+    setRecommendationStatus(null);
+    setRecommendationStatusError(null);
+    setIsRecommendationStatusLoading(false);
+  }, [appPage, appStage.type, loadRecommendationStatus, loadRecommendationSummaryStatus]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || appPage.type !== "algorithm-clusters") {

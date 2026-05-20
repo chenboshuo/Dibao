@@ -468,7 +468,15 @@ describe("web API client", () => {
         negative: 0
       }
     });
-    expect(calls).toEqual(["/api/recommendation/status"]);
+    await expect(
+      api.getRecommendationStatus({ includeClusterItems: false })
+    ).resolves.toMatchObject({
+      mode: "embedding"
+    });
+    expect(calls).toEqual([
+      "/api/recommendation/status",
+      "/api/recommendation/status?includeClusterItems=false"
+    ]);
   });
 
   it("calls feed and folder management endpoints", async () => {

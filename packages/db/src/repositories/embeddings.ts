@@ -12,6 +12,14 @@ import type {
 } from "../types.js";
 import { safeVecTableName } from "../vector/sqlite-vec-vector-store.js";
 
+const EMBEDDING_ELIGIBLE_TEXT_PREDICATE = `
+  (
+    trim(coalesce(a.title, '')) != ''
+    or trim(coalesce(a.summary, '')) != ''
+    or trim(substr(coalesce(ac.content_text, ''), 1, 256)) != ''
+  )
+`;
+
 export interface EmbeddingRepository {
   deleteProvider(id: string): boolean;
   disableOtherProviders(enabledProviderId: string, now?: number): void;
@@ -338,7 +346,7 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
                 and a.status != 'deleted'
                 and f.deleted_at is null
                 and f.enabled = 1
-                and trim(coalesce(a.title, '') || ' ' || coalesce(a.summary, '') || ' ' || coalesce(ac.content_text, '')) != ''
+                and ${EMBEDDING_ELIGIBLE_TEXT_PREDICATE}
             ),
             eligible_articles as (
               select count(*) as candidateCount

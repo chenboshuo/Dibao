@@ -1426,6 +1426,10 @@ Planned / not implemented. 当前版本不提供 retry API。
 
 获取推荐系统只读诊断状态。该接口需要认证，字段名作为 diagnostics v0 稳定 contract。
 
+Query:
+
+- `includeClusterItems`: optional boolean，默认 `true`。设为 `false` 时仍返回推荐模式、coverage、行为计数、兴趣簇数量、ranking 计数和 warning，但 `clusters.items` 固定为空数组。普通阅读页状态条应使用 `includeClusterItems=false`，避免在用户阅读或点按钮路径中触发重型透明页 cluster 诊断。
+
 响应：
 
 ```json

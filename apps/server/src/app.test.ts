@@ -1467,6 +1467,38 @@ describe("server API vertical slice", () => {
       expect(status.body).not.toContain("vectorBlob");
       expect(status.body).not.toContain("tableName");
 
+      const lightStatus = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status?includeClusterItems=false"
+      });
+      expect(lightStatus.statusCode, lightStatus.body).toBe(200);
+      expect(lightStatus.json()).toMatchObject({
+        data: {
+          mode: "embedding",
+          clusters: {
+            positive: 1,
+            negative: 0,
+            items: []
+          }
+        }
+      });
+      expect(lightStatus.body).not.toContain("cluster_overfit_probe");
+      expect(lightStatus.body).not.toContain("vectorBlob");
+
+      const invalidLightStatus = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status?includeClusterItems=maybe"
+      });
+      expect(invalidLightStatus.statusCode, invalidLightStatus.body).toBe(400);
+      expect(invalidLightStatus.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "includeClusterItems"
+          }
+        }
+      });
+
       const transparency = await app.inject({
         method: "GET",
         url: "/api/recommendation/transparency"
