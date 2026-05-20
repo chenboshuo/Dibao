@@ -595,11 +595,16 @@ def load_rows(db_path: str, embedding_index_id: str, max_articles: int, scope_da
 
 
 def document_text(row) -> str:
-    return "\n\n".join(
-        part
-        for part in [row["title"], row["summary"], row["content_text"][:CONTENT_TEXT_LIMIT]]
-        if part
-    )
+    title = row["title"].strip()
+    summary = row["summary"].strip()
+    parts = []
+    if title:
+        parts.extend([title, title])
+    if summary:
+        parts.append(summary)
+    if len(" ".join(parts)) < 80 and row["content_text"]:
+        parts.append(row["content_text"][:800])
+    return "\n\n".join(parts)
 
 
 def assignment_scores_for(topic_key: int, topics, probabilities):
