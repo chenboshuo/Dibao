@@ -13,7 +13,7 @@ This document records the phased V2/V3 recommendation architecture and the curre
 
 ### Implemented and active by default
 
-- `004_recommendation_v2`, append-only `005_recommendation_v2_completion`, append-only `006_recommendation_maintenance_schedule`, existing `007_embedding_usage_and_profile_evidence_snapshots`, and append-only `008_interest_cluster_labels`.
+- `004_recommendation_v2`, append-only `005_recommendation_v2_completion`, append-only `006_recommendation_maintenance_schedule`, existing `007_embedding_usage_and_profile_evidence_snapshots`, append-only `008_interest_cluster_labels`, and append-only `009_interest_cluster_merge_candidates`.
 - Canonical rank context remains `article_rank_scores.rank_context`; there is no second `rank_context_id`.
 - Ranking jobs persist `rerank_position`, and `view=recommended` reads that canonical order before falling back to score.
 - Ranking setting changes enqueue a deduped `ranking_recalculate` job without enqueueing embedding, FTS, or vector rebuild jobs.
@@ -63,13 +63,16 @@ Periodic maintenance:
 
 - 15 minutes: if there are strong recent behaviors or untrained FTRL examples, enqueue deduped recent intent and FTRL train jobs.
 - Hourly: enqueue deduped recent intent and duplicate rebuilds; run embedding coverage health only when an active index exists and no embedding job is already open. Hourly ranking recalculation is only queued when a maintenance output completed since the last hourly ranking enqueue.
-- Daily: enqueue keyword profile rebuild, duplicate rebuild, recent intent rebuild, FTRL train, interest cluster label rebuild, and ranking recalculation.
+- Daily: enqueue keyword profile rebuild, duplicate rebuild, recent intent rebuild, FTRL train, interest cluster label rebuild, interest cluster merge diagnostics, and ranking recalculation. Interest cluster auto merge is a separate daily task and is disabled by default.
 - Weekly diagnostic: `ranking_eval_run` is disabled by default. When enabled, it runs no more often than `evaluationAutoRunIntervalDays`.
 
 Sorting impact:
 
 - Recent intent, keyword profile, duplicate groups, and FTRL train can affect `view=recommended` after a deduped `ranking_recalculate`.
 - Evaluation is diagnostic only. It does not update profile, FTRL, or ranking scores.
+- Interest cluster label rebuild is explainability metadata only. It does not update ranking, embeddings, centroids, or profile vectors.
+- Interest cluster merge diagnostics is read-only. It writes SQLite diagnostics rows and does not update ranking, embeddings, centroids, or profile vectors.
+- Interest cluster merge changes the user profile and therefore recalculates ranking. Auto merge is disabled by default.
 - Embedding health may enqueue small active-index embedding backfill when coverage is missing/stale; it does not run on settings changes.
 - `view=latest` remains ordered by latest article time and is not affected by recommendation maintenance.
 
@@ -150,12 +153,24 @@ Interest cluster labels are explainability metadata only. They do not change ran
 
 Implemented V1/V2 behavior:
 
-- automatic labels are generated locally from `interest_cluster_evidence`, article titles/summaries, feed titles, and same-polarity `profile_terms`;
+- automatic labels are generated locally from `interest_cluster_evidence`, article titles/summaries, representative article titles, feed titles, and same-polarity `profile_terms`;
 - generation does not call an LLM, reranker, classifier, external search service, or embedding API;
 - labels are stored in SQLite table `interest_cluster_labels`;
 - display priority is `manual_label > auto_label > interest_clusters.label > 兴趣簇 #N`;
 - manual labels only affect display and explanations, never cluster centroids or rank scores;
 - clearing a manual label restores the current automatic label fallback.
+- the default label lexicon lives in `apps/server/src/recommendation-label-lexicon.default.json`;
+- user overrides live in app setting key `recommendation.clusterLabelLexicon`;
+- effective lexicon is default plus `*Add` minus `*Remove`, with invalid stored overrides falling back to the default lexicon and surfacing as a warning instead of preventing startup.
+
+Label generation rules:
+
+- URL, domain, HTML, tracking, and metadata residue such as `article`, `affiliation`, `strong`, `https`, `www`, `com`, `html`, `utm`, `href`, and `src` is filtered by the effective lexicon and bad-term patterns.
+- Protected technical terms such as `AI`, `LLM`, `API`, `RSS`, `SQLite`, and `FTRL` can remain labels when they appear as semantic terms; domain fragments such as `.ai` are filtered by context and pattern.
+- Cluster-local evidence dominates label scoring. Title terms, evidence event terms, representative titles, and summaries carry higher weight than same-polarity global `profile_terms`; feed titles are fallback evidence.
+- A cluster-level IDF pass penalizes terms that appear in many clusters and drops terms appearing in more than half of active-index clusters unless they are protected or the only valid option.
+- Chinese candidate terms dedupe obvious substring chains, so short fragments such as `两市` / `两市成` are removed when a fuller phrase such as `两市成交` is available.
+- Duplicate `auto_label` strings are disambiguated with extra terms, representative article terms, feed title fallback, or a short `#N` suffix. Collision diagnostics are stored in `label_diagnostics_json`.
 
 `label_source` values:
 
@@ -168,6 +183,46 @@ fallback
 ```
 
 The automatic label rebuild job is `interest_cluster_label_rebuild`. It updates `interest_cluster_labels` for the active embedding index, preserves `manual_label`, and does not enqueue `embedding_generate` or `ranking_recalculate`.
+
+### Interest Cluster Label Quality and Merge Diagnostics
+
+Label rebuild is explainability metadata only.
+Merge diagnostics is read-only.
+Cluster merge changes user profile and therefore recalculates ranking.
+
+Duplicate-interest diagnostics compare only active-index clusters with the same polarity. The diagnostic pass is bounded to the highest-weight clusters (`positive` top 64, `negative` top 32) and writes candidates to SQLite table `interest_cluster_merge_candidates`.
+
+Signals:
+
+- `centroid_similarity`: cosine similarity between cluster centroids.
+- `label_jaccard`: overlap of generated/manual label terms.
+- `evidence_overlap`: overlap of evidence article ids divided by the smaller support set.
+- `representative_overlap`: overlap of representative articles.
+- `source_overlap`: overlap of feed ids/titles.
+- `merge_score`: `0.45 * centroid_similarity + 0.20 * label_jaccard + 0.25 * evidence_overlap + 0.10 * representative_overlap`.
+
+Recommendation thresholds are conservative. Negative clusters require higher centroid, label, evidence, and score thresholds than positive clusters. Diagnostics never compares different polarity clusters.
+
+Maintenance jobs:
+
+```text
+interest_cluster_merge_diagnostics
+interest_cluster_auto_merge
+```
+
+`interest_cluster_merge_diagnostics` clears stale open candidates for the active index, generates fresh `open` candidates, and preserves existing `ignored` / `merged` audit rows. It does not modify `interest_clusters`, does not trigger ranking, and does not call embedding.
+
+`interest_cluster_auto_merge` is controlled by `recommendationMaintenance.clusterAutoMergeEnabled`, default `false`. When explicitly enabled, it only processes `recommendation = "auto_merge"` and `status = "open"`, with a per-run cap of 5 pairs. A merge:
+
+- chooses the survivor by manual label, then higher weight, sample count, and newer update time;
+- moves `interest_cluster_evidence` from the merged-away cluster to the survivor;
+- combines weight/sample count and computes a weighted normalized centroid;
+- preserves the survivor manual label, or migrates the merged-away manual label if the survivor has none;
+- deletes only the merged-away cluster, not articles or behavior events;
+- records survivor, merged-away cluster, and metrics in `reason_json`;
+- enqueues label rebuild and ranking recalculation.
+
+Manual merge APIs use the same merge logic for `review` and `auto_merge` candidates. Ignore only changes the candidate status and does not touch cluster data.
 
 ## FTS / BM25
 

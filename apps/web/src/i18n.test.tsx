@@ -673,11 +673,16 @@ describe("web i18n", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <AlgorithmTransparencyPage
+          clusterLabelLexicon={null}
           error={null}
           isLoading={false}
+          mergeCandidates={[]}
           onBack={() => undefined}
+          onIgnoreCandidate={() => Promise.resolve()}
+          onMergeCandidate={() => Promise.resolve()}
           onOpenAllClusters={() => undefined}
           onRunMaintenanceTask={() => Promise.resolve()}
+          onUpdateClusterLabelLexicon={() => Promise.resolve()}
           onUpdateClusterLabel={() => Promise.resolve()}
           runningMaintenanceTask={null}
           status={{
@@ -751,7 +756,9 @@ describe("web i18n", () => {
               }
             ]
           }}
+          updatingClusterLexicon={false}
           updatingClusterLabelId={null}
+          updatingMergeCandidateId={null}
         />
       </DibaoI18nProvider>
     );

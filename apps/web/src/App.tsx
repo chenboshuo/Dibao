@@ -26,9 +26,12 @@ import {
   type ReaderSettings,
   type RecommendationStatus,
   type RecommendationClusterItem,
+  type RecommendationClusterMergeCandidate,
   type RecommendationTransparency,
   type RecommendationMaintenanceTask,
   type RecommendationMaintenanceTaskResponse,
+  type ClusterLabelLexiconResponse,
+  type ClusterLabelLexiconOverrides,
   type SetupStatus,
   type UpdateFeedFolderInput,
   type UpdateFeedInput,
@@ -215,9 +218,16 @@ export function App() {
   const [allRecommendationClusterTotal, setAllRecommendationClusterTotal] = useState(0);
   const [isAllClustersLoading, setIsAllClustersLoading] = useState(false);
   const [allClustersError, setAllClustersError] = useState<string | null>(null);
+  const [clusterLabelLexicon, setClusterLabelLexicon] =
+    useState<ClusterLabelLexiconResponse | null>(null);
+  const [mergeCandidates, setMergeCandidates] = useState<RecommendationClusterMergeCandidate[]>(
+    []
+  );
   const [runningMaintenanceTask, setRunningMaintenanceTask] =
     useState<RecommendationMaintenanceTask | null>(null);
   const [updatingClusterLabelId, setUpdatingClusterLabelId] = useState<string | null>(null);
+  const [updatingClusterLexicon, setUpdatingClusterLexicon] = useState(false);
+  const [updatingMergeCandidateId, setUpdatingMergeCandidateId] = useState<string | null>(null);
   const [isRecommendationStatusLoading, setIsRecommendationStatusLoading] = useState(false);
   const [recommendationStatusError, setRecommendationStatusError] = useState<string | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
@@ -391,7 +401,11 @@ export function App() {
     setAllRecommendationClusterTotal(0);
     setIsAllClustersLoading(false);
     setAllClustersError(null);
+    setClusterLabelLexicon(null);
+    setMergeCandidates([]);
     setRunningMaintenanceTask(null);
+    setUpdatingClusterLexicon(false);
+    setUpdatingMergeCandidateId(null);
     setIsRecommendationStatusLoading(false);
     setRecommendationStatusError(null);
     setFeedUrl("");
@@ -610,10 +624,18 @@ export function App() {
     setRecommendationStatusError(null);
 
     try {
-      const status = await dibaoApi.getRecommendationTransparency();
+      const [status, lexicon, candidates] = await Promise.all([
+        dibaoApi.getRecommendationTransparency(),
+        dibaoApi.getClusterLabelLexicon(),
+        dibaoApi.listRecommendationClusterMergeCandidates("all")
+      ]);
       setRecommendationStatus(status);
+      setClusterLabelLexicon(lexicon);
+      setMergeCandidates(candidates.candidates);
     } catch (error) {
       setRecommendationStatus(null);
+      setClusterLabelLexicon(null);
+      setMergeCandidates([]);
       setRecommendationStatusError(userMessageForError(error, t.errors.api));
     } finally {
       setIsRecommendationStatusLoading(false);
@@ -1301,7 +1323,9 @@ export function App() {
       if (
         task === "keyword_rebuild" ||
         task === "recent_intent_rebuild" ||
-        task === "cluster_label_rebuild"
+        task === "cluster_label_rebuild" ||
+        task === "cluster_merge_diagnostics" ||
+        task === "cluster_auto_merge"
       ) {
         await loadAllRecommendationClusters();
       }
@@ -1332,6 +1356,66 @@ export function App() {
       setAllClustersError(message);
     } finally {
       setUpdatingClusterLabelId(null);
+    }
+  }
+
+  async function handleUpdateClusterLabelLexicon(
+    overrides: Partial<ClusterLabelLexiconOverrides>
+  ) {
+    setUpdatingClusterLexicon(true);
+    setRecommendationStatusError(null);
+    setNotice(null);
+
+    try {
+      const result = await dibaoApi.updateClusterLabelLexicon(overrides);
+      setClusterLabelLexicon(result);
+      setNotice({
+        type: "recommendationMaintenanceQueued",
+        label: t.algorithmTransparency.lexicon.saveAndRebuild,
+        existing: result.rebuildJob?.existing ?? false
+      });
+      await loadRecommendationStatus();
+      if (appPageRef.current.type === "algorithm-clusters") {
+        await loadAllRecommendationClusters();
+      }
+    } catch (error) {
+      setRecommendationStatusError(userMessageForError(error, t.errors.api));
+    } finally {
+      setUpdatingClusterLexicon(false);
+    }
+  }
+
+  async function handleMergeClusterCandidate(candidateId: string) {
+    setUpdatingMergeCandidateId(candidateId);
+    setRecommendationStatusError(null);
+
+    try {
+      await dibaoApi.mergeRecommendationClusterCandidate(candidateId);
+      await loadRecommendationStatus();
+      if (appPageRef.current.type === "algorithm-clusters") {
+        await loadAllRecommendationClusters();
+      }
+    } catch (error) {
+      setRecommendationStatusError(userMessageForError(error, t.errors.api));
+    } finally {
+      setUpdatingMergeCandidateId(null);
+    }
+  }
+
+  async function handleIgnoreClusterCandidate(candidateId: string) {
+    setUpdatingMergeCandidateId(candidateId);
+    setRecommendationStatusError(null);
+
+    try {
+      await dibaoApi.ignoreRecommendationClusterCandidate(candidateId);
+      await loadRecommendationStatus();
+      if (appPageRef.current.type === "algorithm-clusters") {
+        await loadAllRecommendationClusters();
+      }
+    } catch (error) {
+      setRecommendationStatusError(userMessageForError(error, t.errors.api));
+    } finally {
+      setUpdatingMergeCandidateId(null);
     }
   }
 
@@ -1772,10 +1856,17 @@ export function App() {
             onBack={() => navigateToAppPage({ type: "settings" })}
             onOpenAllClusters={() => navigateToAppPage({ type: "algorithm-clusters" })}
             onRunMaintenanceTask={handleRunRecommendationMaintenanceTask}
+            onUpdateClusterLabelLexicon={handleUpdateClusterLabelLexicon}
             onUpdateClusterLabel={handleUpdateRecommendationClusterLabel}
+            onMergeCandidate={handleMergeClusterCandidate}
+            onIgnoreCandidate={handleIgnoreClusterCandidate}
+            clusterLabelLexicon={clusterLabelLexicon}
+            mergeCandidates={mergeCandidates}
             runningMaintenanceTask={runningMaintenanceTask}
             status={recommendationStatus}
+            updatingClusterLexicon={updatingClusterLexicon}
             updatingClusterLabelId={updatingClusterLabelId}
+            updatingMergeCandidateId={updatingMergeCandidateId}
           />
         ) : appPage.type === "algorithm-clusters" ? (
           <AlgorithmClustersPage
@@ -2787,15 +2878,24 @@ export function SettingsWorkspace(props: {
 }
 
 export function AlgorithmTransparencyPage(props: {
+  clusterLabelLexicon: ClusterLabelLexiconResponse | null;
   error: string | null;
   isLoading: boolean;
+  mergeCandidates: RecommendationClusterMergeCandidate[];
   onBack: () => void;
+  onIgnoreCandidate: (candidateId: string) => Promise<void>;
+  onMergeCandidate: (candidateId: string) => Promise<void>;
   onOpenAllClusters: () => void;
   onRunMaintenanceTask: (task: RecommendationMaintenanceTask, label: string) => Promise<void>;
+  onUpdateClusterLabelLexicon: (
+    overrides: Partial<ClusterLabelLexiconOverrides>
+  ) => Promise<void>;
   onUpdateClusterLabel: (clusterId: string, manualLabel: string | null) => Promise<void>;
   runningMaintenanceTask: RecommendationMaintenanceTask | null;
   status: RecommendationStatus | null;
+  updatingClusterLexicon: boolean;
   updatingClusterLabelId: string | null;
+  updatingMergeCandidateId: string | null;
 }) {
   const { t, formatDate } = useI18n();
   const transparency =
@@ -3011,6 +3111,19 @@ export function AlgorithmTransparencyPage(props: {
           ) : null}
         </section>
 
+        <ClusterMergeCandidatesPanel
+          candidates={props.mergeCandidates}
+          onIgnoreCandidate={props.onIgnoreCandidate}
+          onMergeCandidate={props.onMergeCandidate}
+          updatingCandidateId={props.updatingMergeCandidateId}
+        />
+
+        <ClusterLabelLexiconPanel
+          lexicon={props.clusterLabelLexicon}
+          onSave={props.onUpdateClusterLabelLexicon}
+          saving={props.updatingClusterLexicon}
+        />
+
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
             <h3>{t.algorithmTransparency.sections.terms}</h3>
@@ -3143,6 +3256,179 @@ export function AlgorithmTransparencyPage(props: {
   );
 }
 
+function ClusterMergeCandidatesPanel(props: {
+  candidates: RecommendationClusterMergeCandidate[];
+  onIgnoreCandidate: (candidateId: string) => Promise<void>;
+  onMergeCandidate: (candidateId: string) => Promise<void>;
+  updatingCandidateId: string | null;
+}) {
+  const { t } = useI18n();
+  const visibleCandidates = props.candidates
+    .filter((candidate) => candidate.status === "open")
+    .slice(0, 8);
+
+  return (
+    <section className={classNames(styles.settingsSection, "algorithm-card")}>
+      <div>
+        <h3>{t.algorithmTransparency.mergeCandidates.title}</h3>
+        <p>{t.algorithmTransparency.mergeCandidates.body}</p>
+      </div>
+      {visibleCandidates.length > 0 ? (
+        <div className={styles.algorithmStatusTableWrap}>
+          <table className={styles.algorithmStatusTable}>
+            <thead>
+              <tr>
+                <th>{t.algorithmTransparency.mergeCandidates.left}</th>
+                <th>{t.algorithmTransparency.mergeCandidates.right}</th>
+                <th>{t.algorithmTransparency.mergeCandidates.metrics}</th>
+                <th>{t.algorithmTransparency.mergeCandidates.recommendation}</th>
+                <th>{t.algorithmTransparency.mergeCandidates.actions}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleCandidates.map((candidate) => (
+                <tr key={candidate.id}>
+                  <td>{candidate.leftLabel}</td>
+                  <td>{candidate.rightLabel}</td>
+                  <td>
+                    {t.algorithmTransparency.mergeCandidates.metricSummary(
+                      formatPercent(candidate.centroidSimilarity),
+                      formatPercent(candidate.labelJaccard),
+                      formatPercent(candidate.evidenceOverlap),
+                      formatPercent(candidate.mergeScore)
+                    )}
+                  </td>
+                  <td>
+                    {candidate.polarity} ·{" "}
+                    {t.algorithmTransparency.mergeCandidates.recommendations[candidate.recommendation]}
+                  </td>
+                  <td>
+                    <div className={styles.clusterLabelActions}>
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={props.updatingCandidateId === candidate.id}
+                        onClick={() => void props.onMergeCandidate(candidate.id)}
+                        type="button"
+                      >
+                        {t.algorithmTransparency.mergeCandidates.merge}
+                      </button>
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={props.updatingCandidateId === candidate.id}
+                        onClick={() => void props.onIgnoreCandidate(candidate.id)}
+                        type="button"
+                      >
+                        {t.algorithmTransparency.mergeCandidates.ignore}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className={styles.settingsNotice}>{t.algorithmTransparency.mergeCandidates.empty}</p>
+      )}
+    </section>
+  );
+}
+
+function ClusterLabelLexiconPanel(props: {
+  lexicon: ClusterLabelLexiconResponse | null;
+  onSave: (overrides: Partial<ClusterLabelLexiconOverrides>) => Promise<void>;
+  saving: boolean;
+}) {
+  const { t } = useI18n();
+  const [draftStopword, setDraftStopword] = useState("");
+  const [stopwordsAdd, setStopwordsAdd] = useState<string[]>([]);
+
+  useEffect(() => {
+    setStopwordsAdd(props.lexicon?.overrides.stopwordsAdd ?? []);
+  }, [props.lexicon?.overrides.stopwordsAdd]);
+
+  function addDraftStopword() {
+    const next = draftStopword.trim();
+    if (!next || stopwordsAdd.includes(next)) {
+      setDraftStopword("");
+      return;
+    }
+    setStopwordsAdd([...stopwordsAdd, next]);
+    setDraftStopword("");
+  }
+
+  function removeStopword(term: string) {
+    setStopwordsAdd(stopwordsAdd.filter((item) => item !== term));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await props.onSave({ stopwordsAdd });
+  }
+
+  return (
+    <section className={classNames(styles.settingsSection, "algorithm-card")}>
+      <div>
+        <h3>{t.algorithmTransparency.lexicon.title}</h3>
+        <p>{t.algorithmTransparency.lexicon.body}</p>
+      </div>
+      {props.lexicon?.warnings.length ? (
+        <p className={styles.errorText}>{props.lexicon.warnings.join(" / ")}</p>
+      ) : null}
+      <form className={styles.clusterLabelForm} onSubmit={handleSubmit}>
+        <label>
+          {t.algorithmTransparency.lexicon.stopwordsAdd}
+          <input
+            maxLength={64}
+            onChange={(event) => setDraftStopword(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addDraftStopword();
+              }
+            }}
+            placeholder={t.algorithmTransparency.lexicon.stopwordPlaceholder}
+            value={draftStopword}
+          />
+        </label>
+        <div className={styles.clusterLabelActions}>
+          <button className={styles.secondaryButton} onClick={addDraftStopword} type="button">
+            {t.algorithmTransparency.lexicon.addStopword}
+          </button>
+          <button className={styles.primaryButton} disabled={props.saving} type="submit">
+            {props.saving
+              ? t.algorithmTransparency.maintenance.running
+              : t.algorithmTransparency.lexicon.saveAndRebuild}
+          </button>
+        </div>
+      </form>
+      {stopwordsAdd.length > 0 ? (
+        <div className={styles.clusterLabelActions}>
+          {stopwordsAdd.map((term) => (
+            <button
+              className={styles.secondaryButton}
+              key={term}
+              onClick={() => removeStopword(term)}
+              type="button"
+            >
+              {term} ×
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className={styles.settingsNotice}>{t.algorithmTransparency.lexicon.noStopwords}</p>
+      )}
+      {props.lexicon?.overrides.protectedTermsAdd.length ? (
+        <p>
+          <strong>{t.algorithmTransparency.lexicon.protectedTermsAdd}</strong>
+          <br />
+          {props.lexicon.overrides.protectedTermsAdd.join(" / ")}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function AlgorithmClustersPage(props: {
   clusters: RecommendationClusterItem[];
   error: string | null;
@@ -3255,6 +3541,20 @@ function ClusterCard(props: {
       </p>
       {props.cluster.manualLabel && props.cluster.autoLabel ? (
         <p>{t.algorithmTransparency.clusters.autoInference(props.cluster.autoLabel)}</p>
+      ) : null}
+      {props.cluster.labelDiagnostics?.collision ? (
+        <p>{t.algorithmTransparency.clusters.collisionResolved}</p>
+      ) : null}
+      {props.cluster.labelDiagnostics?.lowConfidence ? (
+        <p>{t.algorithmTransparency.clusters.lowConfidenceAdvice}</p>
+      ) : null}
+      {props.cluster.mergeDiagnostics?.topCandidate ? (
+        <p>
+          {t.algorithmTransparency.clusters.possibleDuplicate(
+            props.cluster.mergeDiagnostics.topCandidate.otherLabel,
+            formatPercent(props.cluster.mergeDiagnostics.topCandidate.centroidSimilarity)
+          )}
+        </p>
       ) : null}
       <p>
         {t.algorithmTransparency.clusters.details(
@@ -5531,6 +5831,16 @@ function maintenanceTasks(t: Dictionary): Array<{
       key: "cluster_label_rebuild",
       scheduleKey: "cluster_label_daily",
       ...copy.cluster_label_rebuild
+    },
+    {
+      key: "cluster_merge_diagnostics",
+      scheduleKey: "cluster_merge_diagnostics_daily",
+      ...copy.cluster_merge_diagnostics
+    },
+    {
+      key: "cluster_auto_merge",
+      scheduleKey: "cluster_auto_merge_daily",
+      ...copy.cluster_auto_merge
     },
     {
       key: "recent_intent_rebuild",

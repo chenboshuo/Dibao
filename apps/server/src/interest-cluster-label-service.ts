@@ -1,19 +1,22 @@
 import {
   fromVectorBlob,
+  type AppSettingsRepository,
   type DibaoDatabase,
   type InterestClusterLabelRow,
   type InterestClusterLabelSource,
   type InterestClusterPolarity
 } from "@dibao/db";
 import { clamp, cosineSimilarity, profileAlgorithmDefaults } from "@dibao/ranking";
+import defaultLabelLexicon from "./recommendation-label-lexicon.default.json" with { type: "json" };
 
 export const INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE =
   "interest_cluster_label_rebuild" as const;
+export const CLUSTER_LABEL_LEXICON_SETTINGS_KEY = "recommendation.clusterLabelLexicon";
 
 const MAX_MANUAL_LABEL_LENGTH = 30;
-const MAX_LABEL_TERMS = 5;
-const MAX_REPRESENTATIVE_ARTICLES = 5;
-const MAX_FEED_TITLES = 5;
+const MAX_LEXICON_ARRAY_LENGTH = 500;
+const MAX_LEXICON_TERM_LENGTH = 64;
+const MAX_LEXICON_PATTERN_LENGTH = 128;
 
 type ClusterDbRow = {
   id: string;
@@ -34,6 +37,7 @@ type LabelDbRow = {
   labelTermsJson: string | null;
   representativeArticlesJson: string | null;
   feedTitlesJson: string | null;
+  labelDiagnosticsJson: string | null;
   confidence: number;
   generatedAt: number | null;
   updatedAt: number;
@@ -60,10 +64,89 @@ type ProfileTerm = {
   evidenceCount: number;
 };
 
+type TermSource = "title" | "summary" | "feed" | "profile" | "representative" | "event";
+
 type TermCandidate = {
   term: string;
+  key: string;
   weight: number;
-  sources: Set<"title" | "summary" | "feed" | "profile">;
+  sources: Set<TermSource>;
+};
+
+type LabelGenerationSettings = {
+  maxTerms: number;
+  maxRepresentativeArticles: number;
+  maxFeedTitles: number;
+  profileTermWeight: number;
+  titleTermWeight: number;
+  summaryTermWeight: number;
+  representativeTitleWeight: number;
+  feedTitleWeight: number;
+  commonTermClusterRatioPenalty: number;
+  commonTermClusterRatioDrop: number;
+};
+
+type RawDefaultLexicon = {
+  version: number;
+  stopwords: {
+    en: string[];
+    zh: string[];
+  };
+  protectedTerms: {
+    en: string[];
+    zh: string[];
+  };
+  badTermPatterns: string[];
+  domainSuffixes: string[];
+  labelGeneration: LabelGenerationSettings;
+};
+
+export type ClusterLabelLexiconOverrides = {
+  stopwordsAdd: string[];
+  stopwordsRemove: string[];
+  protectedTermsAdd: string[];
+  protectedTermsRemove: string[];
+  badTermPatternsAdd: string[];
+  badTermPatternsRemove: string[];
+};
+
+export type ClusterLabelLexiconResponse = {
+  defaultVersion: number;
+  effective: {
+    stopwords: string[];
+    protectedTerms: string[];
+    badTermPatterns: string[];
+  };
+  overrides: ClusterLabelLexiconOverrides;
+  warnings: string[];
+};
+
+export type LabelDiagnostics = {
+  collision: boolean;
+  collisionGroupSize: number;
+  lowConfidence: boolean;
+};
+
+type EffectiveLabelLexicon = {
+  defaultVersion: number;
+  stopwords: Set<string>;
+  protectedTerms: Map<string, string>;
+  badPatternSources: string[];
+  badPatterns: RegExp[];
+  domainSuffixes: Set<string>;
+  labelGeneration: LabelGenerationSettings;
+  overrides: ClusterLabelLexiconOverrides;
+  warnings: string[];
+};
+
+type ClusterLabelDraft = {
+  cluster: ClusterDbRow;
+  displayIndex: number;
+  candidates: Map<string, TermCandidate>;
+  evidence: EvidenceArticle[];
+  representativeArticles: ClusterDisplayLabel["representativeArticles"];
+  feedTitles: string[];
+  generatedAt: number;
 };
 
 export type ClusterDisplayLabel = {
@@ -83,6 +166,7 @@ export type ClusterDisplayLabel = {
     similarity: number | null;
   }>;
   feedTitles: string[];
+  labelDiagnostics: LabelDiagnostics;
   generatedAt: number | null;
   updatedAt: number | null;
 };
@@ -94,6 +178,7 @@ export type GeneratedClusterLabel = {
   representativeArticles: ClusterDisplayLabel["representativeArticles"];
   feedTitles: string[];
   confidence: number;
+  labelDiagnostics: LabelDiagnostics;
   generatedAt: number;
 };
 
@@ -111,8 +196,11 @@ export class InterestClusterLabelServiceError extends Error {
 
 export type InterestClusterLabelServiceOptions = {
   db: DibaoDatabase;
+  settings?: Pick<AppSettingsRepository, "getJson" | "setJson">;
   now?: () => number;
 };
+
+const rawDefaultLexicon = defaultLabelLexicon as RawDefaultLexicon;
 
 export class InterestClusterLabelService {
   private readonly now: () => number;
@@ -138,13 +226,51 @@ export class InterestClusterLabelService {
 
   rebuildIndexLabels(embeddingIndexId: string): number {
     const clusters = this.listClusters({ embeddingIndexId });
+    const generated = this.generateIndexLabels(clusters);
+
     this.options.db.transaction(() => {
-      clusters.forEach((cluster, index) => {
-        const generated = this.generateClusterLabel(cluster, index + 1);
-        this.upsertAutoLabel(cluster, generated);
-      });
+      for (const { cluster, label } of generated) {
+        this.upsertAutoLabel(cluster, label);
+      }
     })();
     return clusters.length;
+  }
+
+  getClusterLabelLexicon(): ClusterLabelLexiconResponse {
+    const lexicon = this.effectiveLexicon();
+    return {
+      defaultVersion: lexicon.defaultVersion,
+      effective: {
+        stopwords: Array.from(lexicon.stopwords).sort(),
+        protectedTerms: Array.from(lexicon.protectedTerms.values()).sort((left, right) =>
+          left.localeCompare(right)
+        ),
+        badTermPatterns: lexicon.badPatternSources
+      },
+      overrides: lexicon.overrides,
+      warnings: lexicon.warnings
+    };
+  }
+
+  updateClusterLabelLexicon(body: unknown): ClusterLabelLexiconResponse {
+    if (!this.options.settings) {
+      throw new InterestClusterLabelServiceError(
+        500,
+        "LEXICON_SETTINGS_UNAVAILABLE",
+        "Cluster label lexicon settings are not configured"
+      );
+    }
+
+    const existing = this.parseStoredOverrides({ strict: false }).overrides;
+    const patch = parseLexiconOverridesPatch(body);
+    const next = {
+      ...existing,
+      ...patch
+    };
+    validateRegexPatterns(next.badTermPatternsAdd, "badTermPatternsAdd");
+    validateRegexPatterns(next.badTermPatternsRemove, "badTermPatternsRemove");
+    this.options.settings.setJson(CLUSTER_LABEL_LEXICON_SETTINGS_KEY, next, this.now());
+    return this.getClusterLabelLexicon();
   }
 
   setManualLabel(clusterId: string, manualLabel: unknown): ClusterDisplayLabel {
@@ -171,7 +297,7 @@ export class InterestClusterLabelService {
     const existing = this.findLabelByClusterId(cluster.id);
     const generated = existing
       ? null
-      : this.generateClusterLabel(cluster, displayIndex);
+      : this.generateSingleClusterLabel(cluster, displayIndex);
     const now = this.now();
 
     this.options.db.transaction(() => {
@@ -191,11 +317,12 @@ export class InterestClusterLabelService {
                 label_terms_json,
                 representative_articles_json,
                 feed_titles_json,
+                label_diagnostics_json,
                 confidence,
                 generated_at,
                 updated_at
               )
-              values (?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)
+              values (?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?)
               on conflict(cluster_id) do update set
                 manual_label = excluded.manual_label,
                 label_source = 'manual',
@@ -211,12 +338,15 @@ export class InterestClusterLabelService {
               ? JSON.stringify(generated.representativeArticles)
               : existing?.representativeArticlesJson ?? null,
             generated ? JSON.stringify(generated.feedTitles) : existing?.feedTitlesJson ?? null,
+            generated
+              ? JSON.stringify(generated.labelDiagnostics)
+              : existing?.labelDiagnosticsJson ?? null,
             generated?.confidence ?? existing?.confidence ?? 0,
             generated?.generatedAt ?? existing?.generatedAt ?? null,
             now
           );
       } else {
-        const refreshed = this.generateClusterLabel(cluster, displayIndex);
+        const refreshed = this.generateSingleClusterLabel(cluster, displayIndex);
         this.upsertAutoLabel(cluster, refreshed);
         this.options.db
           .prepare(
@@ -271,6 +401,7 @@ export class InterestClusterLabelService {
       topTerms,
       representativeArticles,
       feedTitles,
+      labelDiagnostics: parseLabelDiagnostics(row?.labelDiagnosticsJson ?? null, row?.confidence ?? 0),
       generatedAt: row?.generatedAt ?? null,
       updatedAt: row?.updatedAt ?? null
     };
@@ -292,17 +423,19 @@ export class InterestClusterLabelService {
             label_terms_json,
             representative_articles_json,
             feed_titles_json,
+            label_diagnostics_json,
             confidence,
             generated_at,
             updated_at
           )
-          values (?, ?, null, ?, ?, ?, ?, ?, ?, ?)
+          values (?, ?, null, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict(cluster_id) do update set
             auto_label = excluded.auto_label,
             label_source = ?,
             label_terms_json = excluded.label_terms_json,
             representative_articles_json = excluded.representative_articles_json,
             feed_titles_json = excluded.feed_titles_json,
+            label_diagnostics_json = excluded.label_diagnostics_json,
             confidence = excluded.confidence,
             generated_at = excluded.generated_at,
             updated_at = excluded.updated_at
@@ -315,6 +448,7 @@ export class InterestClusterLabelService {
         JSON.stringify(generated.labelTerms),
         JSON.stringify(generated.representativeArticles),
         JSON.stringify(generated.feedTitles),
+        JSON.stringify(generated.labelDiagnostics),
         generated.confidence,
         generated.generatedAt,
         now,
@@ -322,98 +456,238 @@ export class InterestClusterLabelService {
       );
   }
 
-  private generateClusterLabel(
+  private generateIndexLabels(
+    clusters: ClusterDbRow[]
+  ): Array<{ cluster: ClusterDbRow; label: GeneratedClusterLabel }> {
+    const lexicon = this.effectiveLexicon();
+    const drafts = clusters.map((cluster, index) =>
+      this.buildLabelDraft(cluster, index + 1, lexicon)
+    );
+    const termClusterCounts = new Map<string, number>();
+    for (const draft of drafts) {
+      for (const key of draft.candidates.keys()) {
+        termClusterCounts.set(key, (termClusterCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const generated = drafts.map((draft) => ({
+      cluster: draft.cluster,
+      label: this.finalizeLabelDraft(draft, {
+        lexicon,
+        totalClusters: Math.max(drafts.length, 1),
+        termClusterCounts
+      })
+    }));
+    disambiguateLabelCollisions(generated, lexicon);
+    return generated;
+  }
+
+  private generateSingleClusterLabel(
     cluster: ClusterDbRow,
     displayIndex: number
   ): GeneratedClusterLabel {
+    const lexicon = this.effectiveLexicon();
+    const draft = this.buildLabelDraft(cluster, displayIndex, lexicon);
+    const termClusterCounts = new Map<string, number>();
+    for (const key of draft.candidates.keys()) {
+      termClusterCounts.set(key, 1);
+    }
+    return this.finalizeLabelDraft(draft, {
+      lexicon,
+      totalClusters: 1,
+      termClusterCounts
+    });
+  }
+
+  private buildLabelDraft(
+    cluster: ClusterDbRow,
+    displayIndex: number,
+    lexicon: EffectiveLabelLexicon
+  ): ClusterLabelDraft {
     const evidence = this.listEvidenceForCluster(cluster);
     const profileTerms = this.listProfileTerms(cluster.polarity);
     const candidates = new Map<string, TermCandidate>();
+    const settings = lexicon.labelGeneration;
 
     for (const item of evidence) {
       const multiplier =
         item.evidenceSource === "live_event"
-          ? 1.3
+          ? 1.2
           : item.evidenceSource === "reconstructed"
             ? 1
-            : 0.8;
+            : 0.75;
       const confidence = clamp(item.confidence || 0.5, 0.1, 1);
-      addTextCandidates(candidates, item.title, 3 * multiplier * confidence, "title");
-      addTextCandidates(candidates, item.summary ?? "", 0.6 * multiplier * confidence, "summary");
-      addTextCandidates(candidates, item.feedTitle, 0.8 * multiplier * confidence, "feed");
+      addTextCandidates(
+        candidates,
+        item.title,
+        settings.titleTermWeight * multiplier * confidence,
+        "title",
+        lexicon
+      );
+      addTextCandidates(
+        candidates,
+        item.summary ?? "",
+        settings.summaryTermWeight * multiplier * confidence,
+        "summary",
+        lexicon
+      );
+      if (item.evidenceSource === "live_event") {
+        addTextCandidates(
+          candidates,
+          item.title,
+          2 * confidence,
+          "event",
+          lexicon
+        );
+      }
+    }
+
+    const representativeArticles = representativeArticlesFor(
+      evidence,
+      settings.maxRepresentativeArticles
+    );
+    for (const article of representativeArticles) {
+      addTextCandidates(
+        candidates,
+        article.title,
+        settings.representativeTitleWeight,
+        "representative",
+        lexicon
+      );
     }
 
     for (const term of profileTerms) {
-      const weight = Math.min(8, Math.max(0.2, Math.abs(term.weight))) * 2.5;
-      addTextCandidates(candidates, term.term, weight, "profile");
+      const weight = Math.min(8, Math.max(0.2, Math.abs(term.weight))) * settings.profileTermWeight;
+      addTextCandidates(candidates, term.term, weight, "profile", lexicon);
     }
 
-    const labelTerms = Array.from(candidates.values())
-      .filter((candidate) => candidate.weight >= 0.4)
-      .sort((left, right) => right.weight - left.weight || left.term.localeCompare(right.term))
-      .slice(0, MAX_LABEL_TERMS)
+    const feedTitles = uniqueNonEmpty(evidence.map((item) => item.feedTitle)).slice(
+      0,
+      settings.maxFeedTitles
+    );
+    for (const feedTitle of feedTitles) {
+      addTextCandidates(candidates, feedTitle, settings.feedTitleWeight, "feed", lexicon);
+    }
+
+    return {
+      cluster,
+      displayIndex,
+      candidates,
+      evidence,
+      representativeArticles,
+      feedTitles,
+      generatedAt: this.now()
+    };
+  }
+
+  private finalizeLabelDraft(
+    draft: ClusterLabelDraft,
+    input: {
+      lexicon: EffectiveLabelLexicon;
+      totalClusters: number;
+      termClusterCounts: Map<string, number>;
+    }
+  ): GeneratedClusterLabel {
+    const settings = input.lexicon.labelGeneration;
+    const candidateRows = Array.from(draft.candidates.values()).map((candidate) => {
+      const clusterCount = input.termClusterCounts.get(candidate.key) ?? 0;
+      const clusterRatio = clusterCount / Math.max(input.totalClusters, 1);
+      const idf = Math.log(1 + input.totalClusters / (1 + clusterCount));
+      const protectedTerm = isProtectedTerm(candidate.key, input.lexicon);
+      const commonPenalty =
+        !protectedTerm && clusterRatio > settings.commonTermClusterRatioPenalty
+          ? 0.3
+          : 1;
+      return {
+        ...candidate,
+        weight: candidate.weight * idf * commonPenalty,
+        clusterRatio,
+        protectedTerm
+      };
+    });
+    const hasAlternatives = candidateRows.some(
+      (candidate) => candidate.clusterRatio <= settings.commonTermClusterRatioDrop || candidate.protectedTerm
+    );
+    const labelTerms = dedupeSubsumedTerms(
+      candidateRows
+        .filter((candidate) => {
+          if (
+            !candidate.protectedTerm &&
+            hasAlternatives &&
+            candidate.clusterRatio > settings.commonTermClusterRatioDrop
+          ) {
+            return false;
+          }
+          return candidate.weight >= 0.35;
+        })
+        .sort((left, right) => right.weight - left.weight || left.term.localeCompare(right.term)),
+      input.lexicon
+    )
+      .slice(0, settings.maxTerms)
       .map((candidate) => ({
         term: candidate.term,
         weight: Number(candidate.weight.toFixed(4))
       }));
 
-    const representativeArticles = representativeArticlesFor(evidence);
-    const feedTitles = uniqueNonEmpty(evidence.map((item) => item.feedTitle)).slice(
-      0,
-      MAX_FEED_TITLES
-    );
     const confidence = confidenceFor({
-      evidence,
+      evidence: draft.evidence,
       labelTerms,
-      sourceCount: feedTitles.length
+      sourceCount: draft.feedTitles.length
     });
-    const generatedAt = this.now();
+    const diagnostics = defaultLabelDiagnostics(confidence);
 
-    if (labelTerms.length > 0 && labelTerms[0]!.weight >= 2.2) {
+    if (labelTerms.length > 0 && labelTerms[0]!.weight >= 1.4) {
       return {
         autoLabel: labelTerms.slice(0, 3).map((term) => term.term).join(" / "),
         labelSource: "keywords",
         labelTerms,
-        representativeArticles,
-        feedTitles,
+        representativeArticles: draft.representativeArticles,
+        feedTitles: draft.feedTitles,
         confidence,
-        generatedAt
+        labelDiagnostics: diagnostics,
+        generatedAt: draft.generatedAt
       };
     }
 
-    const representativeLabel = labelFromRepresentativeTitles(representativeArticles);
+    const representativeLabel = labelFromRepresentativeTitles(
+      draft.representativeArticles,
+      input.lexicon
+    );
     if (representativeLabel) {
       return {
         autoLabel: representativeLabel,
         labelSource: "representative_titles",
         labelTerms,
-        representativeArticles,
-        feedTitles,
+        representativeArticles: draft.representativeArticles,
+        feedTitles: draft.feedTitles,
         confidence: Math.max(confidence, 0.25),
-        generatedAt
+        labelDiagnostics: defaultLabelDiagnostics(Math.max(confidence, 0.25)),
+        generatedAt: draft.generatedAt
       };
     }
 
-    if (feedTitles.length > 0) {
+    if (draft.feedTitles.length > 0) {
       return {
-        autoLabel: feedTitles.slice(0, 3).join(" / "),
+        autoLabel: draft.feedTitles.slice(0, 3).join(" / "),
         labelSource: "feeds",
         labelTerms,
-        representativeArticles,
-        feedTitles,
+        representativeArticles: draft.representativeArticles,
+        feedTitles: draft.feedTitles,
         confidence: Math.max(confidence, 0.2),
-        generatedAt
+        labelDiagnostics: defaultLabelDiagnostics(Math.max(confidence, 0.2)),
+        generatedAt: draft.generatedAt
       };
     }
 
     return {
-      autoLabel: fallbackLabel(displayIndex),
+      autoLabel: fallbackLabel(draft.displayIndex),
       labelSource: "fallback",
       labelTerms: [],
       representativeArticles: [],
       feedTitles: [],
       confidence: 0,
-      generatedAt
+      labelDiagnostics: defaultLabelDiagnostics(0),
+      generatedAt: draft.generatedAt
     };
   }
 
@@ -496,6 +770,7 @@ export class InterestClusterLabelService {
             label_terms_json as labelTermsJson,
             representative_articles_json as representativeArticlesJson,
             feed_titles_json as feedTitlesJson,
+            label_diagnostics_json as labelDiagnosticsJson,
             confidence,
             generated_at as generatedAt,
             updated_at as updatedAt
@@ -634,19 +909,119 @@ export class InterestClusterLabelService {
       )
       .all(polarity) as ProfileTerm[];
   }
+
+  private effectiveLexicon(): EffectiveLabelLexicon {
+    const defaultStopwords = [
+      ...rawDefaultLexicon.stopwords.en,
+      ...rawDefaultLexicon.stopwords.zh
+    ];
+    const defaultProtectedTerms = [
+      ...rawDefaultLexicon.protectedTerms.en,
+      ...rawDefaultLexicon.protectedTerms.zh
+    ];
+    const parsedOverrides = this.parseStoredOverrides({ strict: false });
+    const overrides = parsedOverrides.overrides;
+    const stopwords = new Set(defaultStopwords.map(normalizeTermKey).filter(Boolean));
+    const protectedTerms = new Map<string, string>();
+    const warnings = [...parsedOverrides.warnings];
+
+    for (const term of defaultProtectedTerms) {
+      const key = normalizeTermKey(term);
+      if (key) {
+        protectedTerms.set(key, term.trim());
+      }
+    }
+    for (const term of overrides.stopwordsAdd) {
+      const key = normalizeTermKey(term);
+      if (key) {
+        stopwords.add(key);
+      }
+    }
+    for (const term of overrides.stopwordsRemove) {
+      const key = normalizeTermKey(term);
+      if (key) {
+        stopwords.delete(key);
+      }
+    }
+    for (const term of overrides.protectedTermsAdd) {
+      const key = normalizeTermKey(term);
+      if (key) {
+        protectedTerms.set(key, term.trim());
+      }
+    }
+    for (const term of overrides.protectedTermsRemove) {
+      const key = normalizeTermKey(term);
+      if (key) {
+        protectedTerms.delete(key);
+      }
+    }
+
+    const badPatternSources = rawDefaultLexicon.badTermPatterns
+      .filter((pattern) => !overrides.badTermPatternsRemove.includes(pattern))
+      .concat(overrides.badTermPatternsAdd);
+    const badPatterns: RegExp[] = [];
+    for (const pattern of badPatternSources) {
+      try {
+        badPatterns.push(new RegExp(pattern, "i"));
+      } catch {
+        warnings.push(`Invalid badTermPattern ignored: ${pattern}`);
+      }
+    }
+
+    return {
+      defaultVersion: rawDefaultLexicon.version,
+      stopwords,
+      protectedTerms,
+      badPatternSources,
+      badPatterns,
+      domainSuffixes: new Set(rawDefaultLexicon.domainSuffixes.map((term) => term.toLowerCase())),
+      labelGeneration: rawDefaultLexicon.labelGeneration,
+      overrides,
+      warnings
+    };
+  }
+
+  private parseStoredOverrides(input: { strict: boolean }): {
+    overrides: ClusterLabelLexiconOverrides;
+    warnings: string[];
+  } {
+    if (!this.options.settings) {
+      return { overrides: emptyLexiconOverrides(), warnings: [] };
+    }
+
+    try {
+      const stored = this.options.settings.getJson<unknown>(CLUSTER_LABEL_LEXICON_SETTINGS_KEY);
+      if (stored === null) {
+        return { overrides: emptyLexiconOverrides(), warnings: [] };
+      }
+      return {
+        overrides: parseLexiconOverrides(stored),
+        warnings: []
+      };
+    } catch (error) {
+      if (input.strict) {
+        throw error;
+      }
+      return {
+        overrides: emptyLexiconOverrides(),
+        warnings: ["Stored cluster label lexicon override is invalid; default lexicon is active."]
+      };
+    }
+  }
 }
 
 function addTextCandidates(
   candidates: Map<string, TermCandidate>,
   text: string,
   weight: number,
-  source: "title" | "summary" | "feed" | "profile"
+  source: TermSource,
+  lexicon: EffectiveLabelLexicon
 ): void {
   if (!text || weight <= 0) {
     return;
   }
 
-  for (const term of tokenizeLabelText(text)) {
+  for (const term of tokenizeLabelText(text, lexicon)) {
     const key = normalizeTermKey(term);
     if (!key) {
       continue;
@@ -657,7 +1032,8 @@ function addTextCandidates(
       existing.sources.add(source);
     } else {
       candidates.set(key, {
-        term: formatTerm(term),
+        term: formatTerm(term, lexicon),
+        key,
         weight,
         sources: new Set([source])
       });
@@ -665,8 +1041,13 @@ function addTextCandidates(
   }
 }
 
-function tokenizeLabelText(text: string): string[] {
-  const withoutUrls = text
+function tokenizeLabelText(text: string, lexicon: EffectiveLabelLexicon): string[] {
+  const withoutMarkup = text
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#\d+;/gi, " ");
+  const withoutUrls = withoutMarkup
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/\b(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi, " ");
   const terms: string[] = [];
@@ -678,38 +1059,49 @@ function tokenizeLabelText(text: string): string[] {
 
   const hanMatches = withoutUrls.match(/\p{Script=Han}{2,18}/gu) ?? [];
   for (const match of hanMatches) {
-    if (match.length <= 8) {
+    if (match.length <= 6) {
       terms.push(match);
-      continue;
     }
-    for (let size = 2; size <= 4; size += 1) {
+    const maxSize = Math.min(6, match.length);
+    for (let size = 2; size <= maxSize; size += 1) {
       for (let index = 0; index + size <= match.length; index += 1) {
         terms.push(match.slice(index, index + size));
       }
     }
   }
 
-  return terms.filter(isUsefulTerm);
+  return terms.filter((term) => isUsefulTerm(term, lexicon));
 }
 
-function isUsefulTerm(term: string): boolean {
+function isUsefulTerm(term: string, lexicon: EffectiveLabelLexicon): boolean {
   const normalized = normalizeTermKey(term);
   if (!normalized || normalized.length < 2 || normalized.length > 32) {
-    return false;
-  }
-  if (/^\d+$/.test(normalized)) {
     return false;
   }
   if (normalized.includes("://") || normalized.includes("@")) {
     return false;
   }
-  if (/\.(com|net|org|io|cn|co|ai|dev)$/i.test(normalized)) {
+  if (isDomainLikeTerm(normalized, lexicon)) {
     return false;
   }
-  if (STOPWORDS.has(normalized)) {
+  if (lexicon.badPatterns.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return false;
+  }
+  if (!isProtectedTerm(normalized, lexicon) && lexicon.stopwords.has(normalized)) {
     return false;
   }
   return true;
+}
+
+function isDomainLikeTerm(normalized: string, lexicon: EffectiveLabelLexicon): boolean {
+  if (normalized.includes(".")) {
+    const suffix = normalized.split(".").pop()?.toLowerCase();
+    return Boolean(suffix && lexicon.domainSuffixes.has(suffix));
+  }
+  return lexicon.domainSuffixes.has(normalized) && !isProtectedTerm(normalized, lexicon);
 }
 
 function normalizeTermKey(term: string): string {
@@ -719,18 +1111,28 @@ function normalizeTermKey(term: string): string {
     .replace(/^[^\p{L}\p{N}+#.-]+|[^\p{L}\p{N}+#.-]+$/gu, "");
 }
 
-function formatTerm(term: string): string {
+function formatTerm(term: string, lexicon: EffectiveLabelLexicon): string {
   const trimmed = term.trim().replace(/^[^\p{L}\p{N}+#.-]+|[^\p{L}\p{N}+#.-]+$/gu, "");
+  const key = normalizeTermKey(trimmed);
+  const protectedDisplay = lexicon.protectedTerms.get(key);
+  if (protectedDisplay) {
+    return protectedDisplay;
+  }
   if (/^[a-z0-9+#.-]+$/.test(trimmed)) {
     return trimmed.length <= 4 ? trimmed.toUpperCase() : trimmed;
   }
   return trimmed;
 }
 
+function isProtectedTerm(keyOrTerm: string, lexicon: EffectiveLabelLexicon): boolean {
+  return lexicon.protectedTerms.has(normalizeTermKey(keyOrTerm));
+}
+
 function representativeArticlesFor(
-  evidence: EvidenceArticle[]
+  evidence: EvidenceArticle[],
+  limit: number
 ): ClusterDisplayLabel["representativeArticles"] {
-  return evidence.slice(0, MAX_REPRESENTATIVE_ARTICLES).map((item) => ({
+  return evidence.slice(0, limit).map((item) => ({
     articleId: item.articleId,
     title: item.title,
     feedTitle: item.feedTitle,
@@ -741,17 +1143,70 @@ function representativeArticlesFor(
 }
 
 function labelFromRepresentativeTitles(
-  articles: ClusterDisplayLabel["representativeArticles"]
+  articles: ClusterDisplayLabel["representativeArticles"],
+  lexicon: EffectiveLabelLexicon
 ): string | null {
   const titleTerms = new Map<string, TermCandidate>();
   for (const article of articles) {
-    addTextCandidates(titleTerms, article.title, 1, "title");
+    addTextCandidates(titleTerms, article.title, 1, "title", lexicon);
   }
-  const terms = Array.from(titleTerms.values())
-    .sort((left, right) => right.weight - left.weight)
+  const terms = dedupeSubsumedTerms(
+    Array.from(titleTerms.values()).sort((left, right) => right.weight - left.weight),
+    lexicon
+  )
     .slice(0, 3)
     .map((candidate) => candidate.term);
   return terms.length > 0 ? terms.join(" / ") : null;
+}
+
+function dedupeSubsumedTerms<T extends { term: string; weight: number }>(
+  candidates: T[],
+  lexicon: EffectiveLabelLexicon
+): T[] {
+  const result: T[] = [];
+  for (const candidate of candidates) {
+    const term = candidate.term;
+    const key = normalizeTermKey(term);
+    if (!key) {
+      continue;
+    }
+    let duplicate = false;
+    for (let index = 0; index < result.length; index += 1) {
+      const kept = result[index]!;
+      const keptKey = normalizeTermKey(kept.term);
+      if (!keptKey) {
+        continue;
+      }
+      if (keptKey === key) {
+        duplicate = true;
+        break;
+      }
+      if (isProtectedTerm(key, lexicon) || isProtectedTerm(keptKey, lexicon)) {
+        continue;
+      }
+      if (isHanTerm(key) && isHanTerm(keptKey)) {
+        if (key.includes(keptKey) && key.length > keptKey.length && candidate.weight >= kept.weight * 0.35) {
+          result.splice(index, 1, candidate);
+          duplicate = true;
+          break;
+        }
+        if (keptKey.includes(key)) {
+          duplicate = true;
+          break;
+        }
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    result.push(candidate);
+  }
+
+  return result;
+}
+
+function isHanTerm(term: string): boolean {
+  return /\p{Script=Han}/u.test(term);
 }
 
 function confidenceFor(input: {
@@ -785,6 +1240,110 @@ function confidenceFor(input: {
       1
     ).toFixed(4)
   );
+}
+
+function disambiguateLabelCollisions(
+  generated: Array<{ cluster: ClusterDbRow; label: GeneratedClusterLabel }>,
+  lexicon: EffectiveLabelLexicon
+): void {
+  const groups = new Map<string, Array<{ cluster: ClusterDbRow; label: GeneratedClusterLabel }>>();
+  for (const item of generated) {
+    const key = normalizeLabelForCollision(item.label.autoLabel);
+    if (!key) {
+      continue;
+    }
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+
+  const usedLabels = new Set(
+    generated
+      .map((item) => normalizeLabelForCollision(item.label.autoLabel))
+      .filter((item): item is string => Boolean(item))
+  );
+
+  for (const group of groups.values()) {
+    if (group.length <= 1) {
+      continue;
+    }
+    group.forEach((item, index) => {
+      const original = item.label.autoLabel ?? fallbackLabel(index + 1);
+      usedLabels.delete(normalizeLabelForCollision(original) ?? "");
+      const next = uniqueDisambiguatedLabel(original, item.label, index + 1, usedLabels, lexicon);
+      item.label.autoLabel = next;
+      item.label.labelDiagnostics = {
+        ...item.label.labelDiagnostics,
+        collision: true,
+        collisionGroupSize: group.length
+      };
+      usedLabels.add(normalizeLabelForCollision(next) ?? next);
+    });
+  }
+}
+
+function uniqueDisambiguatedLabel(
+  original: string,
+  label: GeneratedClusterLabel,
+  ordinal: number,
+  usedLabels: Set<string>,
+  lexicon: EffectiveLabelLexicon
+): string {
+  const existingTerms = new Set(label.autoLabel?.split("/").map(normalizeTermKey) ?? []);
+  const extras = label.labelTerms
+    .slice(3, 5)
+    .map((term) => term.term)
+    .filter((term) => !existingTerms.has(normalizeTermKey(term)));
+  const representativeTerm = representativeSpecificTerm(label, existingTerms, lexicon);
+  if (representativeTerm) {
+    extras.push(representativeTerm);
+  }
+  const feedTerm = label.feedTitles[0];
+  if (feedTerm) {
+    extras.push(feedTerm);
+  }
+
+  for (const extra of extras) {
+    const candidate = `${original} / ${extra}`;
+    const key = normalizeLabelForCollision(candidate);
+    if (key && !usedLabels.has(key)) {
+      return candidate;
+    }
+  }
+
+  return `${original} / #${ordinal}`;
+}
+
+function representativeSpecificTerm(
+  label: GeneratedClusterLabel,
+  existingTerms: Set<string>,
+  lexicon: EffectiveLabelLexicon
+): string | null {
+  const candidates = new Map<string, TermCandidate>();
+  for (const article of label.representativeArticles) {
+    addTextCandidates(candidates, article.title, 1, "representative", lexicon);
+  }
+  return (
+    dedupeSubsumedTerms(
+      Array.from(candidates.values()).sort((left, right) => right.weight - left.weight),
+      lexicon
+    ).find((candidate) => !existingTerms.has(candidate.key))?.term ?? null
+  );
+}
+
+function normalizeLabelForCollision(label: string | null): string | null {
+  const normalized = label
+    ?.split("/")
+    .map((part) => normalizeTermKey(part))
+    .filter(Boolean)
+    .join("/");
+  return normalized || null;
+}
+
+function defaultLabelDiagnostics(confidence: number): LabelDiagnostics {
+  return {
+    collision: false,
+    collisionGroupSize: 1,
+    lowConfidence: confidence < 0.4
+  };
 }
 
 function uniqueNonEmpty(values: string[]): string[] {
@@ -922,6 +1481,31 @@ function parseRepresentativeArticles(
     );
 }
 
+function parseLabelDiagnostics(value: string | null, confidence: number): LabelDiagnostics {
+  if (!value) {
+    return defaultLabelDiagnostics(confidence);
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<LabelDiagnostics>;
+    return {
+      collision: parsed.collision === true,
+      collisionGroupSize:
+        typeof parsed.collisionGroupSize === "number" &&
+        Number.isFinite(parsed.collisionGroupSize)
+          ? parsed.collisionGroupSize
+          : parsed.collision === true
+            ? 2
+            : 1,
+      lowConfidence:
+        typeof parsed.lowConfidence === "boolean"
+          ? parsed.lowConfidence
+          : confidence < 0.4
+    };
+  } catch {
+    return defaultLabelDiagnostics(confidence);
+  }
+}
+
 function parseStringArray(value: string | null): string[] {
   return parseJsonArray(value).filter((item): item is string => typeof item === "string");
 }
@@ -938,50 +1522,143 @@ function parseJsonArray(value: string | null): unknown[] {
   }
 }
 
-const STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "it",
-  "new",
-  "of",
-  "on",
-  "or",
-  "the",
-  "to",
-  "with",
-  "about",
-  "latest",
-  "daily",
-  "weekly",
-  "news",
-  "newsletter",
-  "一个",
-  "这个",
-  "那个",
-  "以及",
-  "关于",
-  "如何",
-  "为什么",
-  "进行",
-  "相关",
-  "最新",
-  "发布",
-  "观察",
-  "评论",
-  "日报",
-  "周报",
-  "新闻",
-  "文章",
-  "阅读"
-]);
+function emptyLexiconOverrides(): ClusterLabelLexiconOverrides {
+  return {
+    stopwordsAdd: [],
+    stopwordsRemove: [],
+    protectedTermsAdd: [],
+    protectedTermsRemove: [],
+    badTermPatternsAdd: [],
+    badTermPatternsRemove: []
+  };
+}
+
+function parseLexiconOverrides(value: unknown): ClusterLabelLexiconOverrides {
+  const input = readPlainObject(value, "cluster label lexicon overrides");
+  rejectUnknownKeys(input, [
+    "stopwordsAdd",
+    "stopwordsRemove",
+    "protectedTermsAdd",
+    "protectedTermsRemove",
+    "badTermPatternsAdd",
+    "badTermPatternsRemove"
+  ]);
+  const overrides = emptyLexiconOverrides();
+  for (const key of Object.keys(overrides) as Array<keyof ClusterLabelLexiconOverrides>) {
+    if (Object.hasOwn(input, key)) {
+      overrides[key] = parseLexiconArray(input[key], key);
+    }
+  }
+  validateRegexPatterns(overrides.badTermPatternsAdd, "badTermPatternsAdd");
+  validateRegexPatterns(overrides.badTermPatternsRemove, "badTermPatternsRemove");
+  return overrides;
+}
+
+function parseLexiconOverridesPatch(value: unknown): Partial<ClusterLabelLexiconOverrides> {
+  const input = readPlainObject(value, "cluster label lexicon override patch");
+  rejectUnknownKeys(input, [
+    "stopwordsAdd",
+    "stopwordsRemove",
+    "protectedTermsAdd",
+    "protectedTermsRemove",
+    "badTermPatternsAdd",
+    "badTermPatternsRemove"
+  ]);
+  const patch: Partial<ClusterLabelLexiconOverrides> = {};
+  for (const key of Object.keys(emptyLexiconOverrides()) as Array<keyof ClusterLabelLexiconOverrides>) {
+    if (Object.hasOwn(input, key)) {
+      patch[key] = parseLexiconArray(input[key], key);
+    }
+  }
+  return patch;
+}
+
+function parseLexiconArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new InterestClusterLabelServiceError(
+      400,
+      "VALIDATION_ERROR",
+      `${field} must be an array`,
+      { field }
+    );
+  }
+  if (value.length > MAX_LEXICON_ARRAY_LENGTH) {
+    throw new InterestClusterLabelServiceError(
+      400,
+      "VALIDATION_ERROR",
+      `${field} must contain ${MAX_LEXICON_ARRAY_LENGTH} or fewer items`,
+      { field, maxItems: MAX_LEXICON_ARRAY_LENGTH }
+    );
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") {
+      throw new InterestClusterLabelServiceError(
+        400,
+        "VALIDATION_ERROR",
+        `${field} items must be strings`,
+        { field }
+      );
+    }
+    const trimmed = item.trim();
+    const maxLength = field.startsWith("badTermPatterns")
+      ? MAX_LEXICON_PATTERN_LENGTH
+      : MAX_LEXICON_TERM_LENGTH;
+    if (trimmed.length < 1 || Array.from(trimmed).length > maxLength) {
+      throw new InterestClusterLabelServiceError(
+        400,
+        "VALIDATION_ERROR",
+        `${field} items must be 1-${maxLength} characters`,
+        { field, minLength: 1, maxLength }
+      );
+    }
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
+function validateRegexPatterns(patterns: string[], field: string): void {
+  for (const pattern of patterns) {
+    try {
+      new RegExp(pattern);
+    } catch {
+      throw new InterestClusterLabelServiceError(
+        400,
+        "VALIDATION_ERROR",
+        `${field} contains an invalid regular expression`,
+        { field, pattern }
+      );
+    }
+  }
+}
+
+function readPlainObject(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new InterestClusterLabelServiceError(
+      400,
+      "VALIDATION_ERROR",
+      `${field} must be an object`,
+      { field }
+    );
+  }
+  return value as Record<string, unknown>;
+}
+
+function rejectUnknownKeys(input: Record<string, unknown>, allowed: string[]): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(input)) {
+    if (!allowedSet.has(key)) {
+      throw new InterestClusterLabelServiceError(
+        400,
+        "VALIDATION_ERROR",
+        `Unknown field: ${key}`,
+        { field: key }
+      );
+    }
+  }
+}

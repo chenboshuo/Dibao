@@ -1839,6 +1839,9 @@ describe("server API vertical slice", () => {
             recentIntentAutoRebuildEnabled: true,
             keywordAutoRebuildEnabled: true,
             duplicateAutoRebuildEnabled: true,
+            clusterLabelAutoRebuildEnabled: true,
+            clusterMergeDiagnosticsEnabled: true,
+            clusterAutoMergeEnabled: false,
             ftrlAutoTrainEnabled: true,
             ftrlAutoPromoteEnabled: false,
             evaluationAutoRunEnabled: false,
@@ -2404,6 +2407,92 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("requires authentication for cluster label lexicon and merge APIs", async () => {
+    const db = createEmptyDatabase();
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      for (const request of [
+        { method: "GET", url: "/api/recommendation/cluster-label-lexicon" },
+        { method: "POST", url: "/api/recommendation/clusters/merge-candidates/rebuild" },
+        { method: "GET", url: "/api/recommendation/clusters/merge-candidates" },
+        { method: "POST", url: "/api/recommendation/clusters/merge-candidates/candidate_missing/merge" },
+        { method: "POST", url: "/api/recommendation/clusters/merge-candidates/candidate_missing/ignore" }
+      ] as const) {
+        const response = await app.inject(request);
+        expect(response.statusCode, `${request.method} ${request.url}`).toBe(401);
+      }
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("updates cluster label lexicon overrides and queues only label rebuild", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, now: () => 30_000 });
+
+    try {
+      const current = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/cluster-label-lexicon"
+      });
+      expect(current.statusCode, current.body).toBe(200);
+      expect(current.json()).toMatchObject({
+        data: {
+          defaultVersion: 1,
+          effective: {
+            stopwords: expect.arrayContaining(["article"]),
+            protectedTerms: expect.arrayContaining(["AI"])
+          }
+        }
+      });
+
+      const invalid = await app.inject({
+        method: "PATCH",
+        url: "/api/recommendation/cluster-label-lexicon",
+        payload: {
+          badTermPatternsAdd: ["["]
+        }
+      });
+      expect(invalid.statusCode, invalid.body).toBe(400);
+
+      const updated = await app.inject({
+        method: "PATCH",
+        url: "/api/recommendation/cluster-label-lexicon",
+        payload: {
+          stopwordsAdd: ["affiliation"],
+          protectedTermsAdd: ["邸报"]
+        }
+      });
+      expect(updated.statusCode, updated.body).toBe(200);
+      expect(updated.json()).toMatchObject({
+        data: {
+          effective: {
+            stopwords: expect.arrayContaining(["affiliation"]),
+            protectedTerms: expect.arrayContaining(["邸报"])
+          },
+          rebuildJob: {
+            existing: false
+          }
+        }
+      });
+      expect(
+        db.prepare("select count(*) as count from jobs where type = 'interest_cluster_label_rebuild'").get()
+      ).toEqual({ count: 1 });
+      expect(
+        db
+          .prepare(
+            "select count(*) as count from jobs where type in ('ranking_recalculate', 'embedding_generate')"
+          )
+          .get()
+      ).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("sets and clears manual interest cluster labels in transparency", async () => {
     const db = createFixtureDatabase();
     const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
@@ -2562,6 +2651,120 @@ describe("server API vertical slice", () => {
           )
           .get()
       ).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("lists, merges, and ignores interest cluster merge candidates", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    insertApiClusterMergeFixture(db, index.id);
+    const app = buildServer({ db, logger: false, now: () => 40_000 });
+
+    try {
+      const rebuild = await app.inject({
+        method: "POST",
+        url: "/api/recommendation/clusters/merge-candidates/rebuild"
+      });
+      expect(rebuild.statusCode, rebuild.body).toBe(200);
+      expect(rebuild.json()).toMatchObject({
+        data: {
+          jobId: expect.any(String),
+          existing: false
+        }
+      });
+
+      insertApiMergeCandidate(db, {
+        id: "candidate_merge_api",
+        embeddingIndexId: index.id,
+        leftClusterId: "cluster_merge_left",
+        rightClusterId: "cluster_merge_right",
+        recommendation: "review"
+      });
+      insertApiMergeCandidate(db, {
+        id: "candidate_ignore_api",
+        embeddingIndexId: index.id,
+        leftClusterId: "cluster_merge_left",
+        rightClusterId: "cluster_merge_third",
+        recommendation: "review"
+      });
+
+      const listed = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/clusters/merge-candidates?status=all"
+      });
+      expect(listed.statusCode, listed.body).toBe(200);
+      expect(listed.json()).toMatchObject({
+        data: {
+          candidates: expect.arrayContaining([
+            expect.objectContaining({
+              id: "candidate_merge_api",
+              centroidSimilarity: 0.94,
+              labelJaccard: 0.7,
+              evidenceOverlap: 0.4,
+              mergeScore: 0.86,
+              status: "open"
+            })
+          ])
+        }
+      });
+
+      const ignored = await app.inject({
+        method: "POST",
+        url: "/api/recommendation/clusters/merge-candidates/candidate_ignore_api/ignore"
+      });
+      expect(ignored.statusCode, ignored.body).toBe(200);
+      expect(ignored.json()).toMatchObject({
+        data: {
+          status: "ignored"
+        }
+      });
+      expect(
+        db.prepare("select count(*) as count from interest_clusters where id = 'cluster_merge_third'").get()
+      ).toEqual({ count: 1 });
+
+      const merged = await app.inject({
+        method: "POST",
+        url: "/api/recommendation/clusters/merge-candidates/candidate_merge_api/merge"
+      });
+      expect(merged.statusCode, merged.body).toBe(200);
+      expect(merged.json()).toMatchObject({
+        data: {
+          ok: true,
+          candidateId: "candidate_merge_api",
+          survivorClusterId: "cluster_merge_left",
+          mergedAwayClusterId: "cluster_merge_right",
+          labelRebuild: {
+            jobId: expect.any(String)
+          },
+          rankingRecalculate: {
+            jobId: expect.any(String)
+          }
+        }
+      });
+      expect(
+        db.prepare("select count(*) as count from interest_clusters where id = 'cluster_merge_right'").get()
+      ).toEqual({ count: 0 });
+      expect(
+        db.prepare("select status from interest_cluster_merge_candidates where id = 'candidate_merge_api'").get()
+      ).toEqual({ status: "merged" });
+      expect(
+        db
+          .prepare(
+            "select count(*) as count from jobs where type in ('interest_cluster_label_rebuild', 'ranking_recalculate')"
+          )
+          .get()
+      ).toEqual({ count: 2 });
+
+      const alreadyMerged = await app.inject({
+        method: "POST",
+        url: "/api/recommendation/clusters/merge-candidates/candidate_merge_api/merge"
+      });
+      expect(alreadyMerged.statusCode, alreadyMerged.body).toBe(409);
     } finally {
       await app.close();
       db.close();
@@ -4870,6 +5073,145 @@ function insertApiClusterLabelFixture(db: DibaoDatabase, embeddingIndexId: strin
       values ('AI Agent', 'positive', 'long', 3, 3, 6500, 6500)
     `
   ).run();
+}
+
+function insertApiClusterMergeFixture(db: DibaoDatabase, embeddingIndexId: string): void {
+  const feeds = new SqliteFeedRepository(db);
+  const articles = new SqliteArticleRepository(db);
+  const profiles = new SqliteProfileRepository(db);
+  feeds.upsert({
+    id: "feed_cluster_merge_api",
+    title: "AI Merge Notes",
+    feedUrl: "https://example.com/cluster-merge.xml",
+    now: 6000
+  });
+  for (const articleId of [
+    "article_merge_shared",
+    "article_merge_left",
+    "article_merge_right",
+    "article_merge_third"
+  ]) {
+    articles.upsert({
+      id: articleId,
+      feedId: "feed_cluster_merge_api",
+      url: `https://example.com/${articleId}`,
+      title: `AI Agent CLI ${articleId}`,
+      summary: "AI Agent CLI workflow",
+      discoveredAt: 6100,
+      dedupeKey: articleId,
+      now: 6100
+    });
+  }
+  for (const cluster of [
+    { id: "cluster_merge_left", vector: [1, 0, 0], weight: 8, articles: ["article_merge_shared", "article_merge_left"] },
+    { id: "cluster_merge_right", vector: [0.99, 0.01, 0], weight: 4, articles: ["article_merge_shared", "article_merge_right"] },
+    { id: "cluster_merge_third", vector: [0.98, 0.02, 0], weight: 2, articles: ["article_merge_shared", "article_merge_third"] }
+  ]) {
+    profiles.upsertCluster({
+      id: cluster.id,
+      embeddingIndexId,
+      polarity: "positive",
+      centroidVectorBlob: toVectorBlob(cluster.vector),
+      weight: cluster.weight,
+      sampleCount: 2,
+      now: 6300
+    });
+    for (const articleId of cluster.articles) {
+      db.prepare(
+        `
+          insert or ignore into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            created_at
+          )
+          values (?, ?, 'favorite', 5, 6400)
+        `
+      ).run(`event_${cluster.id}_${articleId}`, articleId);
+      profiles.insertClusterEvidence({
+        id: `evidence_${cluster.id}_${articleId}`,
+        clusterId: cluster.id,
+        articleId,
+        behaviorEventId: `event_${cluster.id}_${articleId}`,
+        evidenceSource: "live_event",
+        confidence: 0.95,
+        similarity: 0.98,
+        weightDelta: 5,
+        createdAt: 6500
+      });
+    }
+    db.prepare(
+      `
+        insert into interest_cluster_labels (
+          cluster_id,
+          auto_label,
+          manual_label,
+          label_source,
+          label_terms_json,
+          representative_articles_json,
+          feed_titles_json,
+          label_diagnostics_json,
+          confidence,
+          generated_at,
+          updated_at
+        )
+        values (?, 'AI Agent / CLI', ?, ?, ?, ?, ?, null, 0.8, 6500, 6500)
+      `
+    ).run(
+      cluster.id,
+      cluster.id === "cluster_merge_left" ? "AI 编程代理" : null,
+      cluster.id === "cluster_merge_left" ? "manual" : "keywords",
+      JSON.stringify([
+        { term: "AI Agent", weight: 5 },
+        { term: "CLI", weight: 4 }
+      ]),
+      JSON.stringify(cluster.articles.map((articleId) => ({ articleId, title: articleId }))),
+      JSON.stringify(["AI Merge Notes"])
+    );
+  }
+}
+
+function insertApiMergeCandidate(
+  db: DibaoDatabase,
+  input: {
+    id: string;
+    embeddingIndexId: string;
+    leftClusterId: string;
+    rightClusterId: string;
+    recommendation: "auto_merge" | "review";
+  }
+): void {
+  db.prepare(
+    `
+      insert into interest_cluster_merge_candidates (
+        id,
+        embedding_index_id,
+        left_cluster_id,
+        right_cluster_id,
+        polarity,
+        centroid_similarity,
+        label_jaccard,
+        evidence_overlap,
+        representative_overlap,
+        source_overlap,
+        merge_score,
+        recommendation,
+        status,
+        reason_json,
+        created_at,
+        updated_at,
+        decided_at
+      )
+      values (?, ?, ?, ?, 'positive', 0.94, 0.7, 0.4, 0.4, 1, 0.86, ?, 'open', '{}', 7000, 7000, null)
+    `
+  ).run(
+    input.id,
+    input.embeddingIndexId,
+    input.leftClusterId,
+    input.rightClusterId,
+    input.recommendation
+  );
 }
 
 function insertRank(

@@ -5,8 +5,18 @@ import {
   INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE,
   type InterestClusterLabelService
 } from "./interest-cluster-label-service.js";
+import {
+  INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
+  INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE,
+  type InterestClusterMergeService
+} from "./interest-cluster-merge-service.js";
 import { PermanentJobFailure } from "./job-runner.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
+
+export {
+  INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
+  INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
+} from "./interest-cluster-merge-service.js";
 
 export const ARTICLE_FINGERPRINT_BACKFILL_JOB_TYPE = "article_fingerprint_backfill" as const;
 export const DUPLICATE_GROUP_REBUILD_JOB_TYPE = "duplicate_group_rebuild" as const;
@@ -29,7 +39,9 @@ type MaintenanceJobType =
   | typeof RANKING_EVAL_RUN_JOB_TYPE
   | typeof FTRL_TRAIN_JOB_TYPE
   | typeof RECOMMENDATION_BACKFILL_JOB_TYPE
-  | typeof INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE;
+  | typeof INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE
+  | typeof INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
+  | typeof INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE;
 
 export type RecommendationMaintenanceResult = {
   jobId: string;
@@ -55,8 +67,12 @@ export type RecommendationMaintenanceServiceOptions = {
   jobs: Pick<JobRepository, "enqueue" | "listOpenByType">;
   rankingJobs: Pick<RankingRecalculateJobService, "enqueueAll">;
   clusterLabels?: Pick<InterestClusterLabelService, "rebuildActiveIndexLabels">;
+  clusterMerge?: Pick<
+    InterestClusterMergeService,
+    "rebuildActiveIndexCandidates" | "autoMergeOpenCandidates"
+  >;
   getRankingSettings?: () => { localLearningEnabled: boolean; localLearningShadowMode: boolean };
-  getMaintenanceSettings?: () => { ftrlAutoPromoteEnabled: boolean };
+  getMaintenanceSettings?: () => { ftrlAutoPromoteEnabled: boolean; clusterAutoMergeEnabled?: boolean };
   now?: () => number;
   jobIdFactory?: () => string;
 };
@@ -120,6 +136,14 @@ export class RecommendationMaintenanceService {
 
   enqueueClusterLabelRebuild(options: RecommendationMaintenanceEnqueueOptions = {}): RecommendationMaintenanceResult {
     return this.enqueueUnique(INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE, options);
+  }
+
+  enqueueClusterMergeDiagnostics(options: RecommendationMaintenanceEnqueueOptions = {}): RecommendationMaintenanceResult {
+    return this.enqueueUnique(INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE, options);
+  }
+
+  enqueueClusterAutoMerge(options: RecommendationMaintenanceEnqueueOptions = {}): RecommendationMaintenanceResult {
+    return this.enqueueUnique(INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE, options);
   }
 
   enqueueStrongActionMaintenance(now: number = this.now()): {
@@ -368,6 +392,27 @@ export class RecommendationMaintenanceService {
           throw new PermanentJobFailure("Interest cluster label service is not configured");
         }
         this.options.clusterLabels.rebuildActiveIndexLabels();
+        this.markScheduleCompleted(job.id);
+        return;
+      case INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE:
+        if (!this.options.clusterMerge) {
+          throw new PermanentJobFailure("Interest cluster merge service is not configured");
+        }
+        this.options.clusterMerge.rebuildActiveIndexCandidates();
+        this.markScheduleCompleted(job.id);
+        return;
+      case INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE:
+        if (!this.options.clusterMerge) {
+          throw new PermanentJobFailure("Interest cluster merge service is not configured");
+        }
+        if (this.options.getMaintenanceSettings?.().clusterAutoMergeEnabled !== true) {
+          this.markScheduleCompleted(job.id);
+          return;
+        }
+        if (this.options.clusterMerge.autoMergeOpenCandidates().mergedCount > 0) {
+          this.enqueueClusterLabelRebuild();
+          this.options.rankingJobs.enqueueAll();
+        }
         this.markScheduleCompleted(job.id);
         return;
       default:

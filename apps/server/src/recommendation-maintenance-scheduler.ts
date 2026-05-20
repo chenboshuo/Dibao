@@ -4,6 +4,8 @@ import type { JobRunner } from "./job-runner.js";
 import {
   DUPLICATE_GROUP_REBUILD_JOB_TYPE,
   FTRL_TRAIN_JOB_TYPE,
+  INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
+  INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE,
   KEYWORD_PROFILE_REBUILD_JOB_TYPE,
   RECENT_INTENT_REBUILD_JOB_TYPE,
   type RecommendationMaintenanceResult,
@@ -24,6 +26,8 @@ export type RecommendationMaintenanceSchedulerService = Pick<
   | "enqueueKeywordRebuild"
   | "enqueueFtrlTrain"
   | "enqueueClusterLabelRebuild"
+  | "enqueueClusterMergeDiagnostics"
+  | "enqueueClusterAutoMerge"
   | "enqueueRecalculate"
   | "enqueueEvaluation"
   | "recordScheduleEnqueue"
@@ -163,10 +167,27 @@ export class RecommendationMaintenanceScheduler {
     if (settings.ftrlAutoTrainEnabled && this.isDue("ftrl_train_daily", ONE_DAY_MS)) {
       this.enqueue("ftrl_train_daily", () => this.options.maintenance.enqueueFtrlTrain(), enqueued);
     }
-    if (this.isDue("cluster_label_daily", ONE_DAY_MS)) {
+    if (settings.clusterLabelAutoRebuildEnabled && this.isDue("cluster_label_daily", ONE_DAY_MS)) {
       this.enqueue(
         "cluster_label_daily",
         () => this.options.maintenance.enqueueClusterLabelRebuild(),
+        enqueued
+      );
+    }
+    if (
+      settings.clusterMergeDiagnosticsEnabled &&
+      this.isDue("cluster_merge_diagnostics_daily", ONE_DAY_MS)
+    ) {
+      this.enqueue(
+        "cluster_merge_diagnostics_daily",
+        () => this.options.maintenance.enqueueClusterMergeDiagnostics(),
+        enqueued
+      );
+    }
+    if (settings.clusterAutoMergeEnabled && this.isDue("cluster_auto_merge_daily", ONE_DAY_MS)) {
+      this.enqueue(
+        "cluster_auto_merge_daily",
+        () => this.options.maintenance.enqueueClusterAutoMerge(),
         enqueued
       );
     }
@@ -312,6 +333,8 @@ const ALL_TASK_KEYS = [
   "ftrl_train_periodic",
   "ftrl_train_daily",
   "cluster_label_daily",
+  "cluster_merge_diagnostics_daily",
+  "cluster_auto_merge_daily",
   "ranking_recalculate_hourly",
   "ranking_recalculate_daily",
   "evaluation_weekly",
@@ -345,6 +368,10 @@ export function maintenanceJobTypeForTaskKey(taskKey: string): string | null {
       return FTRL_TRAIN_JOB_TYPE;
     case "cluster_label_daily":
       return "interest_cluster_label_rebuild";
+    case "cluster_merge_diagnostics_daily":
+      return INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE;
+    case "cluster_auto_merge_daily":
+      return INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE;
     default:
       return null;
   }

@@ -388,6 +388,8 @@ export const zhCN = {
       currentStatus: "当前推荐状态",
       currentClusters: "当前兴趣簇",
       maintenance: "算法状态维护",
+      mergeCandidates: "可能重复的兴趣簇",
+      labelLexicon: "标签词典",
       algorithmExplanation: "算法解释",
       terms: "先解释几个词",
       scoreTable: "行为积分表",
@@ -442,6 +444,10 @@ export const zhCN = {
         low: "低"
       },
       lowConfidence: "自动推断，可能不准",
+      lowConfidenceAdvice: "自动标签置信度低，建议手动重命名。",
+      collisionResolved: "该标签已自动加上区分词，以避免与其他兴趣簇重名。",
+      possibleDuplicate: (label: string, similarity: string) =>
+        `可能重复：与「${label}」相似度 ${similarity}`,
       autoInference: (label: string) => `自动推断：${label}`,
       evidence: (count: number) => `证据：${count} 篇文章`,
       generatedAt: (value: string) => `生成：${value}`,
@@ -475,6 +481,35 @@ export const zhCN = {
       allTitle: "全部兴趣簇",
       allSummary: (count: number) => `完整显示 ${count} 个兴趣簇，按权重从高到低排序。`,
       back: "返回算法透明说明"
+    },
+    mergeCandidates: {
+      title: "可能重复的兴趣簇",
+      body: "诊断只比较同一 polarity 的 active index 兴趣簇；合并会改变画像，因此默认需要手动确认。",
+      empty: "当前没有打开状态的重复兴趣簇候选。",
+      left: "左簇",
+      right: "右簇",
+      metrics: "指标",
+      recommendation: "建议",
+      actions: "操作",
+      merge: "合并",
+      ignore: "忽略",
+      metricSummary: (centroid: string, label: string, evidence: string, score: string) =>
+        `centroid ${centroid} · label ${label} · evidence ${evidence} · score ${score}`,
+      recommendations: {
+        auto_merge: "高置信",
+        review: "需复核",
+        ignore: "忽略"
+      }
+    },
+    lexicon: {
+      title: "标签词典",
+      body: "噪声词、保护词和过滤规则只影响解释标签，不参与排序，也不会触发 embedding。",
+      stopwordsAdd: "自定义噪声词",
+      protectedTermsAdd: "自定义保护词",
+      stopwordPlaceholder: "article / affiliation / URL 残留",
+      addStopword: "添加噪声词",
+      noStopwords: "尚未添加自定义噪声词。",
+      saveAndRebuild: "保存并重建兴趣簇标签"
     },
     maintenance: {
       disclosureHint: "如系统运行正常，无需手动执行以下操作。",
@@ -512,6 +547,16 @@ export const zhCN = {
         cluster_label_rebuild: {
           label: "重建兴趣簇标签",
           description: "用本地证据文章、画像关键词和来源标题刷新兴趣簇显示标签。",
+          remoteUse: "不会调用 provider"
+        },
+        cluster_merge_diagnostics: {
+          label: "重建兴趣簇重复诊断",
+          description: "只生成可能重复的兴趣簇候选，不修改画像和排序。",
+          remoteUse: "不会调用 provider"
+        },
+        cluster_auto_merge: {
+          label: "自动合并高置信重复簇",
+          description: "仅在设置开启时合并高置信候选；合并会改变画像并触发排序重算。",
           remoteUse: "不会调用 provider"
         },
         recent_intent_rebuild: {
@@ -1257,6 +1302,8 @@ export const enUS = {
       currentStatus: "Current recommendation status",
       currentClusters: "Current interest clusters",
       maintenance: "Algorithm maintenance",
+      mergeCandidates: "Possible duplicate clusters",
+      labelLexicon: "Label lexicon",
       algorithmExplanation: "Algorithm explanation",
       terms: "Terms",
       scoreTable: "Behavior score table",
@@ -1311,6 +1358,10 @@ export const enUS = {
         low: "Low"
       },
       lowConfidence: "Automatic inference, may be inaccurate",
+      lowConfidenceAdvice: "Automatic label confidence is low; consider renaming manually.",
+      collisionResolved: "This label was automatically disambiguated to avoid duplicate cluster names.",
+      possibleDuplicate: (label: string, similarity: string) =>
+        `Possible duplicate: similar to "${label}" at ${similarity}`,
       autoInference: (label: string) => `Auto inference: ${label}`,
       evidence: (count: number) => `Evidence: ${count} articles`,
       generatedAt: (value: string) => `Generated: ${value}`,
@@ -1344,6 +1395,35 @@ export const enUS = {
       allTitle: "All interest clusters",
       allSummary: (count: number) => `Showing all ${count} interest clusters, sorted by weight.`,
       back: "Back to transparency"
+    },
+    mergeCandidates: {
+      title: "Possible duplicate clusters",
+      body: "Diagnostics only compare same-polarity clusters in the active index. Merge changes the profile, so it requires confirmation by default.",
+      empty: "No open duplicate-cluster candidates.",
+      left: "Left cluster",
+      right: "Right cluster",
+      metrics: "Metrics",
+      recommendation: "Recommendation",
+      actions: "Actions",
+      merge: "Merge",
+      ignore: "Ignore",
+      metricSummary: (centroid: string, label: string, evidence: string, score: string) =>
+        `centroid ${centroid} · label ${label} · evidence ${evidence} · score ${score}`,
+      recommendations: {
+        auto_merge: "High confidence",
+        review: "Review",
+        ignore: "Ignore"
+      }
+    },
+    lexicon: {
+      title: "Label lexicon",
+      body: "Stopwords, protected terms, and filters affect explainability labels only; they do not affect ranking or request embeddings.",
+      stopwordsAdd: "Custom stopwords",
+      protectedTermsAdd: "Custom protected terms",
+      stopwordPlaceholder: "article / affiliation / URL residue",
+      addStopword: "Add stopword",
+      noStopwords: "No custom stopwords yet.",
+      saveAndRebuild: "Save and rebuild cluster labels"
     },
     maintenance: {
       disclosureHint: "If the system is running normally, you do not need to run these manually.",
@@ -1381,6 +1461,16 @@ export const enUS = {
         cluster_label_rebuild: {
           label: "Rebuild cluster labels",
           description: "Refreshes cluster display labels from local evidence articles, profile keywords, and feed titles.",
+          remoteUse: "Does not call provider"
+        },
+        cluster_merge_diagnostics: {
+          label: "Rebuild cluster merge diagnostics",
+          description: "Generates possible duplicate-cluster candidates without changing the profile or ranking.",
+          remoteUse: "Does not call provider"
+        },
+        cluster_auto_merge: {
+          label: "Auto-merge high-confidence clusters",
+          description: "Only runs when enabled; merging changes the profile and triggers ranking recalculation.",
           remoteUse: "Does not call provider"
         },
         recent_intent_rebuild: {

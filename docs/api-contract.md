@@ -994,6 +994,20 @@ cursor
       "preferFreshness": 0.5,
       "preferSource": 0.5,
       "preferDiversity": 0.5
+    },
+    "recommendationMaintenance": {
+      "maintenanceEnabled": true,
+      "recentIntentAutoRebuildEnabled": true,
+      "keywordAutoRebuildEnabled": true,
+      "duplicateAutoRebuildEnabled": true,
+      "clusterLabelAutoRebuildEnabled": true,
+      "clusterMergeDiagnosticsEnabled": true,
+      "clusterAutoMergeEnabled": false,
+      "ftrlAutoTrainEnabled": true,
+      "ftrlAutoPromoteEnabled": false,
+      "evaluationAutoRunEnabled": false,
+      "evaluationAutoRunIntervalDays": 7,
+      "embeddingHealthAutoBackfillEnabled": true
     }
   }
 }
@@ -1015,7 +1029,7 @@ cursor
 - `behavior.markScrolledArticlesIgnored` 控制最新 / 推荐列表中“滚过未打开文章 -> 已忽略”的自动行为记录。
 - `behavior.removeReadLaterOnReadComplete` 控制稍后读文章触发完读后是否自动移出稍后读；当前完读阈值为 `read_progress >= 0.9` 或兼容 action `mark_read`。自动移出只更新文章状态，不额外写入 `remove_read_later` 行为事件。
 - `ranking.cocoonLevel`、`ranking.localLearningEnabled`、`ranking.localLearningShadowMode`、`ranking.explorationEnabled`、`ranking.evaluationEnabled` 实际变化时会 enqueue 一个 deduped `ranking_recalculate` job；reader/behavior/retention 变化不会触发 ranking job。
-- `recommendationMaintenance` 存储在 `recommendation.maintenanceSettings`，控制推荐自动维护调度；默认 `maintenanceEnabled=true`、`ftrlAutoPromoteEnabled=false`、`evaluationAutoRunEnabled=false`。
+- `recommendationMaintenance` 存储在 `recommendation.maintenanceSettings`，控制推荐自动维护调度；默认 `maintenanceEnabled=true`、`clusterLabelAutoRebuildEnabled=true`、`clusterMergeDiagnosticsEnabled=true`、`clusterAutoMergeEnabled=false`、`ftrlAutoPromoteEnabled=false`、`evaluationAutoRunEnabled=false`。
 - settings 变化不会触发 `embedding_generate`、FTS rebuild 或 vector index rebuild。
 
 请求：
@@ -1480,6 +1494,25 @@ Planned / not implemented. 当前版本不提供 retry API。
             }
           ],
           "feedTitles": ["AI Engineering Notes"],
+          "labelDiagnostics": {
+            "collision": false,
+            "collisionGroupSize": 1,
+            "lowConfidence": false
+          },
+          "mergeDiagnostics": {
+            "candidateCount": 1,
+            "topCandidate": {
+              "candidateId": "merge_index_01_cluster_01_cluster_02",
+              "otherClusterId": "cluster_02",
+              "otherLabel": "AI Agent / 产品",
+              "centroidSimilarity": 0.94,
+              "labelJaccard": 0.7,
+              "evidenceOverlap": 0.4,
+              "mergeScore": 0.86,
+              "recommendation": "review",
+              "status": "open"
+            }
+          },
           "lastGeneratedAt": "2026-05-14T08:07:00.000Z",
           "displayIndex": 1,
           "weight": 8,
@@ -1570,6 +1603,123 @@ feeds
 fallback
 ```
 
+标签词典：
+
+- 默认词典来自 `apps/server/src/recommendation-label-lexicon.default.json`。
+- 用户覆盖项存储在 `app_settings.recommendation.clusterLabelLexicon`。
+- effective lexicon = default + add - remove。
+- 标签词典更新只会 enqueue `interest_cluster_label_rebuild`；不会触发 ranking、embedding、FTS 或 vector rebuild。
+- 如果已存覆盖项损坏或包含非法 regex，服务使用默认词典兜底，并在返回 payload 中暴露 warning；PATCH 新的非法 regex 返回 `400 VALIDATION_ERROR`。
+
+标签质量诊断：
+
+```ts
+labelDiagnostics?: {
+  collision: boolean
+  collisionGroupSize: number
+  lowConfidence: boolean
+}
+```
+
+重复簇诊断摘要：
+
+```ts
+mergeDiagnostics?: {
+  candidateCount: number
+  topCandidate: {
+    candidateId: string
+    otherClusterId: string
+    otherLabel: string
+    centroidSimilarity: number
+    labelJaccard: number
+    evidenceOverlap: number
+    mergeScore: number
+    recommendation: "auto_merge" | "review" | "ignore"
+    status: "open" | "merged" | "ignored" | "dismissed"
+  } | null
+}
+```
+
+### GET /api/recommendation/cluster-label-lexicon
+
+读取默认词典、effective 词典和用户覆盖项。该接口需要认证。
+
+响应：
+
+```json
+{
+  "data": {
+    "defaultVersion": 1,
+    "effective": {
+      "stopwords": ["article", "affiliation", "https"],
+      "protectedTerms": ["AI", "LLM", "API"],
+      "badTermPatterns": ["^https?$"]
+    },
+    "overrides": {
+      "stopwordsAdd": [],
+      "stopwordsRemove": [],
+      "protectedTermsAdd": [],
+      "protectedTermsRemove": [],
+      "badTermPatternsAdd": [],
+      "badTermPatternsRemove": []
+    },
+    "warnings": []
+  }
+}
+```
+
+### PATCH /api/recommendation/cluster-label-lexicon
+
+局部更新用户覆盖项。该接口需要认证。
+
+请求：
+
+```json
+{
+  "stopwordsAdd": ["foo", "bar"],
+  "stopwordsRemove": ["AI"],
+  "protectedTermsAdd": ["邸报"],
+  "protectedTermsRemove": [],
+  "badTermPatternsAdd": [],
+  "badTermPatternsRemove": []
+}
+```
+
+验证：
+
+- 每个数组最多 500 项。
+- 单个普通词长度为 `1..64`。
+- regex pattern 长度受限，并在写入前编译验证。
+- 非法 regex 返回 `400 VALIDATION_ERROR`，服务不崩溃。
+
+响应包含更新后的词典和 label rebuild job：
+
+```json
+{
+  "data": {
+    "defaultVersion": 1,
+    "effective": {
+      "stopwords": ["article", "affiliation", "foo"],
+      "protectedTerms": ["AI", "LLM", "API", "邸报"],
+      "badTermPatterns": ["^https?$"]
+    },
+    "overrides": {
+      "stopwordsAdd": ["foo"],
+      "stopwordsRemove": [],
+      "protectedTermsAdd": ["邸报"],
+      "protectedTermsRemove": [],
+      "badTermPatternsAdd": [],
+      "badTermPatternsRemove": []
+    },
+    "warnings": [],
+    "rebuildJob": {
+      "jobId": "job_01",
+      "existing": false
+    }
+  }
+}
+```
+
 ### PATCH /api/recommendation/clusters/:id/label
 
 手动设置或清除兴趣簇显示名称。该接口需要认证，只写 SQLite 标签表，不触发 embedding、ranking recalculation、cluster merge 或 centroid 更新。
@@ -1605,6 +1755,156 @@ fallback
     "clusterId": "cluster_01",
     "displayLabel": "AI 编程代理",
     "labelSource": "manual"
+  }
+}
+```
+
+### Interest Cluster Label Quality and Merge Diagnostics
+
+Label rebuild is explainability metadata only.
+Merge diagnostics is read-only.
+Cluster merge changes user profile and therefore recalculates ranking.
+
+Duplicate-interest diagnostics compare only active embedding index clusters with the same polarity. Different polarity clusters are never merged. Negative cluster recommendations use stricter thresholds than positive clusters.
+
+Candidate rows expose:
+
+```ts
+{
+  id: string
+  embeddingIndexId: string
+  leftClusterId: string
+  rightClusterId: string
+  polarity: "positive" | "negative"
+  centroidSimilarity: number
+  labelJaccard: number
+  evidenceOverlap: number
+  representativeOverlap: number
+  sourceOverlap: number
+  mergeScore: number
+  recommendation: "auto_merge" | "review" | "ignore"
+  status: "open" | "merged" | "ignored" | "dismissed"
+  leftLabel: string
+  rightLabel: string
+  reasonJson: string | null
+  createdAt: number
+  updatedAt: number
+  decidedAt: number | null
+}
+```
+
+### POST /api/recommendation/clusters/merge-candidates/rebuild
+
+Enqueue `interest_cluster_merge_diagnostics`。该接口需要认证。Diagnostics job 只写 `interest_cluster_merge_candidates`，不修改 `interest_clusters`，不触发 ranking 或 embedding。
+
+响应：
+
+```json
+{
+  "data": {
+    "jobId": "job_01",
+    "existing": false
+  }
+}
+```
+
+### GET /api/recommendation/clusters/merge-candidates
+
+列出重复兴趣簇候选。该接口需要认证。
+
+查询参数：
+
+```text
+status=open|merged|ignored|dismissed|all
+limit=1..100
+```
+
+响应：
+
+```json
+{
+  "data": {
+    "activeIndexId": "index_01",
+    "candidates": [
+      {
+        "id": "merge_index_01_cluster_01_cluster_02",
+        "embeddingIndexId": "index_01",
+        "leftClusterId": "cluster_01",
+        "rightClusterId": "cluster_02",
+        "polarity": "positive",
+        "centroidSimilarity": 0.94,
+        "labelJaccard": 0.7,
+        "evidenceOverlap": 0.4,
+        "representativeOverlap": 0.2,
+        "sourceOverlap": 0.3,
+        "mergeScore": 0.86,
+        "recommendation": "review",
+        "status": "open",
+        "leftLabel": "AI Agent / CLI",
+        "rightLabel": "AI Agent / 产品",
+        "reasonJson": "{}",
+        "createdAt": 1770000000000,
+        "updatedAt": 1770000000000,
+        "decidedAt": null
+      }
+    ]
+  }
+}
+```
+
+### POST /api/recommendation/clusters/merge-candidates/:id/merge
+
+手动合并一个 `open` candidate。该接口需要认证，可处理 `recommendation = "review"` 或 `"auto_merge"` 的候选。
+
+行为：
+
+- 选择 survivor：manual label 优先，其次更高 weight、sample count、updated_at。
+- 合并 weight/sample_count/centroid。
+- 迁移 `interest_cluster_evidence` 到 survivor。
+- survivor 没有 manual label 且 merged-away 有 manual label 时迁移该 manual label。
+- 删除 merged-away cluster，不删除文章，不删除用户行为。
+- candidate 标记为 `merged`，`reason_json` 记录 survivor、merged-away 和 metrics。
+- enqueue `interest_cluster_label_rebuild` 和 `ranking_recalculate`。
+
+响应：
+
+```json
+{
+  "data": {
+    "ok": true,
+    "candidateId": "merge_index_01_cluster_01_cluster_02",
+    "survivorClusterId": "cluster_01",
+    "mergedAwayClusterId": "cluster_02",
+    "labelRebuild": {
+      "jobId": "job_label",
+      "existing": false
+    },
+    "rankingRecalculate": {
+      "jobId": "job_rank",
+      "existing": false
+    }
+  }
+}
+```
+
+错误：
+
+- candidate 不存在返回 `404 NOT_FOUND`。
+- candidate 非 `open` 返回 `409 MERGE_CANDIDATE_NOT_OPEN`。
+- candidate recommendation 不允许合并返回 `409 MERGE_CANDIDATE_NOT_MERGEABLE`。
+
+### POST /api/recommendation/clusters/merge-candidates/:id/ignore
+
+忽略一个 candidate。该接口需要认证。Ignore 只更新 candidate 状态，不修改 `interest_clusters`，不触发 ranking 或 embedding。
+
+响应：
+
+```json
+{
+  "data": {
+    "ok": true,
+    "candidateId": "merge_index_01_cluster_01_cluster_02",
+    "status": "ignored"
   }
 }
 ```
@@ -1649,7 +1949,7 @@ PROFILE_WARMUP
       allowedRemoteDependency: "one embedding provider"
     }
     maintenance: {
-      schemaMigration: "006_recommendation_maintenance_schedule"
+      schemaMigration: "009_interest_cluster_merge_candidates"
       backfillState: string
       explanationAuthority: "article_rank_explanations"
       scoreAuthority: "article_rank_scores"
@@ -1659,6 +1959,9 @@ PROFILE_WARMUP
         recentIntentAutoRebuildEnabled: boolean
         keywordAutoRebuildEnabled: boolean
         duplicateAutoRebuildEnabled: boolean
+        clusterLabelAutoRebuildEnabled: boolean
+        clusterMergeDiagnosticsEnabled: boolean
+        clusterAutoMergeEnabled: boolean
         ftrlAutoTrainEnabled: boolean
         ftrlAutoPromoteEnabled: boolean
         evaluationAutoRunEnabled: boolean
@@ -1709,6 +2012,12 @@ POST /api/recommendation/rebuild-duplicates
 POST /api/recommendation/rebuild-keywords
 POST /api/recommendation/rebuild-recent-intent
 POST /api/recommendation/rebuild-cluster-labels
+GET /api/recommendation/cluster-label-lexicon
+PATCH /api/recommendation/cluster-label-lexicon
+POST /api/recommendation/clusters/merge-candidates/rebuild
+GET /api/recommendation/clusters/merge-candidates
+POST /api/recommendation/clusters/merge-candidates/:id/merge
+POST /api/recommendation/clusters/merge-candidates/:id/ignore
 POST /api/recommendation/evaluate
 POST /api/recommendation/ftrl/reset
 POST /api/recommendation/ftrl/promote
@@ -1726,6 +2035,12 @@ POST /api/recommendation/ftrl/promote
 ```
 
 `POST /api/recommendation/rebuild-cluster-labels` enqueue `interest_cluster_label_rebuild`。该 job 遍历 active embedding index 下的兴趣簇，重建 `auto_label`、`label_terms_json`、`representative_articles_json`、`feed_titles_json` 和 `confidence`，并保留已有 `manual_label`。它不调用 provider，不创建 `embedding_generate`，不创建 `ranking_recalculate`，不写 `article_rank_scores`。
+
+`POST /api/recommendation/clusters/merge-candidates/rebuild` enqueue `interest_cluster_merge_diagnostics`。该 job 只写 merge candidate 诊断结果，不修改画像，不触发 ranking 或 embedding。
+
+`POST /api/recommendation/clusters/merge-candidates/:id/merge` 是手动确认合并。它会修改 `interest_clusters` 和 `interest_cluster_evidence`，因此成功后 enqueue `interest_cluster_label_rebuild` 与 `ranking_recalculate`。
+
+`POST /api/recommendation/clusters/merge-candidates/:id/ignore` 只更新 candidate 状态，不修改 cluster，不触发 ranking 或 embedding。
 
 `POST /api/recommendation/ftrl/reset` 响应：
 
@@ -1766,6 +2081,9 @@ POST /api/recommendation/ftrl/promote
     "recentIntentAutoRebuildEnabled": true,
     "keywordAutoRebuildEnabled": true,
     "duplicateAutoRebuildEnabled": true,
+    "clusterLabelAutoRebuildEnabled": true,
+    "clusterMergeDiagnosticsEnabled": true,
+    "clusterAutoMergeEnabled": false,
     "ftrlAutoTrainEnabled": true,
     "ftrlAutoPromoteEnabled": false,
     "evaluationAutoRunEnabled": false,
@@ -1780,12 +2098,15 @@ POST /api/recommendation/ftrl/promote
 - 实时：RSS refresh 后保留 embedding enqueue，并延迟 duplicate rebuild；embedding 完成后保留 profile/ranking；强行为后延迟 recent intent 和 FTRL train。
 - 15 分钟：有强行为或未训练样本时 enqueue recent intent / FTRL。
 - 每小时：recent intent、duplicate、embedding health；ranking 只在维护输出变脏后 enqueue。
-- 每日：keyword profile、duplicate、recent intent、FTRL、cluster_label_daily、ranking。
+- 每日：keyword profile、duplicate、recent intent、FTRL、cluster_label_daily、cluster_merge_diagnostics、ranking；`cluster_auto_merge` 只有在 `clusterAutoMergeEnabled=true` 时才入队。
 - 每周：evaluation diagnostic，默认关闭。
 
 影响排序：
 
 - `recent_intent_rebuild`、`keyword_profile_rebuild`、`duplicate_group_rebuild`、`ftrl_train` 完成后会 enqueue deduped `ranking_recalculate`。
+- `interest_cluster_label_rebuild` 是 explainability metadata only，不触发 ranking 或 embedding。
+- `interest_cluster_merge_diagnostics` 是 read-only diagnostics，不触发 ranking 或 embedding。
+- `interest_cluster_auto_merge` 默认关闭；开启并实际合并后才触发 ranking recalculation。
 - `ranking_eval_run` 是 `lightweight_replay_diagnostic`，不触发 ranking/profile/FTRL 更新。
 - FTRL active 是低权重渐进校准，alpha 起步 `0.05`，默认上限 `0.20`，不会替代基础公式。
 - `view=latest` 不读取推荐分数，仍只按 latest 时间排序。

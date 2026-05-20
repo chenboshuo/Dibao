@@ -87,6 +87,12 @@ import {
   InterestClusterLabelServiceError,
   INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE
 } from "./interest-cluster-label-service.js";
+import {
+  InterestClusterMergeService,
+  InterestClusterMergeServiceError,
+  INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
+  INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
+} from "./interest-cluster-merge-service.js";
 import { JobRunner } from "./job-runner.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import {
@@ -214,7 +220,16 @@ type RecommendationClusterQuery = {
   limit?: string;
 };
 
+type RecommendationMergeCandidateQuery = {
+  status?: string;
+  limit?: string;
+};
+
 type RecommendationClusterParams = {
+  id: string;
+};
+
+type RecommendationMergeCandidateParams = {
   id: string;
 };
 
@@ -300,6 +315,12 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
   const clusterLabelService = new InterestClusterLabelService({
     db,
+    settings,
+    now: options.now
+  });
+  const clusterMergeService = new InterestClusterMergeService({
+    db,
+    clusterLabels: clusterLabelService,
     now: options.now
   });
   const recommendationMaintenanceService = new RecommendationMaintenanceService({
@@ -307,6 +328,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     jobs,
     rankingJobs: rankingJobService,
     clusterLabels: clusterLabelService,
+    clusterMerge: clusterMergeService,
     getRankingSettings: () => settingsService.getSettings().ranking,
     getMaintenanceSettings: () => settingsService.getSettings().recommendationMaintenance,
     now: options.now
@@ -513,6 +535,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       [RECOMMENDATION_BACKFILL_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job),
       [INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE]: (job) =>
+        recommendationMaintenanceService.handleJob(job),
+      [INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE]: (job) =>
+        recommendationMaintenanceService.handleJob(job),
+      [INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job)
     },
     now: options.now,
@@ -814,6 +840,77 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.post("/api/recommendation/rebuild-cluster-labels", async () => ({
     data: recommendationMaintenanceService.enqueueClusterLabelRebuild()
   }));
+
+  app.get("/api/recommendation/cluster-label-lexicon", async () => ({
+    data: clusterLabelService.getClusterLabelLexicon()
+  }));
+
+  app.patch<{ Body: unknown }>("/api/recommendation/cluster-label-lexicon", async (request, reply) => {
+    try {
+      const lexicon = clusterLabelService.updateClusterLabelLexicon(request.body);
+      const rebuild = recommendationMaintenanceService.enqueueClusterLabelRebuild();
+      drainBackgroundJobs();
+      return {
+        data: {
+          ...lexicon,
+          rebuildJob: rebuild
+        }
+      };
+    } catch (error) {
+      return sendInterestClusterLabelError(reply, error);
+    }
+  });
+
+  app.post("/api/recommendation/clusters/merge-candidates/rebuild", async () => ({
+    data: recommendationMaintenanceService.enqueueClusterMergeDiagnostics()
+  }));
+
+  app.get<{ Querystring: RecommendationMergeCandidateQuery }>(
+    "/api/recommendation/clusters/merge-candidates",
+    async (request, reply) => {
+      const parsed = parseMergeCandidateQuery(request.query);
+      if (!parsed.ok) {
+        return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+      }
+      return {
+        data: clusterMergeService.listCandidates(parsed.input)
+      };
+    }
+  );
+
+  app.post<{ Params: RecommendationMergeCandidateParams }>(
+    "/api/recommendation/clusters/merge-candidates/:id/merge",
+    async (request, reply) => {
+      try {
+        const result = clusterMergeService.mergeCandidate(request.params.id);
+        const labelRebuild = recommendationMaintenanceService.enqueueClusterLabelRebuild();
+        const rankingRecalculate = recommendationMaintenanceService.enqueueRecalculate();
+        drainBackgroundJobs();
+        return {
+          data: {
+            ...result,
+            labelRebuild,
+            rankingRecalculate
+          }
+        };
+      } catch (error) {
+        return sendInterestClusterMergeError(reply, error);
+      }
+    }
+  );
+
+  app.post<{ Params: RecommendationMergeCandidateParams }>(
+    "/api/recommendation/clusters/merge-candidates/:id/ignore",
+    async (request, reply) => {
+      try {
+        return {
+          data: clusterMergeService.ignoreCandidate(request.params.id)
+        };
+      } catch (error) {
+        return sendInterestClusterMergeError(reply, error);
+      }
+    }
+  );
 
   app.patch<{ Params: RecommendationClusterParams; Body: RecommendationClusterLabelBody }>(
     "/api/recommendation/clusters/:id/label",
@@ -1524,13 +1621,22 @@ function getRecommendationStatus(options: {
   const clusterEvidence = activeIndex
     ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 2000 })
     : [];
+  const clusterMergeDiagnostics = activeIndex
+    ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
+    : new Map<string, ClusterMergeDiagnostics>();
   const clusterItems = options.profiles
     .listClusters({
       ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
     })
     .slice(0, 12)
     .map((cluster, index) =>
-      mapRecommendationCluster(cluster, index + 1, clusterEvidence, options.clusterLabels)
+      mapRecommendationCluster(
+        cluster,
+        index + 1,
+        clusterEvidence,
+        options.clusterLabels,
+        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
+      )
     );
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
@@ -1597,12 +1703,21 @@ function getRecommendationClusters(
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
   const limitedClusters = options.limit === null ? clusters : clusters.slice(0, options.limit);
+  const clusterMergeDiagnostics = activeIndex
+    ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
+    : new Map<string, ClusterMergeDiagnostics>();
 
   return {
     activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
     total: clusters.length,
     items: limitedClusters.map((cluster, index) =>
-      mapRecommendationCluster(cluster, index + 1, clusterEvidence, options.clusterLabels)
+      mapRecommendationCluster(
+        cluster,
+        index + 1,
+        clusterEvidence,
+        options.clusterLabels,
+        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
+      )
     )
   };
 }
@@ -1624,6 +1739,10 @@ function enqueueRecommendationMaintenanceTask(
       return service.enqueueRecentIntentRebuild();
     case "cluster_label_rebuild":
       return service.enqueueClusterLabelRebuild();
+    case "cluster_merge_diagnostics":
+      return service.enqueueClusterMergeDiagnostics();
+    case "cluster_auto_merge":
+      return service.enqueueClusterAutoMerge();
     case "evaluation":
       return service.enqueueEvaluation();
     case "ftrl_train":
@@ -1652,6 +1771,51 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   }
 
   return parsed;
+}
+
+function parseMergeCandidateQuery(query: RecommendationMergeCandidateQuery):
+  | {
+      ok: true;
+      input: {
+        status?: "open" | "merged" | "ignored" | "dismissed" | "all";
+        limit?: number;
+      };
+    }
+  | { ok: false; message: string; details?: unknown } {
+  let status: "open" | "merged" | "ignored" | "dismissed" | "all" | undefined;
+  if (query.status !== undefined) {
+    if (
+      query.status !== "open" &&
+      query.status !== "merged" &&
+      query.status !== "ignored" &&
+      query.status !== "dismissed" &&
+      query.status !== "all"
+    ) {
+      return {
+        ok: false,
+        message: "status must be open, merged, ignored, dismissed, or all",
+        details: { field: "status" }
+      };
+    }
+    status = query.status;
+  }
+
+  const limit = parseLimit(query.limit);
+  if (limit === null) {
+    return {
+      ok: false,
+      message: "limit must be a positive integer",
+      details: { field: "limit" }
+    };
+  }
+
+  return {
+    ok: true,
+    input: {
+      ...(status !== undefined ? { status } : {}),
+      ...(limit !== undefined ? { limit } : {})
+    }
+  };
 }
 
 function getRecommendationTransparency(options: {
@@ -1703,7 +1867,7 @@ function getRecommendationTransparency(options: {
       moduleStatus,
       algorithmModules: recommendationAlgorithmModules(status, moduleStatus),
       maintenance: {
-        schemaMigration: "006_recommendation_maintenance_schedule",
+        schemaMigration: "009_interest_cluster_merge_candidates",
         backfillState: "tracked in recommendation_backfill_state",
         explanationAuthority: "article_rank_explanations",
         scoreAuthority: "article_rank_scores",
@@ -1916,7 +2080,8 @@ function mapRecommendationCluster(
   cluster: InterestClusterRow,
   displayIndex: number,
   evidence: InterestClusterEvidenceRow[],
-  clusterLabels: InterestClusterLabelService
+  clusterLabels: InterestClusterLabelService,
+  mergeDiagnostics: ClusterMergeDiagnostics
 ) {
   const diagnostics = clusterDiagnostics(cluster, evidence);
   const label = clusterLabels.displayLabelForCluster(
@@ -1944,6 +2109,8 @@ function mapRecommendationCluster(
     topTerms: label.topTerms,
     representativeArticles: label.representativeArticles,
     feedTitles: label.feedTitles,
+    labelDiagnostics: label.labelDiagnostics,
+    mergeDiagnostics,
     lastGeneratedAt: timestampToIso(label.generatedAt),
     displayIndex,
     weight: cluster.weight,
@@ -1952,6 +2119,123 @@ function mapRecommendationCluster(
     lastMatchedAt: timestampToIso(cluster.lastMatchedAt),
     updatedAt: timestampToIso(cluster.updatedAt)
   };
+}
+
+type ClusterMergeDiagnostics = {
+  candidateCount: number;
+  topCandidate: {
+    candidateId: string;
+    otherClusterId: string;
+    otherLabel: string;
+    centroidSimilarity: number;
+    labelJaccard: number;
+    evidenceOverlap: number;
+    mergeScore: number;
+    recommendation: "auto_merge" | "review" | "ignore";
+    status: "open" | "merged" | "ignored" | "dismissed";
+  } | null;
+};
+
+function emptyClusterMergeDiagnostics(): ClusterMergeDiagnostics {
+  return {
+    candidateCount: 0,
+    topCandidate: null
+  };
+}
+
+function mergeDiagnosticsByCluster(
+  db: DibaoDatabase,
+  embeddingIndexId: string,
+  clusterLabels: InterestClusterLabelService
+): Map<string, ClusterMergeDiagnostics> {
+  const candidates = db
+    .prepare(
+      `
+        select
+          id,
+          left_cluster_id as leftClusterId,
+          right_cluster_id as rightClusterId,
+          centroid_similarity as centroidSimilarity,
+          label_jaccard as labelJaccard,
+          evidence_overlap as evidenceOverlap,
+          merge_score as mergeScore,
+          recommendation,
+          status
+        from interest_cluster_merge_candidates
+        where embedding_index_id = ?
+          and status = 'open'
+        order by merge_score desc, updated_at desc
+      `
+    )
+    .all(embeddingIndexId) as Array<{
+    id: string;
+    leftClusterId: string;
+    rightClusterId: string;
+    centroidSimilarity: number;
+    labelJaccard: number;
+    evidenceOverlap: number;
+    mergeScore: number;
+    recommendation: "auto_merge" | "review" | "ignore";
+    status: "open" | "merged" | "ignored" | "dismissed";
+  }>;
+  const clusters = new Map(
+    (
+      db
+        .prepare(
+          `
+            select
+              id,
+              polarity,
+              label,
+              weight,
+              sample_count as sampleCount,
+              last_matched_at as lastMatchedAt,
+              created_at as createdAt,
+              updated_at as updatedAt,
+              embedding_index_id as embeddingIndexId,
+              centroid_vector_blob as centroidVectorBlob
+            from interest_clusters
+            where embedding_index_id = ?
+          `
+        )
+        .all(embeddingIndexId) as InterestClusterRow[]
+    ).map((cluster) => [cluster.id, cluster])
+  );
+  const result = new Map<string, ClusterMergeDiagnostics>();
+  for (const candidate of candidates) {
+    for (const side of ["left", "right"] as const) {
+      const clusterId = side === "left" ? candidate.leftClusterId : candidate.rightClusterId;
+      const otherClusterId = side === "left" ? candidate.rightClusterId : candidate.leftClusterId;
+      const current = result.get(clusterId) ?? emptyClusterMergeDiagnostics();
+      const otherCluster = clusters.get(otherClusterId);
+      const otherLabel = otherCluster
+        ? clusterLabels.displayLabelForCluster(
+            {
+              id: otherCluster.id,
+              label: otherCluster.label,
+              polarity: otherCluster.polarity
+            },
+            1
+          ).displayLabel
+        : otherClusterId;
+      current.candidateCount += 1;
+      if (!current.topCandidate || candidate.mergeScore > current.topCandidate.mergeScore) {
+        current.topCandidate = {
+          candidateId: candidate.id,
+          otherClusterId,
+          otherLabel,
+          centroidSimilarity: candidate.centroidSimilarity,
+          labelJaccard: candidate.labelJaccard,
+          evidenceOverlap: candidate.evidenceOverlap,
+          mergeScore: candidate.mergeScore,
+          recommendation: candidate.recommendation,
+          status: candidate.status
+        };
+      }
+      result.set(clusterId, current);
+    }
+  }
+  return result;
 }
 
 function clusterDiagnostics(cluster: InterestClusterRow, evidence: InterestClusterEvidenceRow[]) {
@@ -3042,7 +3326,9 @@ function parseJobType(value: string | undefined): JobType | undefined | null {
     value === RANKING_EVAL_RUN_JOB_TYPE ||
     value === FTRL_TRAIN_JOB_TYPE ||
     value === RECOMMENDATION_BACKFILL_JOB_TYPE ||
-    value === INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE
+    value === INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE ||
+    value === INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE ||
+    value === INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE
   ) {
     return value;
   }
@@ -3337,6 +3623,14 @@ function sendRecommendationMaintenanceError(reply: FastifyReply, error: unknown)
 
 function sendInterestClusterLabelError(reply: FastifyReply, error: unknown) {
   if (error instanceof InterestClusterLabelServiceError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendInterestClusterMergeError(reply: FastifyReply, error: unknown) {
+  if (error instanceof InterestClusterMergeServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 

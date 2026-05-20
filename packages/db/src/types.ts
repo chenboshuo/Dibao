@@ -62,7 +62,9 @@ export type JobType =
   | "ftrl_train"
   | "ranking_eval_run"
   | "recommendation_backfill"
-  | "interest_cluster_label_rebuild";
+  | "interest_cluster_label_rebuild"
+  | "interest_cluster_merge_diagnostics"
+  | "interest_cluster_auto_merge";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -429,9 +431,38 @@ export type InterestClusterLabelRow = {
   labelTermsJson: string | null;
   representativeArticlesJson: string | null;
   feedTitlesJson: string | null;
+  labelDiagnosticsJson: string | null;
   confidence: number;
   generatedAt: number | null;
   updatedAt: number;
+};
+
+export type InterestClusterMergeRecommendation = "auto_merge" | "review" | "ignore";
+
+export type InterestClusterMergeCandidateStatus =
+  | "open"
+  | "merged"
+  | "ignored"
+  | "dismissed";
+
+export type InterestClusterMergeCandidateRow = {
+  id: string;
+  embeddingIndexId: string;
+  leftClusterId: string;
+  rightClusterId: string;
+  polarity: InterestClusterPolarity;
+  centroidSimilarity: number;
+  labelJaccard: number;
+  evidenceOverlap: number;
+  representativeOverlap: number;
+  sourceOverlap: number;
+  mergeScore: number;
+  recommendation: InterestClusterMergeRecommendation;
+  status: InterestClusterMergeCandidateStatus;
+  reasonJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+  decidedAt: number | null;
 };
 
 export type EmbeddingUsageWindow = {

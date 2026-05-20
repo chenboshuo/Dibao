@@ -15,6 +15,7 @@ packages/db/migrations/005_recommendation_v2_completion.sql
 packages/db/migrations/006_recommendation_maintenance_schedule.sql
 packages/db/migrations/007_embedding_usage_and_profile_evidence_snapshots.sql
 packages/db/migrations/008_interest_cluster_labels.sql
+packages/db/migrations/009_interest_cluster_merge_candidates.sql
 ```
 
 实现时可以根据具体库和 sqlite-vec 版本调整语法，但不得改变这里定义的数据边界和所有权原则。
@@ -151,12 +152,15 @@ reader.settings
 retention.articleDays
 retention.settings
 ranking.settings
+recommendation.clusterLabelLexicon
 system.instance_id
 ```
 
 `GET/PATCH /api/settings` 中的 API 字段 `retention.retentionDays` 映射到
 `app_settings.retention.articleDays`。值为 `0` 时表示永久保留普通文章，后台
 retention cleanup 会跳过清理。`retention.settings` 预留给后续更完整的保留策略对象。
+
+`recommendation.clusterLabelLexicon` 存储兴趣簇标签词典覆盖项，不是排序设置。更新该 key 后可以 enqueue `interest_cluster_label_rebuild`，但不得触发 `ranking_recalculate`、`embedding_generate`、FTS rebuild 或 vector rebuild。
 
 ### auth_credentials
 
@@ -705,6 +709,7 @@ feed_titles_json TEXT
 confidence REAL NOT NULL DEFAULT 0
 generated_at INTEGER
 updated_at INTEGER NOT NULL
+label_diagnostics_json TEXT
 ```
 
 `label_source` 可选值：
@@ -731,6 +736,71 @@ idx_interest_cluster_labels_source(label_source, updated_at)
 - 展示优先级：`manual_label > auto_label > interest_clusters.label > 兴趣簇 #N`。
 - `confidence` 是 0..1 的解释置信度，只影响 UI 文案，不影响推荐分数。
 - `representative_articles_json`、`feed_titles_json` 和 `label_terms_json` 是透明页解释数据。
+- `label_diagnostics_json` 由 `009_interest_cluster_merge_candidates` 追加，存储 `{ collision, collisionGroupSize, lowConfidence }`，只用于透明页提示。
+
+### interest_cluster_merge_candidates
+
+`009_interest_cluster_merge_candidates` 新增。重复兴趣簇诊断与合并审计表，只存 SQLite。本表记录 active embedding index 下同 polarity cluster 的近重复候选，不存向量明文，不调用 embedding，不影响 latest 排序。
+
+```text
+id TEXT PRIMARY KEY
+embedding_index_id TEXT NOT NULL
+left_cluster_id TEXT NOT NULL
+right_cluster_id TEXT NOT NULL
+polarity TEXT NOT NULL
+centroid_similarity REAL NOT NULL
+label_jaccard REAL NOT NULL DEFAULT 0
+evidence_overlap REAL NOT NULL DEFAULT 0
+representative_overlap REAL NOT NULL DEFAULT 0
+source_overlap REAL NOT NULL DEFAULT 0
+merge_score REAL NOT NULL
+recommendation TEXT NOT NULL
+status TEXT NOT NULL DEFAULT 'open'
+reason_json TEXT
+created_at INTEGER NOT NULL
+updated_at INTEGER NOT NULL
+decided_at INTEGER
+```
+
+`polarity` 可选值：
+
+```text
+positive
+negative
+```
+
+`recommendation` 可选值：
+
+```text
+auto_merge
+review
+ignore
+```
+
+`status` 可选值：
+
+```text
+open
+merged
+ignored
+dismissed
+```
+
+索引：
+
+```text
+idx_interest_cluster_merge_pair(left_cluster_id, right_cluster_id)
+idx_interest_cluster_merge_candidates_status(embedding_index_id, status, merge_score)
+```
+
+说明：
+
+- `interest_cluster_merge_diagnostics` 只比较 active index、同 polarity、bounded top-N clusters，并写入 `open` candidates。
+- `interest_cluster_merge_diagnostics` 是只读诊断：不修改 `interest_clusters`，不触发 ranking，不触发 embedding。
+- 手动 merge 和显式启用后的 auto merge 会修改画像，因此会 enqueue `interest_cluster_label_rebuild` 和 `ranking_recalculate`。
+- auto merge 默认关闭，单次最多处理少量 `recommendation = 'auto_merge'` 的 open candidates。
+- 本表不使用 cluster 外键 cascade，因为 merged-away cluster 会被删除，而合并审计行必须保留。
+- 合并不删除用户行为，不删除文章，不清空 `interest_clusters`。
 
 ### feed_stats
 
@@ -939,6 +1009,8 @@ ftrl_train
 ranking_eval_run
 recommendation_backfill
 interest_cluster_label_rebuild
+interest_cluster_merge_diagnostics
+interest_cluster_auto_merge
 ```
 
 `status` 可选值：
@@ -965,6 +1037,8 @@ MVP runner 约定：
 - `vector_index_rebuild` payload 目前只接受 `{ "embeddingIndexId": "string" }`。
 - 推荐维护 job payload 目前只接受 `null` 或 `{}`；automatic maintenance 只负责入队，执行逻辑仍在对应 job handler。
 - `interest_cluster_label_rebuild` 只写 `interest_cluster_labels`，不写 `article_rank_scores`，不创建 `embedding_generate` 或 `ranking_recalculate` job。
+- `interest_cluster_merge_diagnostics` 只写 `interest_cluster_merge_candidates`，不改 `interest_clusters`，不创建 `embedding_generate` 或 `ranking_recalculate` job。
+- `interest_cluster_auto_merge` 默认由设置关闭；开启后只合并高置信 open candidates。成功合并后会创建 `interest_cluster_label_rebuild` 和 `ranking_recalculate` job。
 - `ranking_eval_run` 是诊断 job，成功或失败都不触发 ranking/profile/FTRL 更新。
 
 API 诊断约定：

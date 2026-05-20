@@ -61,6 +61,9 @@ export type RecommendationMaintenanceSettings = {
   recentIntentAutoRebuildEnabled: boolean;
   keywordAutoRebuildEnabled: boolean;
   duplicateAutoRebuildEnabled: boolean;
+  clusterLabelAutoRebuildEnabled: boolean;
+  clusterMergeDiagnosticsEnabled: boolean;
+  clusterAutoMergeEnabled: boolean;
   ftrlAutoTrainEnabled: boolean;
   ftrlAutoPromoteEnabled: boolean;
   evaluationAutoRunEnabled: boolean;
@@ -106,6 +109,9 @@ export const DEFAULT_RECOMMENDATION_MAINTENANCE_SETTINGS: RecommendationMaintena
   recentIntentAutoRebuildEnabled: true,
   keywordAutoRebuildEnabled: true,
   duplicateAutoRebuildEnabled: true,
+  clusterLabelAutoRebuildEnabled: true,
+  clusterMergeDiagnosticsEnabled: true,
+  clusterAutoMergeEnabled: false,
   ftrlAutoTrainEnabled: true,
   ftrlAutoPromoteEnabled: false,
   evaluationAutoRunEnabled: false,
@@ -444,6 +450,18 @@ export class SettingsService {
         input.duplicateAutoRebuildEnabled,
         DEFAULT_RECOMMENDATION_MAINTENANCE_SETTINGS.duplicateAutoRebuildEnabled
       ),
+      clusterLabelAutoRebuildEnabled: readStoredBoolean(
+        input.clusterLabelAutoRebuildEnabled,
+        DEFAULT_RECOMMENDATION_MAINTENANCE_SETTINGS.clusterLabelAutoRebuildEnabled
+      ),
+      clusterMergeDiagnosticsEnabled: readStoredBoolean(
+        input.clusterMergeDiagnosticsEnabled,
+        DEFAULT_RECOMMENDATION_MAINTENANCE_SETTINGS.clusterMergeDiagnosticsEnabled
+      ),
+      clusterAutoMergeEnabled: readStoredBoolean(
+        input.clusterAutoMergeEnabled,
+        DEFAULT_RECOMMENDATION_MAINTENANCE_SETTINGS.clusterAutoMergeEnabled
+      ),
       ftrlAutoTrainEnabled: readStoredBoolean(
         input.ftrlAutoTrainEnabled,
         DEFAULT_RECOMMENDATION_MAINTENANCE_SETTINGS.ftrlAutoTrainEnabled
@@ -514,6 +532,9 @@ function parseRecommendationMaintenancePatch(
     "recentIntentAutoRebuildEnabled",
     "keywordAutoRebuildEnabled",
     "duplicateAutoRebuildEnabled",
+    "clusterLabelAutoRebuildEnabled",
+    "clusterMergeDiagnosticsEnabled",
+    "clusterAutoMergeEnabled",
     "ftrlAutoTrainEnabled",
     "ftrlAutoPromoteEnabled",
     "evaluationAutoRunEnabled",
@@ -527,6 +548,9 @@ function parseRecommendationMaintenancePatch(
     "recentIntentAutoRebuildEnabled",
     "keywordAutoRebuildEnabled",
     "duplicateAutoRebuildEnabled",
+    "clusterLabelAutoRebuildEnabled",
+    "clusterMergeDiagnosticsEnabled",
+    "clusterAutoMergeEnabled",
     "ftrlAutoTrainEnabled",
     "ftrlAutoPromoteEnabled",
     "evaluationAutoRunEnabled",

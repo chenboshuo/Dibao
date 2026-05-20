@@ -206,6 +206,9 @@ export type RecommendationMaintenanceSettings = {
   recentIntentAutoRebuildEnabled: boolean;
   keywordAutoRebuildEnabled: boolean;
   duplicateAutoRebuildEnabled: boolean;
+  clusterLabelAutoRebuildEnabled: boolean;
+  clusterMergeDiagnosticsEnabled: boolean;
+  clusterAutoMergeEnabled: boolean;
   ftrlAutoTrainEnabled: boolean;
   ftrlAutoPromoteEnabled: boolean;
   evaluationAutoRunEnabled: boolean;
@@ -328,6 +331,8 @@ export type RecommendationMaintenanceTask =
   | "duplicate_rebuild"
   | "keyword_rebuild"
   | "cluster_label_rebuild"
+  | "cluster_merge_diagnostics"
+  | "cluster_auto_merge"
   | "recent_intent_rebuild"
   | "evaluation"
   | "ftrl_train"
@@ -346,6 +351,78 @@ export type RecommendationMaintenanceTaskResponse =
       highQualitySampleCount?: number;
       blendAlpha?: number;
     };
+
+export type ClusterLabelLexiconOverrides = {
+  stopwordsAdd: string[];
+  stopwordsRemove: string[];
+  protectedTermsAdd: string[];
+  protectedTermsRemove: string[];
+  badTermPatternsAdd: string[];
+  badTermPatternsRemove: string[];
+};
+
+export type ClusterLabelLexiconResponse = {
+  defaultVersion: number;
+  effective: {
+    stopwords: string[];
+    protectedTerms: string[];
+    badTermPatterns: string[];
+  };
+  overrides: ClusterLabelLexiconOverrides;
+  warnings: string[];
+  rebuildJob?: {
+    jobId: string;
+    existing: boolean;
+  };
+};
+
+export type RecommendationClusterMergeCandidate = {
+  id: string;
+  embeddingIndexId: string;
+  leftClusterId: string;
+  rightClusterId: string;
+  leftLabel: string;
+  rightLabel: string;
+  polarity: "positive" | "negative";
+  centroidSimilarity: number;
+  labelJaccard: number;
+  evidenceOverlap: number;
+  representativeOverlap: number;
+  sourceOverlap: number;
+  mergeScore: number;
+  recommendation: "auto_merge" | "review" | "ignore";
+  status: "open" | "merged" | "ignored" | "dismissed";
+  reasonJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+  decidedAt: number | null;
+};
+
+export type RecommendationClusterMergeCandidateList = {
+  activeIndexId: string | null;
+  candidates: RecommendationClusterMergeCandidate[];
+};
+
+export type RecommendationClusterMergeResult = {
+  ok: true;
+  candidateId: string;
+  survivorClusterId: string;
+  mergedAwayClusterId: string;
+  labelRebuild: {
+    jobId: string;
+    existing: boolean;
+  };
+  rankingRecalculate: {
+    jobId: string;
+    existing: boolean;
+  };
+};
+
+export type RecommendationClusterIgnoreResult = {
+  ok: true;
+  candidateId: string;
+  status: "ignored";
+};
 
 export type RebuildEmbeddingIndexResponse = {
   jobId: string;
@@ -502,6 +579,25 @@ export type RecommendationClusterItem = {
     similarity: number | null;
   }>;
   feedTitles?: string[];
+  labelDiagnostics?: {
+    collision: boolean;
+    collisionGroupSize: number;
+    lowConfidence: boolean;
+  };
+  mergeDiagnostics?: {
+    candidateCount: number;
+    topCandidate: {
+      candidateId: string;
+      otherClusterId: string;
+      otherLabel: string;
+      centroidSimilarity: number;
+      labelJaccard: number;
+      evidenceOverlap: number;
+      mergeScore: number;
+      recommendation: "auto_merge" | "review" | "ignore";
+      status: "open" | "merged" | "ignored" | "dismissed";
+    } | null;
+  };
   lastGeneratedAt?: string | null;
   displayIndex?: number;
   weight: number;
@@ -592,6 +688,9 @@ export const defaultAppSettings: AppSettings = {
     recentIntentAutoRebuildEnabled: true,
     keywordAutoRebuildEnabled: true,
     duplicateAutoRebuildEnabled: true,
+    clusterLabelAutoRebuildEnabled: true,
+    clusterMergeDiagnosticsEnabled: true,
+    clusterAutoMergeEnabled: false,
     ftrlAutoTrainEnabled: true,
     ftrlAutoPromoteEnabled: false,
     evaluationAutoRunEnabled: false,
@@ -831,6 +930,79 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
           {
             method: "PATCH",
             body: JSON.stringify({ manualLabel })
+          }
+        )
+      ).data;
+    },
+
+    async getClusterLabelLexicon(): Promise<ClusterLabelLexiconResponse> {
+      return (
+        await request<ClusterLabelLexiconResponse>(
+          "/api/recommendation/cluster-label-lexicon"
+        )
+      ).data;
+    },
+
+    async updateClusterLabelLexicon(
+      input: Partial<ClusterLabelLexiconOverrides>
+    ): Promise<ClusterLabelLexiconResponse> {
+      return (
+        await request<ClusterLabelLexiconResponse>(
+          "/api/recommendation/cluster-label-lexicon",
+          {
+            method: "PATCH",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
+    },
+
+    async rebuildRecommendationClusterMergeCandidates(): Promise<RecommendationMaintenanceTaskResponse> {
+      return (
+        await request<RecommendationMaintenanceTaskResponse>(
+          "/api/recommendation/clusters/merge-candidates/rebuild",
+          {
+            method: "POST"
+          }
+        )
+      ).data;
+    },
+
+    async listRecommendationClusterMergeCandidates(
+      status: "open" | "merged" | "ignored" | "dismissed" | "all" = "all"
+    ): Promise<RecommendationClusterMergeCandidateList> {
+      const params = new URLSearchParams({
+        status,
+        limit: "50"
+      });
+      return (
+        await request<RecommendationClusterMergeCandidateList>(
+          `/api/recommendation/clusters/merge-candidates?${params.toString()}`
+        )
+      ).data;
+    },
+
+    async mergeRecommendationClusterCandidate(
+      candidateId: string
+    ): Promise<RecommendationClusterMergeResult> {
+      return (
+        await request<RecommendationClusterMergeResult>(
+          `/api/recommendation/clusters/merge-candidates/${encodeURIComponent(candidateId)}/merge`,
+          {
+            method: "POST"
+          }
+        )
+      ).data;
+    },
+
+    async ignoreRecommendationClusterCandidate(
+      candidateId: string
+    ): Promise<RecommendationClusterIgnoreResult> {
+      return (
+        await request<RecommendationClusterIgnoreResult>(
+          `/api/recommendation/clusters/merge-candidates/${encodeURIComponent(candidateId)}/ignore`,
+          {
+            method: "POST"
           }
         )
       ).data;

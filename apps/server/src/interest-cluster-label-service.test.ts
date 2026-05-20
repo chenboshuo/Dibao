@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   openDatabase,
   SqliteArticleRepository,
+  SqliteAppSettingsRepository,
   SqliteEmbeddingRepository,
   SqliteFeedRepository,
   SqliteProfileRepository,
@@ -46,7 +47,7 @@ describe("InterestClusterLabelService", () => {
         polarity: "positive",
         displayIndex: 1
       });
-      expect(label.labelSource).toBe("keywords");
+      expect(["keywords", "representative_titles"]).toContain(label.labelSource);
       expect(label.displayLabel).toMatch(/AI|Agent|CLI/i);
       expect(label.topTerms.join(" ")).toMatch(/AI|Agent|CLI/i);
     } finally {
@@ -75,7 +76,7 @@ describe("InterestClusterLabelService", () => {
         displayIndex: 1
       });
 
-      expect(label.labelSource).toBe("keywords");
+      expect(["keywords", "representative_titles"]).toContain(label.labelSource);
       expect(label.displayLabel).toContain("广告");
     } finally {
       db.close();
@@ -195,6 +196,163 @@ describe("InterestClusterLabelService", () => {
       db.close();
     }
   });
+
+  it("loads default lexicon and applies app_settings overrides", () => {
+    const db = createLabelFixtureDatabase();
+    try {
+      const settings = new SqliteAppSettingsRepository(db);
+      const service = new InterestClusterLabelService({ db, settings, now: () => 10_000 });
+
+      expect(service.getClusterLabelLexicon().effective.stopwords).toContain("article");
+      service.updateClusterLabelLexicon({
+        stopwordsAdd: ["workflow"],
+        stopwordsRemove: ["article"],
+        protectedTermsAdd: ["邸报"]
+      });
+
+      const lexicon = service.getClusterLabelLexicon();
+      expect(lexicon.effective.stopwords).toContain("workflow");
+      expect(lexicon.effective.stopwords).not.toContain("article");
+      expect(lexicon.effective.protectedTerms).toContain("邸报");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects invalid lexicon regex overrides without crashing", () => {
+    const db = createLabelFixtureDatabase();
+    try {
+      const settings = new SqliteAppSettingsRepository(db);
+      const service = new InterestClusterLabelService({ db, settings, now: () => 10_000 });
+
+      expect(() =>
+        service.updateClusterLabelLexicon({
+          badTermPatternsAdd: ["["]
+        })
+      ).toThrow(/invalid regular expression/i);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("filters URL, HTML, metadata, and generic noise while preserving protected AI terms", () => {
+    const db = createLabelFixtureDatabase();
+    try {
+      insertClusterWithEvidence(db, {
+        clusterId: "cluster_noise",
+        articleId: "article_noise",
+        articleTitle: "AI Agent workflow beyond article affiliation strong https COM",
+        summary: "<strong>AI</strong> href src utm_source https://huxiu.com example.ai",
+        feedTitle: "COM HTML Feed",
+        polarity: "positive",
+        profileTerm: "strong affiliation article"
+      });
+      const service = new InterestClusterLabelService({ db, now: () => 10_000 });
+
+      service.rebuildActiveIndexLabels();
+      const label = service.displayLabelForCluster({
+        id: "cluster_noise",
+        label: null,
+        polarity: "positive",
+        displayIndex: 1
+      });
+      const terms = label.topTerms.map((term) => term.toLowerCase());
+
+      expect(terms).toContain("ai");
+      expect(terms).not.toEqual(
+        expect.arrayContaining([
+          "article",
+          "affiliation",
+          "strong",
+          "https",
+          "com",
+          "href",
+          "src",
+          "utm_source",
+          "huxiu.com",
+          "example.ai"
+        ])
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("lets cluster-local evidence outrank global profile terms and disambiguates collisions", () => {
+    const db = createLabelFixtureDatabase();
+    try {
+      insertClusterWithEvidence(db, {
+        clusterId: "cluster_cli",
+        articleId: "article_cli",
+        articleTitle: "AI Agent CLI 本地工作流",
+        summary: "命令行代理工具",
+        feedTitle: "AI Engineering Notes",
+        polarity: "positive",
+        profileTerm: "AI article affiliation"
+      });
+      insertClusterWithEvidence(db, {
+        clusterId: "cluster_product",
+        articleId: "article_product",
+        articleTitle: "AI Agent 产品路线图",
+        summary: "产品策略和功能设计",
+        feedTitle: "AI Product Notes",
+        polarity: "positive",
+        profileTerm: "AI article affiliation"
+      });
+      const service = new InterestClusterLabelService({ db, now: () => 10_000 });
+
+      service.rebuildActiveIndexLabels();
+      const cli = service.displayLabelForCluster({
+        id: "cluster_cli",
+        label: null,
+        polarity: "positive",
+        displayIndex: 1
+      });
+      const product = service.displayLabelForCluster({
+        id: "cluster_product",
+        label: null,
+        polarity: "positive",
+        displayIndex: 2
+      });
+
+      expect(cli.displayLabel).not.toBe(product.displayLabel);
+      expect(`${cli.displayLabel} ${product.displayLabel}`).not.toMatch(/affiliation|article/i);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("dedupes obvious Chinese substring chains", () => {
+    const db = createLabelFixtureDatabase();
+    try {
+      insertClusterWithEvidence(db, {
+        clusterId: "cluster_cn",
+        articleId: "article_cn",
+        articleTitle: "两市成交 人民币中间价 市场观察",
+        summary: "两市 两市成 两市成交 人民币中间价",
+        feedTitle: "市场快讯",
+        polarity: "positive",
+        profileTerm: "两市"
+      });
+      const service = new InterestClusterLabelService({ db, now: () => 10_000 });
+
+      service.rebuildActiveIndexLabels();
+      const label = service.displayLabelForCluster({
+        id: "cluster_cn",
+        label: null,
+        polarity: "positive",
+        displayIndex: 1
+      });
+      const chain = ["两市", "两市成", "两市成交"].filter((term) =>
+        label.topTerms.includes(term)
+      );
+
+      expect(label.topTerms).toContain("两市成交");
+      expect(chain.length).toBeLessThanOrEqual(1);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 function createLabelFixtureDatabase(): DibaoDatabase {
@@ -234,6 +392,7 @@ function insertClusterWithEvidence(
   db: DibaoDatabase,
   input: {
     clusterId: string;
+    articleId?: string;
     articleTitle: string;
     summary: string;
     feedTitle: string;
@@ -251,13 +410,13 @@ function insertClusterWithEvidence(
     now: 2000
   });
   articles.upsert({
-    id: "article_ai",
+    id: input.articleId ?? "article_ai",
     feedId: `feed_${input.clusterId}`,
     url: `https://example.com/${input.clusterId}`,
     title: input.articleTitle,
     summary: input.summary,
     discoveredAt: 3000,
-    dedupeKey: input.clusterId,
+    dedupeKey: input.articleId ?? input.clusterId,
     now: 3000
   });
   profiles.upsertCluster({
@@ -278,17 +437,18 @@ function insertClusterWithEvidence(
         event_weight,
         created_at
       )
-      values (?, 'article_ai', ?, ?, 4000)
+      values (?, ?, ?, ?, 4000)
     `
   ).run(
     `event_${input.clusterId}`,
+    input.articleId ?? "article_ai",
     input.polarity === "positive" ? "favorite" : "not_interested",
     input.polarity === "positive" ? 4 : -4
   );
   profiles.insertClusterEvidence({
     id: `evidence_${input.clusterId}`,
     clusterId: input.clusterId,
-    articleId: "article_ai",
+    articleId: input.articleId ?? "article_ai",
     behaviorEventId: `event_${input.clusterId}`,
     evidenceSource: "live_event",
     confidence: 0.9,
@@ -308,6 +468,10 @@ function insertClusterWithEvidence(
         updated_at
       )
       values (?, ?, 'long', 2.5, 2, 4500, 4500)
+      on conflict(term, polarity, scope) do update set
+        weight = excluded.weight,
+        evidence_count = profile_terms.evidence_count + excluded.evidence_count,
+        updated_at = excluded.updated_at
     `
   ).run(input.profileTerm, input.polarity);
 }

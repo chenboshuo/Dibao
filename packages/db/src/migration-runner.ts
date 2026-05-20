@@ -27,6 +27,9 @@ const embeddingUsageAndProfileEvidenceSnapshotsPath = fileURLToPath(
 const interestClusterLabelsPath = fileURLToPath(
   new URL("../migrations/008_interest_cluster_labels.sql", import.meta.url)
 );
+const interestClusterMergeCandidatesPath = fileURLToPath(
+  new URL("../migrations/009_interest_cluster_merge_candidates.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -69,6 +72,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "008",
       name: "interest_cluster_labels",
       sql: readFileSync(interestClusterLabelsPath, "utf8")
+    },
+    {
+      version: "009",
+      name: "interest_cluster_merge_candidates",
+      sql: readFileSync(interestClusterMergeCandidatesPath, "utf8")
     }
   ];
 }

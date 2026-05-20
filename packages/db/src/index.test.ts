@@ -147,6 +147,7 @@ describe("db package", () => {
         "recommendation_backfill_state",
         "recommendation_maintenance_schedule_state",
         "embedding_usage_events",
+        "interest_cluster_merge_candidates",
         "jobs"
       ]) {
         expect(hasTableOrView(db, name), name).toBe(true);
@@ -162,7 +163,9 @@ describe("db package", () => {
       expect(hasColumn(db, "interest_cluster_evidence", "article_title_snapshot")).toBe(true);
       expect(hasColumn(db, "interest_cluster_evidence", "vector_blob_snapshot")).toBe(true);
       expect(hasColumn(db, "interest_cluster_labels", "manual_label")).toBe(true);
+      expect(hasColumn(db, "interest_cluster_labels", "label_diagnostics_json")).toBe(true);
       expect(hasIndex(db, "idx_interest_cluster_labels_source")).toBe(true);
+      expect(hasIndex(db, "idx_interest_cluster_merge_candidates_status")).toBe(true);
       expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
     } finally {
       db.close();
@@ -185,7 +188,8 @@ describe("db package", () => {
         "005",
         "006",
         "007",
-        "008"
+        "008",
+        "009"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
@@ -195,6 +199,7 @@ describe("db package", () => {
       expect(hasTableOrView(db, "embedding_usage_events")).toBe(true);
       expect(hasColumn(db, "interest_cluster_evidence", "feed_title_snapshot")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
+      expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
 
       db.prepare(
         `
@@ -300,6 +305,39 @@ describe("db package", () => {
       ).toEqual({
         type: "interest_cluster_label_rebuild"
       });
+      db.prepare(
+        `
+          insert into jobs (
+            id,
+            type,
+            status,
+            attempts,
+            max_attempts,
+            run_after,
+            created_at,
+            updated_at
+          )
+          values ('job_cluster_merge_diagnostics', 'interest_cluster_merge_diagnostics', 'queued', 0, 1, 2000, 2000, 2000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into jobs (
+            id,
+            type,
+            status,
+            attempts,
+            max_attempts,
+            run_after,
+            created_at,
+            updated_at
+          )
+          values ('job_cluster_auto_merge', 'interest_cluster_auto_merge', 'queued', 0, 1, 2000, 2000, 2000)
+        `
+      ).run();
+      expect(
+        db.prepare("select count(*) as count from jobs where type like 'interest_cluster_%'").get()
+      ).toEqual({ count: 3 });
     } finally {
       db.close();
     }
@@ -361,7 +399,8 @@ describe("db package", () => {
         "005",
         "006",
         "007",
-        "008"
+        "008",
+        "009"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -376,6 +415,7 @@ describe("db package", () => {
       expect(hasTableOrView(db, "recommendation_maintenance_schedule_state")).toBe(true);
       expect(hasTableOrView(db, "embedding_usage_events")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
+      expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
     } finally {
       db.close();
     }
