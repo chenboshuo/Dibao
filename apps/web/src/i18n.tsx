@@ -435,6 +435,7 @@ export const zhCN = {
         keywords: "关键词自动生成",
         representative_titles: "代表文章自动推断",
         feeds: "来源标题自动推断",
+        corpus_topic: "语料主题辅助推断",
         fallback: "自动 fallback"
       },
       confidenceLabel: "置信度",
@@ -500,6 +501,23 @@ export const zhCN = {
         review: "需复核",
         ignore: "忽略"
       }
+    },
+    topicSnapshot: {
+      title: "语料主题快照",
+      available: (articleCount: number, topicCount: number) =>
+        `已基于现有文章向量生成：${articleCount} 篇文章 · ${topicCount} 个主题。`,
+      unavailable: (reason: string) =>
+        reason === "NO_ACTIVE_EMBEDDING_INDEX"
+          ? "当前没有 active embedding index，无法生成语料主题快照。"
+          : "还没有可用的语料主题快照。",
+      generatedAt: "最近生成",
+      embeddingIndex: "Embedding index",
+      algorithm: "算法",
+      topicName: (topicKey: string) => `主题 ${topicKey}`,
+      topicMeta: (articleCount: number, terms: string) =>
+        `${articleCount} 篇文章 · ${terms || "暂无关键词"}`,
+      representatives: (titles: string) => `代表文章：${titles}`,
+      rebuild: "生成语料主题快照"
     },
     lexicon: {
       title: "标签词典",
@@ -910,7 +928,7 @@ export const zhCN = {
 } as const;
 
 type WidenDictionary<T> = T extends (...args: infer Args) => infer Return
-  ? (...args: Args) => Return
+  ? (...args: Args) => WidenDictionary<Return>
   : T extends string
     ? string
     : T extends object
@@ -1349,6 +1367,7 @@ export const enUS = {
         keywords: "Keyword inference",
         representative_titles: "Representative-title inference",
         feeds: "Feed-title inference",
+        corpus_topic: "Corpus-topic assisted inference",
         fallback: "Automatic fallback"
       },
       confidenceLabel: "Confidence",
@@ -1414,6 +1433,23 @@ export const enUS = {
         review: "Review",
         ignore: "Ignore"
       }
+    },
+    topicSnapshot: {
+      title: "Corpus Topic Snapshot",
+      available: (articleCount: number, topicCount: number) =>
+        `Generated from existing article vectors: ${articleCount} articles · ${topicCount} topics.`,
+      unavailable: (reason: string) =>
+        reason === "NO_ACTIVE_EMBEDDING_INDEX"
+          ? "No active embedding index is available for a corpus topic snapshot."
+          : "No corpus topic snapshot is available yet.",
+      generatedAt: "Last generated",
+      embeddingIndex: "Embedding index",
+      algorithm: "Algorithm",
+      topicName: (topicKey: string) => `Topic ${topicKey}`,
+      topicMeta: (articleCount: number, terms: string) =>
+        `${articleCount} articles · ${terms || "No terms yet"}`,
+      representatives: (titles: string) => `Representative articles: ${titles}`,
+      rebuild: "Generate corpus topic snapshot"
     },
     lexicon: {
       title: "Label lexicon",

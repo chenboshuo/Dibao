@@ -30,6 +30,9 @@ const interestClusterLabelsPath = fileURLToPath(
 const interestClusterMergeCandidatesPath = fileURLToPath(
   new URL("../migrations/009_interest_cluster_merge_candidates.sql", import.meta.url)
 );
+const corpusTopicSnapshotsPath = fileURLToPath(
+  new URL("../migrations/010_corpus_topic_snapshots.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -77,6 +80,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "009",
       name: "interest_cluster_merge_candidates",
       sql: readFileSync(interestClusterMergeCandidatesPath, "utf8")
+    },
+    {
+      version: "010",
+      name: "corpus_topic_snapshots",
+      sql: readFileSync(corpusTopicSnapshotsPath, "utf8")
     }
   ];
 }

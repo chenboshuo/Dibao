@@ -30,6 +30,7 @@ docker compose up --build -d
 | `DIBAO_COOKIE_SECURE` | `false` | HTTP/LAN 自托管可保持 `false`；HTTPS 反向代理后建议设为 `true`。 |
 | `DIBAO_WEB_DIST_DIR` | `apps/web/dist` | 可选，覆盖 Web 静态资源目录。 |
 | `DIBAO_BACKGROUND_JOBS` | `true` | 可设为 `false` 关闭后台 job runner，主要用于测试。 |
+| `DIBAO_TOPIC_SNAPSHOT_COMMAND` | 未配置 | 可选 BERTopic 语料主题快照 runner 命令；未配置时主服务照常启动。 |
 
 健康检查使用匿名接口：
 
@@ -200,4 +201,5 @@ DIBAO_RUN_OLLAMA_TESTS=true npm run test:ollama:optional
 - [API Contract](./docs/api-contract.md)
 - [Roadmap](./docs/roadmap.md)
 - [Profile Algorithm v0 参数表](./docs/profile-algorithm-v0.md)
+- [Corpus Topic Snapshot](./docs/topic-snapshot.md)
 - [sqlite-vec Node.js 集成验证](./docs/spikes/sqlite-vec-node.md)

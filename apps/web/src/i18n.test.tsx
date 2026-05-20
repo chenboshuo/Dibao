@@ -676,11 +676,13 @@ describe("web i18n", () => {
           clusterLabelLexicon={null}
           error={null}
           isLoading={false}
+          isTopicSnapshotRebuilding={false}
           mergeCandidates={[]}
           onBack={() => undefined}
           onIgnoreCandidate={() => Promise.resolve()}
           onMergeCandidate={() => Promise.resolve()}
           onOpenAllClusters={() => undefined}
+          onRebuildTopicSnapshot={() => Promise.resolve()}
           onRunMaintenanceTask={() => Promise.resolve()}
           onUpdateClusterLabelLexicon={() => Promise.resolve()}
           onUpdateClusterLabel={() => Promise.resolve()}
@@ -756,6 +758,7 @@ describe("web i18n", () => {
               }
             ]
           }}
+          topicSnapshot={null}
           updatingClusterLexicon={false}
           updatingClusterLabelId={null}
           updatingMergeCandidateId={null}

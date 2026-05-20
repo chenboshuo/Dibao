@@ -148,6 +148,9 @@ describe("db package", () => {
         "recommendation_maintenance_schedule_state",
         "embedding_usage_events",
         "interest_cluster_merge_candidates",
+        "corpus_topic_runs",
+        "corpus_topics",
+        "corpus_topic_articles",
         "jobs"
       ]) {
         expect(hasTableOrView(db, name), name).toBe(true);
@@ -166,6 +169,9 @@ describe("db package", () => {
       expect(hasColumn(db, "interest_cluster_labels", "label_diagnostics_json")).toBe(true);
       expect(hasIndex(db, "idx_interest_cluster_labels_source")).toBe(true);
       expect(hasIndex(db, "idx_interest_cluster_merge_candidates_status")).toBe(true);
+      expect(hasIndex(db, "idx_corpus_topic_runs_index_status")).toBe(true);
+      expect(hasIndex(db, "idx_corpus_topics_run_id")).toBe(true);
+      expect(hasIndex(db, "idx_corpus_topic_articles_article_id")).toBe(true);
       expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
     } finally {
       db.close();
@@ -189,7 +195,8 @@ describe("db package", () => {
         "006",
         "007",
         "008",
-        "009"
+        "009",
+        "010"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
@@ -200,6 +207,9 @@ describe("db package", () => {
       expect(hasColumn(db, "interest_cluster_evidence", "feed_title_snapshot")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
+      expect(hasTableOrView(db, "corpus_topic_runs")).toBe(true);
+      expect(hasTableOrView(db, "corpus_topics")).toBe(true);
+      expect(hasTableOrView(db, "corpus_topic_articles")).toBe(true);
 
       db.prepare(
         `
@@ -338,6 +348,164 @@ describe("db package", () => {
       expect(
         db.prepare("select count(*) as count from jobs where type like 'interest_cluster_%'").get()
       ).toEqual({ count: 3 });
+      db.prepare(
+        `
+          insert into jobs (
+            id,
+            type,
+            status,
+            attempts,
+            max_attempts,
+            run_after,
+            created_at,
+            updated_at
+          )
+          values ('job_topic_snapshot', 'topic_snapshot_rebuild', 'queued', 0, 1, 2000, 2000, 2000)
+        `
+      ).run();
+      expect(
+        db.prepare("select type from jobs where id = 'job_topic_snapshot'").get()
+      ).toEqual({
+        type: "topic_snapshot_rebuild"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("creates corpus topic snapshot tables with foreign keys and uniqueness constraints", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true, loadSqliteVec: false });
+    try {
+      db.prepare(
+        `
+          insert into feeds (id, title, feed_url, created_at, updated_at)
+          values ('feed_topic', 'Topic Feed', 'https://example.com/topic.xml', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into articles (
+            id,
+            feed_id,
+            url,
+            title,
+            content_hash,
+            discovered_at,
+            dedupe_key,
+            created_at,
+            updated_at
+          )
+          values ('article_topic', 'feed_topic', 'https://example.com/topic', 'Topic article', 'hash_topic', 1000, 'topic', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into embedding_providers (
+            id,
+            type,
+            name,
+            base_url,
+            model,
+            dimension,
+            enabled,
+            created_at,
+            updated_at
+          )
+          values ('provider_topic', 'openai_compatible', 'Provider', 'https://api.example.com/v1', 'fixture', 3, 1, 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into embedding_indexes (
+            id,
+            provider_id,
+            model,
+            dimension,
+            distance_metric,
+            table_name,
+            status,
+            created_at,
+            updated_at
+          )
+          values ('index_topic', 'provider_topic', 'fixture', 3, 'cosine', 'vec_topic', 'active', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into corpus_topic_runs (
+            id,
+            embedding_index_id,
+            status,
+            algorithm,
+            scope_json,
+            created_at,
+            updated_at
+          )
+          values ('run_topic', 'index_topic', 'succeeded', 'fixture', '{}', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into corpus_topics (
+            id,
+            run_id,
+            topic_key,
+            top_terms_json,
+            representative_articles_json,
+            created_at,
+            updated_at
+          )
+          values ('topic_1', 'run_topic', '0', '[{"term":"AI","weight":1}]', '[]', 1000, 1000)
+        `
+      ).run();
+      expect(() =>
+        db
+          .prepare(
+            `
+              insert into corpus_topics (
+                id,
+                run_id,
+                topic_key,
+                top_terms_json,
+                representative_articles_json,
+                created_at,
+                updated_at
+              )
+              values ('topic_duplicate', 'run_topic', '0', '[]', '[]', 1000, 1000)
+            `
+          )
+          .run()
+      ).toThrow();
+      db.prepare(
+        `
+          insert into corpus_topic_articles (
+            run_id,
+            topic_id,
+            article_id,
+            created_at
+          )
+          values ('run_topic', 'topic_1', 'article_topic', 1000)
+        `
+      ).run();
+      expect(() =>
+        db
+          .prepare(
+            `
+              insert into corpus_topic_articles (
+                run_id,
+                topic_id,
+                article_id,
+                created_at
+              )
+              values ('run_topic', 'topic_1', 'article_topic', 1000)
+            `
+          )
+          .run()
+      ).toThrow();
+
+      db.prepare("delete from corpus_topic_runs where id = 'run_topic'").run();
+      expect(countTable(db, "corpus_topics")).toBe(0);
+      expect(countTable(db, "corpus_topic_articles")).toBe(0);
     } finally {
       db.close();
     }
@@ -400,7 +568,8 @@ describe("db package", () => {
         "006",
         "007",
         "008",
-        "009"
+        "009",
+        "010"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -416,6 +585,9 @@ describe("db package", () => {
       expect(hasTableOrView(db, "embedding_usage_events")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
+      expect(hasTableOrView(db, "corpus_topic_runs")).toBe(true);
+      expect(hasTableOrView(db, "corpus_topics")).toBe(true);
+      expect(hasTableOrView(db, "corpus_topic_articles")).toBe(true);
     } finally {
       db.close();
     }
