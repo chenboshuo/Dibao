@@ -1815,24 +1815,35 @@ export function App() {
           </span>
         </div>
         <nav className={styles.nav}>
-          {navigationItems.map((item) => (
-            <a
-              className={isNavigationItemActive(item, appPage) ? styles.navItemActive : styles.navItem}
-              href={urlForNavigationItem(item, {
-                favoriteSort,
-                readLaterSort,
-                todayOnly,
-                unreadOnly
-              })}
-              key={item}
-              onClick={(event) => handleNavigationClick(event, item)}
-              title={t.navigation.items[item]}
-              aria-label={t.navigation.items[item]}
-            >
-              <NavigationIcon item={item} />
-              <span className={styles.navLabel}>{t.navigation.items[item]}</span>
-            </a>
-          ))}
+          {navigationItems.map((item) => {
+            const navigationPage = pageForNavigationItem(item);
+            const isPlaceholder = !navigationPage;
+
+            return (
+              <a
+                aria-disabled={isPlaceholder ? "true" : undefined}
+                aria-label={t.navigation.items[item]}
+                className={isNavigationItemActive(item, appPage) ? styles.navItemActive : styles.navItem}
+                data-disabled={isPlaceholder ? "true" : undefined}
+                href={
+                  navigationPage
+                    ? urlForAppPage(navigationPage, {
+                        favoriteSort,
+                        readLaterSort,
+                        todayOnly,
+                        unreadOnly
+                      })
+                    : "#"
+                }
+                key={item}
+                onClick={(event) => handleNavigationClick(event, item)}
+                title={t.navigation.items[item]}
+              >
+                <NavigationIcon item={item} />
+                <span className={styles.navLabel}>{t.navigation.items[item]}</span>
+              </a>
+            );
+          })}
         </nav>
       </aside>
 
@@ -5544,7 +5555,7 @@ function routeFromLocation(defaultView: ArticleView): AppRoute {
 
 function urlForNavigationItem(item: NavigationItemKey, state: UrlState = {}): string {
   const page = pageForNavigationItem(item);
-  return page ? urlForAppPage(page, state) : "/";
+  return page ? urlForAppPage(page, state) : "#";
 }
 
 function urlForArticle(articleView: ArticleView, articleId: string, state: UrlState = {}): string {

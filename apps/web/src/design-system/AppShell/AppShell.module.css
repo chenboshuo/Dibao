@@ -177,6 +177,11 @@
   font-weight: var(--weight-bold);
 }
 
+.navItem[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .navItem svg,
 .navItemActive svg {
   flex: 0 0 auto;
@@ -2386,7 +2391,7 @@
   .nav {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 2px;
   }
 
@@ -2420,11 +2425,6 @@
   .navItemActive {
     color: var(--color-pine);
     background: var(--color-pine-soft);
-  }
-
-  .navItem:nth-child(n + 5),
-  .navItemActive:nth-child(n + 5) {
-    display: none;
   }
 
   .topbar {
