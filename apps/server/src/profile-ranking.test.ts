@@ -246,6 +246,7 @@ describe("profile algorithm and recommendation ranking", () => {
 
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json().data.eventId).toBeUndefined();
+      await waitForDeferredPostActionWork();
       expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
       expect(activeScore(db, "article_similar")).toBeNull();
 
@@ -1678,6 +1679,12 @@ function countQueuedJobs(db: DibaoDatabase, type: string): number {
     .prepare("select count(*) as count from jobs where type = ? and status = 'queued'")
     .get(type) as { count: number };
   return row.count;
+}
+
+function waitForDeferredPostActionWork(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 function tempDatabasePath(): string {

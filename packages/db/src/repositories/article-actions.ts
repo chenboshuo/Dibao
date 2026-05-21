@@ -34,6 +34,7 @@ type ArticleStateDbRow = {
   readingProgress: number;
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
+  lastActionAt: number | null;
   notInterestedAt: number | null;
 };
 
@@ -55,7 +56,7 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
       }
 
       this.ensureStateRow(input.articleId, input.now);
-      this.insertBehaviorEvent(input);
+      this.insertBehaviorEvent(input, this.eventWeightFor(input));
       this.applyStateChange(input);
 
       return {
@@ -133,7 +134,8 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
 
   private insertBehaviorEvent(
     input: Required<Omit<RecordArticleActionInput, "progress" | "metadata">> &
-      Pick<RecordArticleActionInput, "progress" | "metadata">
+      Pick<RecordArticleActionInput, "progress" | "metadata">,
+    eventWeight: number
   ): void {
     this.db
       .prepare(
@@ -153,10 +155,73 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
         input.eventId,
         input.articleId,
         input.type,
-        ARTICLE_ACTION_EVENT_WEIGHTS[input.type],
+        eventWeight,
         serializeMetadata(input),
         input.now
       );
+  }
+
+  private eventWeightFor(
+    input: Required<Omit<RecordArticleActionInput, "progress" | "metadata">> &
+      Pick<RecordArticleActionInput, "progress" | "metadata">
+  ): number {
+    if (input.type !== "impression") {
+      return ARTICLE_ACTION_EVENT_WEIGHTS[input.type];
+    }
+
+    return this.canRecordIgnoredImpression(input.articleId)
+      ? ARTICLE_ACTION_EVENT_WEIGHTS.impression
+      : 0;
+  }
+
+  private canRecordIgnoredImpression(articleId: string): boolean {
+    const row = this.db
+      .prepare(
+        `
+          select
+            case when s.read_at is not null then 1 else 0 end as read,
+            case when s.favorited_at is not null then 1 else 0 end as favorited,
+            case when s.liked_at is not null then 1 else 0 end as liked,
+            case when s.read_later_at is not null then 1 else 0 end as readLater,
+            case when s.hidden_at is not null then 1 else 0 end as hidden,
+            case when s.not_interested_at is not null then 1 else 0 end as notInterested,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            s.last_opened_at as lastOpenedAt,
+            exists (
+              select 1
+              from behavior_events be
+              where be.article_id = s.article_id
+            ) as hasBehavior
+          from article_states s
+          where s.article_id = ?
+        `
+      )
+      .get(articleId) as
+      | {
+          read: 0 | 1;
+          favorited: 0 | 1;
+          liked: 0 | 1;
+          readLater: 0 | 1;
+          hidden: 0 | 1;
+          notInterested: 0 | 1;
+          readingProgress: number;
+          lastOpenedAt: number | null;
+          hasBehavior: 0 | 1;
+        }
+      | undefined;
+
+    return Boolean(
+      row &&
+        row.read === 0 &&
+        row.favorited === 0 &&
+        row.liked === 0 &&
+        row.readLater === 0 &&
+        row.hidden === 0 &&
+        row.notInterested === 0 &&
+        row.readingProgress <= 0 &&
+        row.lastOpenedAt === null &&
+        row.hasBehavior === 0
+    );
   }
 
   private applyStateChange(
@@ -291,7 +356,13 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
               from behavior_events be
               where be.article_id = article_states.article_id
                 and be.event_type = 'impression'
+                and be.event_weight < 0
             ) as lastIgnoredAt,
+            (
+              select max(be.created_at)
+              from behavior_events be
+              where be.article_id = article_states.article_id
+            ) as lastActionAt,
             not_interested_at as notInterestedAt
           from article_states
           where article_id = ?
@@ -328,11 +399,17 @@ function interactionStatusForState(row: ArticleStateDbRow): ArticleInteractionSt
   if (row.readingProgress >= 0.25) {
     return "reading";
   }
-  if (row.lastOpenedAt !== null && (row.lastIgnoredAt === null || row.lastOpenedAt >= row.lastIgnoredAt)) {
+  if (row.lastOpenedAt !== null) {
     return "opened";
+  }
+  if (row.favorited === 1 || row.liked === 1 || row.readLater === 1) {
+    return "saved";
   }
   if (row.lastIgnoredAt !== null) {
     return "ignored";
+  }
+  if (row.lastActionAt !== null) {
+    return "seen";
   }
   return "unseen";
 }
@@ -340,6 +417,17 @@ function interactionStatusForState(row: ArticleStateDbRow): ArticleInteractionSt
 function ignoredAtForState(row: ArticleStateDbRow): number | null {
   if (row.notInterestedAt !== null) {
     return row.notInterestedAt;
+  }
+
+  if (
+    row.read === 1 ||
+    row.readingProgress > 0 ||
+    row.lastOpenedAt !== null ||
+    row.favorited === 1 ||
+    row.liked === 1 ||
+    row.readLater === 1
+  ) {
+    return null;
   }
 
   return row.lastIgnoredAt !== null &&

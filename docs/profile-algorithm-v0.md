@@ -87,7 +87,7 @@ mark_unread: -0.5
 
 说明：
 
-- `impression` 表示列表中滚过但未点进，是 stats-only 信号，不单独创建负向兴趣簇；它会通过短期排序投影和文章状态产生轻度扣分。
+- `impression` 表示列表中滚过但未点进，是 stats-only 信号，不单独创建负向兴趣簇。只有完全未触达文章的 `impression` 才会派生 `ignored`、进入来源轻负分和短期排序轻扣分；已收藏、点赞、稍后读、打开、阅读或已有其他行为的文章被划过时只是中性曝光，不得覆盖显式正向状态。
 - `open` 表示点进文章，是极弱 stats-only 正信号，不创建兴趣簇，不成为强来源偏好。
 - `open` 与 `impression` 在文章交互状态上互斥：被忽略文章再次点进后状态回到 `opened`，后续通过 `read_progress` 判断真实阅读深度。
 - `quick_bounce` 指打开后很快关闭且阅读进度很低。
@@ -347,7 +347,7 @@ feed_positive_event_weight:
   read_later: 1.0
 
 feed_negative_event_weight:
-  impression: 0.05
+  impression: 0.05  # only untouched -> ignored impressions
   unlike: 0.4
   quick_bounce: 0.2
   hide: 1.5
@@ -537,7 +537,7 @@ not_interested: -4.00
 Base ranking 不直接信任历史 `behavior_events.event_weight`。当前投影：
 
 ```text
-impression: -0.025
+impression: -0.025  # only untouched -> ignored impressions
 open: +0.005
 read_progress_25: +0.01
 read_progress_50: +0.04

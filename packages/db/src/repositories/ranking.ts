@@ -39,6 +39,7 @@ type ArticleRankingCandidateDbRow = {
   readingProgress: number;
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
+  lastActionAt: number | null;
   behaviorProjectionScore: number;
   behaviorEventCount: number;
   vectorBlob: Buffer | null;
@@ -60,6 +61,7 @@ type ArticleRankExplanationSourceDbRow = {
   readingProgress: number;
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
+  lastActionAt: number | null;
   score: number | null;
   baseScore: number | null;
   ftrlScore: number | null;
@@ -242,7 +244,13 @@ export class SqliteRankingRepository implements RankingRepository {
               from behavior_events be
               where be.article_id = a.id
                 and be.event_type = 'impression'
+                and be.event_weight < 0
             ) as lastIgnoredAt,
+            (
+              select max(be.created_at)
+              from behavior_events be
+              where be.article_id = a.id
+            ) as lastActionAt,
             coalesce(rs.score, base_rs.score) as score,
             coalesce(rs.base_score, base_rs.base_score) as baseScore,
             coalesce(rs.ftrl_score, base_rs.ftrl_score) as ftrlScore,
@@ -339,31 +347,39 @@ export class SqliteRankingRepository implements RankingRepository {
           `
             with event_stats as (
               select
-                article_id,
+                be.article_id,
                 coalesce(sum(
                   case
-                    when event_type = 'impression' then -0.025
-                    when event_type = 'open' then 0.005
-                    when event_type = 'read_progress' then
+                    when be.event_type = 'impression'
+                      and be.event_weight < 0
+                      and s.read_at is null
+                      and coalesce(s.reading_progress, 0) = 0
+                      and s.last_opened_at is null
+                      and s.favorited_at is null
+                      and s.liked_at is null
+                      and s.read_later_at is null then -0.025
+                    when be.event_type = 'open' then 0.005
+                    when be.event_type = 'read_progress' then
                       case
-                        when coalesce(json_extract(metadata_json, '$.progress'), 0) >= 0.9 then 0.10
-                        when coalesce(json_extract(metadata_json, '$.progress'), 0) >= 0.75 then 0.06
-                        when coalesce(json_extract(metadata_json, '$.progress'), 0) >= 0.5 then 0.04
-                        when coalesce(json_extract(metadata_json, '$.progress'), 0) >= 0.25 then 0.01
+                        when coalesce(json_extract(be.metadata_json, '$.progress'), 0) >= 0.9 then 0.10
+                        when coalesce(json_extract(be.metadata_json, '$.progress'), 0) >= 0.75 then 0.06
+                        when coalesce(json_extract(be.metadata_json, '$.progress'), 0) >= 0.5 then 0.04
+                        when coalesce(json_extract(be.metadata_json, '$.progress'), 0) >= 0.25 then 0.01
                         else 0
                       end
-                    when event_type = 'read_complete' then 0.10
-                    when event_type = 'favorite' then 0.12
-                    when event_type = 'like' then 0.16
-                    when event_type = 'unlike' then -0.04
-                    when event_type = 'read_later' then 0.08
-                    when event_type = 'quick_bounce' then -0.04
+                    when be.event_type = 'read_complete' then 0.10
+                    when be.event_type = 'favorite' then 0.12
+                    when be.event_type = 'like' then 0.16
+                    when be.event_type = 'unlike' then -0.04
+                    when be.event_type = 'read_later' then 0.08
+                    when be.event_type = 'quick_bounce' then -0.04
                     else 0
                   end
                 ), 0) as behaviorProjectionScore,
                 count(*) as behaviorEventCount
-              from behavior_events
-              group by article_id
+              from behavior_events be
+              left join article_states s on s.article_id = be.article_id
+              group by be.article_id
             )
             select
             a.id as articleId,
@@ -396,7 +412,13 @@ export class SqliteRankingRepository implements RankingRepository {
                 from behavior_events be
                 where be.article_id = a.id
                   and be.event_type = 'impression'
+                  and be.event_weight < 0
               ) as lastIgnoredAt,
+              (
+                select max(be.created_at)
+                from behavior_events be
+                where be.article_id = a.id
+              ) as lastActionAt,
               coalesce(es.behaviorProjectionScore, 0) as behaviorProjectionScore,
               coalesce(es.behaviorEventCount, 0) as behaviorEventCount,
               ae.vector_blob as vectorBlob,
@@ -601,11 +623,7 @@ function mapExplanationSource(
     readingProgress: row.readingProgress,
     interactionStatus: interactionStatusForRankingState(row),
     openedAt: row.lastOpenedAt,
-    ignoredAt:
-      row.lastIgnoredAt !== null &&
-      (row.lastOpenedAt === null || row.lastIgnoredAt > row.lastOpenedAt)
-        ? row.lastIgnoredAt
-        : null
+    ignoredAt: ignoredAtForRankingState(row)
   };
 
   return {
@@ -685,11 +703,7 @@ function mapCandidate(row: ArticleRankingCandidateDbRow): ArticleRankingCandidat
       readingProgress: row.readingProgress,
       interactionStatus: interactionStatusForRankingState(row),
       openedAt: row.lastOpenedAt,
-      ignoredAt:
-        row.lastIgnoredAt !== null &&
-        (row.lastOpenedAt === null || row.lastIgnoredAt > row.lastOpenedAt)
-          ? row.lastIgnoredAt
-          : null
+      ignoredAt: ignoredAtForRankingState(row)
     },
     behaviorProjectionScore: row.behaviorProjectionScore,
     behaviorEventCount: row.behaviorEventCount,
@@ -702,8 +716,12 @@ function mapCandidate(row: ArticleRankingCandidateDbRow): ArticleRankingCandidat
 function interactionStatusForRankingState(row: {
   read: 0 | 1;
   readingProgress: number;
+  favorited: 0 | 1;
+  liked: 0 | 1;
+  readLater: 0 | 1;
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
+  lastActionAt: number | null;
 }): ArticleInteractionStatus {
   if (row.read === 1 || row.readingProgress >= 0.9) {
     return "read";
@@ -711,11 +729,40 @@ function interactionStatusForRankingState(row: {
   if (row.readingProgress >= 0.25) {
     return "reading";
   }
-  if (row.lastOpenedAt !== null && (row.lastIgnoredAt === null || row.lastOpenedAt >= row.lastIgnoredAt)) {
+  if (row.lastOpenedAt !== null) {
     return "opened";
+  }
+  if (row.favorited === 1 || row.liked === 1 || row.readLater === 1) {
+    return "saved";
   }
   if (row.lastIgnoredAt !== null) {
     return "ignored";
   }
+  if (row.lastActionAt !== null) {
+    return "seen";
+  }
   return "unseen";
+}
+
+function ignoredAtForRankingState(row: {
+  read: 0 | 1;
+  readingProgress: number;
+  favorited: 0 | 1;
+  liked: 0 | 1;
+  readLater: 0 | 1;
+  lastOpenedAt: number | null;
+  lastIgnoredAt: number | null;
+}): number | null {
+  if (
+    row.read === 1 ||
+    row.readingProgress > 0 ||
+    row.lastOpenedAt !== null ||
+    row.favorited === 1 ||
+    row.liked === 1 ||
+    row.readLater === 1
+  ) {
+    return null;
+  }
+
+  return row.lastIgnoredAt;
 }

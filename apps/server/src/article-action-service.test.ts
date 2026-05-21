@@ -19,7 +19,8 @@ describe("ArticleActionService", () => {
     const service = new ArticleActionService({
       actions: fixedActionRepository(),
       profileJobs,
-      rankingJobs: calls
+      rankingJobs: calls,
+      deferPostActionWork: (work) => work()
     });
 
     for (const type of ["favorite", "impression", "open", "read_progress"] satisfies ArticleActionType[]) {
@@ -92,6 +93,7 @@ describe("ArticleActionService", () => {
         readLater: true,
         clearReadLaterState: true
       }),
+      deferPostActionWork: (work) => work(),
       removeReadLaterOnReadComplete: () => true
     });
 

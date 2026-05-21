@@ -17,6 +17,7 @@ type ProfileBehaviorEventDbRow = {
   articleId: string;
   feedId: string;
   eventType: ProfileBehaviorEventRow["eventType"];
+  eventWeight: number;
   metadataJson: string | null;
   createdAt: number;
   articleUpdatedAt: number;
@@ -317,6 +318,7 @@ export class SqliteProfileRepository implements ProfileRepository {
             a.feed_id as feedId,
             f.title as feedTitle,
             be.event_type as eventType,
+            ${effectiveEventWeightSql()} as eventWeight,
             be.metadata_json as metadataJson,
             coalesce(s.reading_progress, 0) as readingProgress,
             a.title,
@@ -714,6 +716,23 @@ export class SqliteProfileRepository implements ProfileRepository {
   }
 }
 
+function effectiveEventWeightSql(): string {
+  return `
+    case
+      when be.event_type = 'impression'
+        and (
+          s.read_at is not null
+          or coalesce(s.reading_progress, 0) > 0
+          or s.last_opened_at is not null
+          or s.favorited_at is not null
+          or s.liked_at is not null
+          or s.read_later_at is not null
+        ) then 0
+      else be.event_weight
+    end
+  `;
+}
+
 function profileEventSelect(): string {
   return `
     select
@@ -721,6 +740,7 @@ function profileEventSelect(): string {
       be.article_id as articleId,
       a.feed_id as feedId,
       be.event_type as eventType,
+      ${effectiveEventWeightSql()} as eventWeight,
       be.metadata_json as metadataJson,
       be.created_at as createdAt,
       a.updated_at as articleUpdatedAt,

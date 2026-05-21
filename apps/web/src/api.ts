@@ -38,7 +38,14 @@ export type UpdateFeedFolderInput = {
   sortOrder?: number;
 };
 
-export type ArticleInteractionStatus = "unseen" | "ignored" | "opened" | "reading" | "read";
+export type ArticleInteractionStatus =
+  | "unseen"
+  | "seen"
+  | "saved"
+  | "ignored"
+  | "opened"
+  | "reading"
+  | "read";
 
 export type ArticleState = {
   read: boolean;
@@ -110,6 +117,9 @@ export type RankExplanationReason = {
   cluster?: RecommendationClusterItem & {
     similarity: number;
   };
+  clusters?: Array<RecommendationClusterItem & {
+    similarity: number;
+  }>;
 };
 
 export type RankExplanation = {

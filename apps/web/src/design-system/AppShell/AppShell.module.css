@@ -619,6 +619,7 @@
   padding: 2px var(--space-2);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
+  white-space: nowrap;
 }
 
 .algorithmStatusNormal {
@@ -1701,8 +1702,12 @@
 
 .articleItemRead[data-favorited="true"]:not([data-interaction-status="ignored"]),
 .articleItem[data-interaction-status="opened"][data-favorited="true"],
+.articleItem[data-interaction-status="saved"][data-favorited="true"],
+.articleItem[data-interaction-status="seen"][data-favorited="true"],
 .articleItem[data-interaction-status="read"][data-favorited="true"],
 .articleItemActive[data-interaction-status="opened"][data-favorited="true"],
+.articleItemActive[data-interaction-status="saved"][data-favorited="true"],
+.articleItemActive[data-interaction-status="seen"][data-favorited="true"],
 .articleItemActive[data-interaction-status="read"][data-favorited="true"] {
   --article-strip-background: linear-gradient(
     90deg,
@@ -1714,8 +1719,12 @@
 
 .articleItemRead[data-read-later="true"]:not([data-interaction-status="ignored"]),
 .articleItem[data-interaction-status="opened"][data-read-later="true"],
+.articleItem[data-interaction-status="saved"][data-read-later="true"],
+.articleItem[data-interaction-status="seen"][data-read-later="true"],
 .articleItem[data-interaction-status="read"][data-read-later="true"],
 .articleItemActive[data-interaction-status="opened"][data-read-later="true"],
+.articleItemActive[data-interaction-status="saved"][data-read-later="true"],
+.articleItemActive[data-interaction-status="seen"][data-read-later="true"],
 .articleItemActive[data-interaction-status="read"][data-read-later="true"] {
   --article-strip-background: linear-gradient(
     90deg,
@@ -1741,8 +1750,12 @@
 
 .articleItemRead[data-favorited="true"][data-read-later="true"]::before,
 .articleItem[data-interaction-status="opened"][data-favorited="true"][data-read-later="true"]::before,
+.articleItem[data-interaction-status="saved"][data-favorited="true"][data-read-later="true"]::before,
+.articleItem[data-interaction-status="seen"][data-favorited="true"][data-read-later="true"]::before,
 .articleItem[data-interaction-status="read"][data-favorited="true"][data-read-later="true"]::before,
 .articleItemActive[data-interaction-status="opened"][data-favorited="true"][data-read-later="true"]::before,
+.articleItemActive[data-interaction-status="saved"][data-favorited="true"][data-read-later="true"]::before,
+.articleItemActive[data-interaction-status="seen"][data-favorited="true"][data-read-later="true"]::before,
 .articleItemActive[data-interaction-status="read"][data-favorited="true"][data-read-later="true"]::before {
   background: linear-gradient(
     90deg,

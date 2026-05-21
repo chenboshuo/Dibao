@@ -612,9 +612,19 @@ function impactForEvent(
 function sourceEventKeyFor(
   event: Pick<
     ProfileBehaviorEventRow,
-    "eventType" | "metadataJson" | "readingProgress" | "title" | "summary" | "contentText"
+    | "eventType"
+    | "eventWeight"
+    | "metadataJson"
+    | "readingProgress"
+    | "title"
+    | "summary"
+    | "contentText"
   >
 ): SourceEventKey | null {
+  if (event.eventType === "impression") {
+    return event.eventWeight < 0 ? "impression" : null;
+  }
+
   if (event.eventType === "read_progress") {
     if (isQuickBounce(event)) {
       return "quick_bounce";

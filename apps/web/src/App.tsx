@@ -282,6 +282,31 @@ export function App() {
     [feedFolders, sourceSelection]
   );
   const currentArticleView = appPage.type === "reader" ? appPage.view : "latest";
+  const articleListScrollKey = useMemo(
+    () =>
+      [
+        "dibao:list-scroll",
+        currentArticleView,
+        sourceSelection.type,
+        sourceSelection.type === "feed"
+          ? sourceSelection.feedId
+          : sourceSelection.type === "folder"
+            ? sourceSelection.folderId
+            : "all",
+        unreadOnly ? "unread" : "all",
+        todayOnly ? "today" : "any",
+        currentArticleView === "favorites" ? favoriteSort : "",
+        currentArticleView === "read_later" ? readLaterSort : ""
+      ].join(":"),
+    [
+      currentArticleView,
+      favoriteSort,
+      readLaterSort,
+      sourceSelection,
+      todayOnly,
+      unreadOnly
+    ]
+  );
 
   function applyArticleState(articleId: string, state: ArticleState) {
     const previousState =
@@ -880,18 +905,19 @@ export function App() {
 
       try {
         const detail = await dibaoApi.getArticle(articleId);
+        const knownState = locallyUpdatedArticleIds.current.has(articleId)
+          ? articleStateById.current.get(articleId)
+          : null;
+        const detailWithKnownState = knownState ? { ...detail, state: knownState } : detail;
         if (!cancelled) {
-          const knownState = locallyUpdatedArticleIds.current.has(articleId)
-            ? articleStateById.current.get(articleId)
-            : null;
-          const detailWithKnownState = knownState ? { ...detail, state: knownState } : detail;
           articleStateById.current.set(articleId, detailWithKnownState.state);
           setArticleDetail(detailWithKnownState);
           setArticleActionError(null);
           setIsDetailLoading(false);
         }
-        if (!openedArticleIds.current.has(articleId)) {
+        if (!cancelled && !openedArticleIds.current.has(articleId)) {
           openedArticleIds.current.add(articleId);
+          applyArticleState(articleId, optimisticOpenedState(detailWithKnownState.state));
           try {
             const result = await dibaoApi.postArticleAction(articleId, {
               type: "open",
@@ -1569,6 +1595,12 @@ export function App() {
       progress,
       metadata
     };
+    const previousState =
+      articleStateById.current.get(articleId) ??
+      (articleDetail?.id === articleId ? articleDetail.state : null);
+    if (previousState) {
+      applyArticleState(articleId, optimisticReadProgressState(previousState, progress));
+    }
 
     if (options.keepalive) {
       dibaoApi.postArticleActionKeepalive(articleId, request);
@@ -1942,6 +1974,7 @@ export function App() {
               }
               isArticlesLoading={isArticlesLoading}
               isLoadingMore={isLoadingMoreArticles}
+              listScrollKey={articleListScrollKey}
               loadMoreError={loadMoreError}
               nextCursor={nextArticleCursor}
               onIgnoreArticle={handleIgnoreArticle}
@@ -3035,12 +3068,9 @@ export function AlgorithmTransparencyPage(props: {
   return (
     <section
       className={classNames(styles.settingsWorkspace, "algorithm-board-page")}
-      aria-labelledby="algorithm-transparency-title"
+      aria-label={t.algorithmTransparency.pageTitle}
     >
       <div className={classNames(styles.settingsHeader, "algorithm-hero")}>
-        <div>
-          <h2 id="algorithm-transparency-title">{t.algorithmTransparency.pageTitle}</h2>
-        </div>
         <button className={styles.secondaryButton} onClick={props.onBack} type="button">
           {t.algorithmTransparency.backToSettings}
         </button>
@@ -3868,6 +3898,7 @@ export function ArticleListPanel(props: {
   isArticlesLoading: boolean;
   isLoadingMore: boolean;
   isRecommendationStatusLoading: boolean;
+  listScrollKey?: string;
   loadMoreError: string | null;
   nextCursor: string | null;
   onArticleAction?: (article: ArticleActionTarget, intent: ArticleActionIntent) => void;
@@ -3894,6 +3925,7 @@ export function ArticleListPanel(props: {
 }) {
   const { t, formatDate } = useI18n();
   const scrollContainerRef = useRef<HTMLElement>(null);
+  const listScrollKey = props.listScrollKey ?? `dibao:list-scroll:${props.articleView}`;
   const sourceTitle =
     props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
 
@@ -3903,6 +3935,12 @@ export function ArticleListPanel(props: {
     onIgnoreArticle: props.onIgnoreArticle,
     rootRef: scrollContainerRef,
     selectedArticleId: props.selectedArticleId
+  });
+
+  usePersistedArticleListScroll({
+    enabled: !props.selectedArticleId,
+    storageKey: listScrollKey,
+    rootRef: scrollContainerRef
   });
 
   return (
@@ -4213,6 +4251,39 @@ function useArticleListIgnoreTelemetry(props: {
       observer.disconnect();
     };
   }, [props.articles, props.enabled, props.rootRef]);
+}
+
+function usePersistedArticleListScroll(props: {
+  enabled: boolean;
+  rootRef: RefObject<HTMLElement | null>;
+  storageKey: string;
+}) {
+  useEffect(() => {
+    const root = props.rootRef.current;
+    if (!root || typeof window === "undefined") {
+      return;
+    }
+    const scrollRoot = root;
+
+    if (props.enabled) {
+      const stored = window.sessionStorage.getItem(props.storageKey);
+      const scrollTop = stored ? Number(stored) : NaN;
+      if (Number.isFinite(scrollTop) && scrollTop > 0) {
+        window.requestAnimationFrame(() => {
+          scrollRoot.scrollTop = scrollTop;
+        });
+      }
+    }
+
+    function handleScroll() {
+      window.sessionStorage.setItem(props.storageKey, String(scrollRoot.scrollTop));
+    }
+
+    scrollRoot.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      scrollRoot.removeEventListener("scroll", handleScroll);
+    };
+  }, [props.enabled, props.rootRef, props.storageKey]);
 }
 
 function cssEscape(value: string): string {
@@ -5955,11 +6026,11 @@ function optimisticStateForArticleAction(
 ): ArticleState {
   switch (intent) {
     case "favorite":
-      return { ...state, favorited: !state.favorited };
+      return savedOptimisticState({ ...state, favorited: !state.favorited });
     case "like":
-      return { ...state, liked: !state.liked };
+      return savedOptimisticState({ ...state, liked: !state.liked });
     case "readLater":
-      return { ...state, readLater: !state.readLater };
+      return savedOptimisticState({ ...state, readLater: !state.readLater });
     case "notInterested":
       return {
         ...state,
@@ -5974,6 +6045,51 @@ function optimisticStateForArticleAction(
         ignoredAt: Date.now()
       };
   }
+}
+
+function optimisticOpenedState(state: ArticleState): ArticleState {
+  if (state.read || state.readingProgress >= 0.9) {
+    return { ...state, interactionStatus: "read", openedAt: Date.now(), ignoredAt: null };
+  }
+
+  if (state.readingProgress >= 0.25) {
+    return { ...state, interactionStatus: "reading", openedAt: Date.now(), ignoredAt: null };
+  }
+
+  return { ...state, interactionStatus: "opened", openedAt: Date.now(), ignoredAt: null };
+}
+
+function optimisticReadProgressState(state: ArticleState, progress: number): ArticleState {
+  const readingProgress = Math.max(state.readingProgress, progress);
+  return {
+    ...state,
+    read: state.read || readingProgress >= 0.9,
+    readingProgress,
+    openedAt: state.openedAt ?? Date.now(),
+    ignoredAt: null,
+    interactionStatus:
+      state.read || readingProgress >= 0.9
+        ? "read"
+        : readingProgress >= 0.25
+          ? "reading"
+          : "opened"
+  };
+}
+
+function savedOptimisticState(state: ArticleState): ArticleState {
+  if (state.read || state.readingProgress >= 0.9) {
+    return { ...state, interactionStatus: "read", ignoredAt: null };
+  }
+  if (state.readingProgress >= 0.25) {
+    return { ...state, interactionStatus: "reading", ignoredAt: null };
+  }
+  if (state.openedAt !== null && state.openedAt !== undefined) {
+    return { ...state, interactionStatus: "opened", ignoredAt: null };
+  }
+  if (state.favorited || state.liked || state.readLater) {
+    return { ...state, interactionStatus: "saved", ignoredAt: null };
+  }
+  return { ...state, interactionStatus: "seen", ignoredAt: null };
 }
 
 function actionErrorMessageFor(intent: ArticleActionIntent, t: Dictionary) {
@@ -5992,6 +6108,20 @@ function actionErrorMessageFor(intent: ArticleActionIntent, t: Dictionary) {
 function explanationReasonText(reason: RankExplanationReason, t: Dictionary): string {
   switch (reason.type) {
     case "interest":
+      if (reason.clusters && reason.clusters.length > 0) {
+        return t.explanation.reasons.interestCluster(
+          reason.clusters
+            .map((cluster, index) =>
+              t.algorithmTransparency.clusters.matched(
+                clusterDisplayName(cluster, index, t),
+                formatPercent(Math.max(0, cluster.similarity)),
+                formatCompactNumber(cluster.weight),
+                cluster.sampleCount
+              )
+            )
+            .join("；")
+        );
+      }
       if (reason.cluster) {
         return t.explanation.reasons.interestCluster(
           t.algorithmTransparency.clusters.matched(

@@ -219,7 +219,14 @@ export type ArticleListSort = ArticleFavoriteSort | ArticleReadLaterSort;
 
 export type ArticleReadStatus = "unread" | "read" | "all";
 
-export type ArticleInteractionStatus = "unseen" | "ignored" | "opened" | "reading" | "read";
+export type ArticleInteractionStatus =
+  | "unseen"
+  | "seen"
+  | "saved"
+  | "ignored"
+  | "opened"
+  | "reading"
+  | "read";
 
 export type ArticleListInput = {
   view?: ArticleListView;
@@ -556,6 +563,7 @@ export type ProfileBehaviorEventRow = {
   articleId: string;
   feedId: string;
   eventType: BehaviorEventType;
+  eventWeight: number;
   metadataJson: string | null;
   createdAt: number;
   articleUpdatedAt: number;
@@ -571,6 +579,7 @@ export type ProfileBehaviorEventRow = {
 
 export type FeedBehaviorEventRow = {
   eventType: BehaviorEventType;
+  eventWeight: number;
   metadataJson: string | null;
   readingProgress: number;
   title: string;

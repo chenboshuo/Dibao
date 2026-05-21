@@ -16,6 +16,15 @@ export function articleInteractionStatusForState(
   if (state.readingProgress >= 0.25) {
     return "reading";
   }
+  if (state.openedAt !== null && state.openedAt !== undefined) {
+    return "opened";
+  }
+  if (state.favorited || state.liked || state.readLater) {
+    return "saved";
+  }
+  if (state.ignoredAt !== null && state.ignoredAt !== undefined) {
+    return "ignored";
+  }
   return "unseen";
 }
 

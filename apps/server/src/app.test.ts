@@ -2324,6 +2324,7 @@ describe("server API vertical slice", () => {
         progress: 0.8
       });
       expect(strong.statusCode, strong.body).toBe(200);
+      await waitForDeferredPostActionWork();
 
       const recent = jobs.list({ type: "recent_intent_rebuild", status: "queued", limit: 1 })[0];
       const ftrl = jobs.list({ type: "ftrl_train", status: "queued", limit: 1 })[0];
@@ -2334,6 +2335,7 @@ describe("server API vertical slice", () => {
         type: "favorite"
       });
       expect(repeatedStrong.statusCode, repeatedStrong.body).toBe(200);
+      await waitForDeferredPostActionWork();
       expect(jobs.countByTypeAndStatus("recent_intent_rebuild", "queued")).toBe(1);
       expect(jobs.countByTypeAndStatus("ftrl_train", "queued")).toBe(1);
     } finally {
@@ -4123,11 +4125,6 @@ describe("server API vertical slice", () => {
           generatedAt: "1970-01-01T00:00:07.000Z",
           reasons: [
             {
-              type: "state",
-              label: "Article state increased the score",
-              impact: "positive"
-            },
-            {
               type: "negative",
               label: "Negative interest match",
               impact: "negative"
@@ -4205,6 +4202,7 @@ describe("server API vertical slice", () => {
       expect(progress.statusCode, progress.body).toBe(200);
       expect(readLater.statusCode, readLater.body).toBe(200);
       expect(favorite.statusCode, favorite.body).toBe(200);
+      await waitForDeferredPostActionWork();
 
       await drainRankingJobs(db, 10_000);
 
@@ -4486,6 +4484,55 @@ describe("server API vertical slice", () => {
         "impression",
         "open"
       ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("keeps saved unread articles out of ignored state when later impressions arrive", async () => {
+    const db = createFixtureDatabase();
+    let now = 5400;
+    const app = buildServer({ db, logger: false, now: () => now });
+
+    try {
+      const favorite = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "favorite",
+        value: true
+      });
+      now = 5500;
+      const impression = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "impression",
+        metadata: {
+          reason: "scrolled_past_unopened"
+        }
+      });
+      const unread = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&unreadOnly=true"
+      });
+
+      expect(favorite.statusCode, favorite.body).toBe(200);
+      expect(favorite.json().data.state).toMatchObject({
+        favorited: true,
+        interactionStatus: "saved",
+        ignoredAt: null
+      });
+      expect(impression.statusCode, impression.body).toBe(200);
+      expect(impression.json().data.state).toMatchObject({
+        favorited: true,
+        interactionStatus: "saved",
+        ignoredAt: null
+      });
+      expect(listBehaviorEvents(db, "article_recommended").at(-1)).toEqual({
+        eventType: "impression",
+        eventWeight: 0,
+        metadataJson: JSON.stringify({ reason: "scrolled_past_unopened" })
+      });
+      expect(unread.statusCode, unread.body).toBe(200);
+      expect(unread.json().data.map((article: { id: string }) => article.id)).not.toContain(
+        "article_recommended"
+      );
     } finally {
       await app.close();
       db.close();
@@ -5762,3 +5809,9 @@ const fixtureRssWithMovedFirstArticle = fixtureRss.replace(
   "https://example.com/first",
   "https://example.com/first-moved"
 );
+
+function waitForDeferredPostActionWork(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}

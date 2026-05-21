@@ -124,7 +124,10 @@ import {
   DEFAULT_RECOMMENDATION_MAINTENANCE_SCHEDULER_INTERVAL_MS,
   RecommendationMaintenanceScheduler
 } from "./recommendation-maintenance-scheduler.js";
-import { RecommendationRankingService } from "./ranking-service.js";
+import {
+  RecommendationRankingService,
+  type RankExplanationClusterMatch
+} from "./ranking-service.js";
 import {
   DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
   RetentionCleanupJobService,
@@ -1308,25 +1311,17 @@ export function buildServer(options: BuildServerOptions = {}) {
       data: {
         articleId: explanation.articleId,
         reasons: explanation.reasons.map((reason) => {
-          if (!reason.cluster) {
-            return reason;
-          }
-          const label = clusterLabelService.displayLabelForCluster(
-            {
-              id: reason.cluster.id,
-              label: reason.cluster.label,
-              polarity: reason.cluster.polarity,
-              displayIndex: reason.cluster.displayIndex
-            },
-            reason.cluster.displayIndex
+          const clusters = reason.clusters?.map((cluster) =>
+            labeledExplanationCluster(cluster, clusterLabelService)
           );
+          const cluster = reason.cluster
+            ? labeledExplanationCluster(reason.cluster, clusterLabelService)
+            : clusters?.[0];
+
           return {
             ...reason,
-            cluster: {
-              ...reason.cluster,
-              ...label,
-              label: label.displayLabel
-            }
+            ...(cluster ? { cluster } : {}),
+            ...(clusters && clusters.length > 0 ? { clusters } : {})
           };
         }),
         generatedAt: timestampToIsoValue(explanation.generatedAt)
@@ -1712,6 +1707,27 @@ function getRecommendationStatus(options: {
     lastProfileUpdate: timestampToIso(lastProfileUpdate),
     lastRankingUpdate: timestampToIso(lastRankingUpdate),
     warnings
+  };
+}
+
+function labeledExplanationCluster(
+  cluster: RankExplanationClusterMatch,
+  clusterLabelService: InterestClusterLabelService
+) {
+  const label = clusterLabelService.displayLabelForCluster(
+    {
+      id: cluster.id,
+      label: cluster.label,
+      polarity: cluster.polarity,
+      displayIndex: cluster.displayIndex
+    },
+    cluster.displayIndex
+  );
+
+  return {
+    ...cluster,
+    ...label,
+    label: label.displayLabel
   };
 }
 

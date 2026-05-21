@@ -31,6 +31,7 @@ export type ArticleActionServiceOptions = {
   rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll" | "enqueueArticles">;
   maintenance?: { enqueueStrongActionMaintenance: (now?: number) => unknown };
   removeReadLaterOnReadComplete?: () => boolean;
+  deferPostActionWork?: (work: () => void) => void;
   now?: () => number;
 };
 
@@ -66,17 +67,34 @@ export class ArticleActionService {
       }
     }
 
-    this.options.rankingJobs?.enqueueArticles([input.articleId]);
-    this.options.profileJobs?.enqueueEvent({
-      eventId: result.eventId,
-      articleId: input.articleId,
-      actionType: input.type
+    this.deferPostActionWork(() => {
+      this.options.rankingJobs?.enqueueArticles([input.articleId]);
+      this.options.profileJobs?.enqueueEvent({
+        eventId: result.eventId,
+        articleId: input.articleId,
+        actionType: input.type
+      });
+      if (isStrongMaintenanceAction(input)) {
+        this.options.maintenance?.enqueueStrongActionMaintenance(this.now());
+      }
     });
-    if (isStrongMaintenanceAction(input)) {
-      this.options.maintenance?.enqueueStrongActionMaintenance(this.now());
-    }
 
     return finalResult;
+  }
+
+  private deferPostActionWork(work: () => void): void {
+    const defer =
+      this.options.deferPostActionWork ??
+      ((callback: () => void) => {
+        setTimeout(callback, 0);
+      });
+    defer(() => {
+      try {
+        work();
+      } catch {
+        // Article actions must not block or fail because follow-up jobs could not enqueue.
+      }
+    });
   }
 }
 

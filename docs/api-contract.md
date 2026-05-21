@@ -201,6 +201,9 @@ type ArticleListItem = {
     hidden: boolean;
     notInterested: boolean;
     readingProgress: number;
+    interactionStatus: "unseen" | "seen" | "saved" | "ignored" | "opened" | "reading" | "read";
+    openedAt: number | null;
+    ignoredAt: number | null;
   };
   rank?: {
     score: number;
@@ -812,8 +815,10 @@ read_progress
 
 说明：
 
-- `impression` 表示文章在列表中被滚过但未点进，是轻度负向的被动行为；当前 Web 仅对 `interactionStatus="unseen"` 的文章自动发送。
-- `open` 表示用户点进文章，是轻度正向行为。`open` 与 `impression` 互斥：若一篇已忽略文章之后被点进，服务端会把 `interactionStatus` 派生回 `opened`。
+- `interactionStatus="unseen"` 是唯一未读状态；`seen`/`saved`/`opened`/`reading`/`read` 都会移出未读筛选，但只有 `read` 表示已读。
+- `saved` 表示 `favorited`、`liked` 或 `readLater` 至少一个为真；它可以与后续 `opened`、`reading`、`read` 的行为叠加。
+- `impression` 表示文章在列表中被滚过但未点进。只有完全未触达文章会因此派生为 `ignored` 并产生轻度负向投影；已收藏、点赞、稍后读、打开、阅读或已有其他行为的文章收到 `impression` 时只保留中性曝光记录，不得变为 `ignored`。
+- `open` 表示用户点进文章，是轻度正向行为。若一篇已忽略文章之后被点进，服务端会把 `interactionStatus` 派生回 `opened`。
 - `read_progress` 是判断真实阅读深度的主要信号；前端不再提供“标记已读”按钮。
 - `favorite`、`like`、`read_later`、`mark_read` 支持 `value: false`，服务端会分别规范化为 `unfavorite`、`unlike`、`remove_read_later`、`mark_unread`。
 - 也可以直接发送 `unfavorite`、`unlike`、`remove_read_later`、`mark_unread`。

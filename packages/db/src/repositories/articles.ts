@@ -53,6 +53,7 @@ type ArticleReadDbRow = ArticleDbRow & {
   readingProgress: number;
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
+  lastActionAt: number | null;
   rankScore: number | null;
   rankCalculatedAt: number | null;
 };
@@ -526,6 +527,9 @@ function unreadArticleCondition(): string {
     s.read_at is null
     and coalesce(s.reading_progress, 0) = 0
     and s.last_opened_at is null
+    and s.favorited_at is null
+    and s.liked_at is null
+    and s.read_later_at is null
     and not exists (
       select 1
       from behavior_events unread_be
@@ -567,7 +571,13 @@ function baseArticleReadSelect(): string {
         from behavior_events be
         where be.article_id = a.id
           and be.event_type = 'impression'
+          and be.event_weight < 0
       ) as lastIgnoredAt,
+      (
+        select max(be.created_at)
+        from behavior_events be
+        where be.article_id = a.id
+      ) as lastActionAt,
       coalesce(rs.score, base_rs.score) as rankScore,
       coalesce(rs.calculated_at, base_rs.calculated_at) as rankCalculatedAt
   `;
@@ -715,11 +725,7 @@ function mapArticleListItem(row: ArticleReadDbRow): ArticleListItemRow {
       readingProgress: row.readingProgress,
       interactionStatus: interactionStatusForArticle(row),
       openedAt: row.lastOpenedAt,
-      ignoredAt:
-        row.lastIgnoredAt !== null &&
-        (row.lastOpenedAt === null || row.lastIgnoredAt > row.lastOpenedAt)
-          ? row.lastIgnoredAt
-          : null
+      ignoredAt: ignoredAtForArticle(row)
     },
     rank:
       row.rankScore === null || row.rankCalculatedAt === null
@@ -748,13 +754,34 @@ function interactionStatusForArticle(row: ArticleReadDbRow): ArticleInteractionS
   if (row.readingProgress >= 0.25) {
     return "reading";
   }
-  if (row.lastOpenedAt !== null && (row.lastIgnoredAt === null || row.lastOpenedAt >= row.lastIgnoredAt)) {
+  if (row.lastOpenedAt !== null) {
     return "opened";
+  }
+  if (row.favorited === 1 || row.liked === 1 || row.readLater === 1) {
+    return "saved";
   }
   if (row.lastIgnoredAt !== null) {
     return "ignored";
   }
+  if (row.lastActionAt !== null) {
+    return "seen";
+  }
   return "unseen";
+}
+
+function ignoredAtForArticle(row: ArticleReadDbRow): number | null {
+  if (
+    row.read === 1 ||
+    row.readingProgress > 0 ||
+    row.lastOpenedAt !== null ||
+    row.favorited === 1 ||
+    row.liked === 1 ||
+    row.readLater === 1
+  ) {
+    return null;
+  }
+
+  return row.lastIgnoredAt;
 }
 
 function normalizeLimit(limit: number | undefined): number {

@@ -44,6 +44,7 @@ export type RankExplanationReason = {
   label: string;
   impact: "positive" | "negative" | "neutral";
   cluster?: RankExplanationClusterMatch;
+  clusters?: RankExplanationClusterMatch[];
 };
 
 export type RankExplanationClusterMatch = {
@@ -225,71 +226,53 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       articleId,
       rankContext
     });
-    const clusterMatch = this.explanationClusterMatch(source);
+    const clusterMatches = this.explanationClusterMatches(source);
     const persistedPayload = parseExplanationPayload(persisted?.payloadJson ?? null);
 
     return {
       articleId,
       status: source.rankingStatus,
-      reasons: rankReasonsFor(source, clusterMatch, persistedPayload),
+      reasons: rankReasonsFor(source, clusterMatches, persistedPayload),
       components: persistedPayload?.components,
       generatedAt: source.rank?.calculatedAt ?? this.now()
     };
   }
 
-  private explanationClusterMatch(
+  private explanationClusterMatches(
     source: ArticleRankExplanationSourceRow
-  ): RankExplanationClusterMatch | null {
+  ): RankExplanationClusterMatch[] {
     const activeIndexId = this.activeEmbeddingIndexId();
     if (!activeIndexId || !source.vectorBlob || source.rankingStatus !== "ready") {
-      return null;
+      return [];
     }
 
     const articleVector = fromVectorBlob(source.vectorBlob);
-    let best:
-      | {
-          cluster: InterestClusterRow;
-          similarity: number;
-          displayIndex: number;
-        }
-      | null = null;
-
-    const clusters = this.clusterVectorsFor(activeIndexId);
-    for (let index = 0; index < clusters.length; index += 1) {
-      const cluster = clusters[index];
-      if (!cluster) {
-        continue;
-      }
-
-      if (cluster.polarity !== "positive") {
-        continue;
-      }
-
-      const similarity = cosineSimilarity(articleVector, cluster.vector);
-      if (!best || similarity > best.similarity) {
-        best = {
-          cluster: cluster.cluster,
-          similarity,
-          displayIndex: index + 1
-        };
-      }
-    }
-
-    if (!best || best.similarity < profileAlgorithmDefaults.positiveInterestMatchThreshold) {
-      return null;
-    }
-
-    return {
-      id: best.cluster.id,
-      polarity: best.cluster.polarity,
-      label: null,
-      displayIndex: best.displayIndex,
-      weight: best.cluster.weight,
-      sampleCount: best.cluster.sampleCount,
-      similarity: best.similarity,
-      lastMatchedAt: best.cluster.lastMatchedAt,
-      updatedAt: best.cluster.updatedAt
-    };
+    return this.clusterVectorsFor(activeIndexId)
+      .map((cluster, index) => ({
+        cluster: cluster.cluster,
+        similarity: cluster.polarity === "positive"
+          ? cosineSimilarity(articleVector, cluster.vector)
+          : -1,
+        displayIndex: index + 1
+      }))
+      .filter(
+        (match) =>
+          match.cluster.polarity === "positive" &&
+          match.similarity >= profileAlgorithmDefaults.positiveInterestMatchThreshold
+      )
+      .sort((left, right) => right.similarity - left.similarity)
+      .slice(0, 3)
+      .map((match) => ({
+        id: match.cluster.id,
+        polarity: match.cluster.polarity,
+        label: null,
+        displayIndex: match.displayIndex,
+        weight: match.cluster.weight,
+        sampleCount: match.cluster.sampleCount,
+        similarity: match.similarity,
+        lastMatchedAt: match.cluster.lastMatchedAt,
+        updatedAt: match.cluster.updatedAt
+      }));
   }
 
   private writeScores(
@@ -1646,7 +1629,7 @@ function roundScore(value: number): number {
 
 function rankReasonsFor(
   source: ArticleRankExplanationSourceRow,
-  clusterMatch: RankExplanationClusterMatch | null,
+  clusterMatches: RankExplanationClusterMatch[],
   persistedPayload?: { components?: Record<string, unknown> } | null
 ): RankExplanationReason[] {
   const rank = source.rank;
@@ -1681,7 +1664,7 @@ function rankReasonsFor(
       type: "interest",
       label: "Interest match",
       impact: "positive",
-      ...(clusterMatch ? { cluster: clusterMatch } : {}),
+      ...(clusterMatches[0] ? { cluster: clusterMatches[0], clusters: clusterMatches } : {}),
       magnitude: rank.semanticScore ?? rank.interestScore,
       priority: 1
     });
@@ -1725,10 +1708,11 @@ function rankReasonsFor(
     });
   }
 
-  if (rank.stateScore > MIN_REASON_SCORE) {
+  const positiveStateLabel = positiveStateLabelFor(source);
+  if (rank.stateScore > MIN_REASON_SCORE && positiveStateLabel) {
     candidates.push({
       type: "state",
-      label: positiveStateLabelFor(source),
+      label: positiveStateLabel,
       impact: "positive",
       magnitude: rank.stateScore,
       priority: 4
@@ -1808,7 +1792,7 @@ function fallbackLabelFor(source: ArticleRankExplanationSourceRow): string {
   return "Ranking has not been calculated yet";
 }
 
-function positiveStateLabelFor(source: ArticleRankExplanationSourceRow): string {
+function positiveStateLabelFor(source: ArticleRankExplanationSourceRow): string | null {
   const labels: string[] = [];
 
   if (source.state.favorited) {
@@ -1824,7 +1808,7 @@ function positiveStateLabelFor(source: ArticleRankExplanationSourceRow): string 
     labels.push("Opened article");
   }
 
-  return labels.length > 0 ? labels.join(", ") : "Article state increased the score";
+  return labels.length > 0 ? labels.join(", ") : null;
 }
 
 function uniqueStrings(values: string[]): string[] {

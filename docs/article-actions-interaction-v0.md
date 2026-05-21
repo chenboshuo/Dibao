@@ -70,7 +70,7 @@ state: {
   hidden: boolean;
   notInterested: boolean;
   readingProgress: number;
-  interactionStatus: "unseen" | "ignored" | "opened" | "reading" | "read";
+  interactionStatus: "unseen" | "seen" | "saved" | "ignored" | "opened" | "reading" | "read";
   openedAt: number | null;
   ignoredAt: number | null;
 }
@@ -82,7 +82,7 @@ state: {
 
 | 动作 | API type | value | 信号类型 | 推荐意义 | 当前列表影响 |
 | --- | --- | --- | --- | --- | --- |
-| 列表滚过未点进 | `impression` | 可省略或 `true` | 隐式行为 | 轻度负信号，只表示被忽略 | 不移除，视觉弱化 |
+| 列表滚过未点进 | `impression` | 可省略或 `true` | 隐式行为 | 仅对完全未触达文章是轻度负信号 | 不移除，视觉弱化 |
 | 打开文章 | `open` | 可省略或 `true` | 隐式行为 | 轻度正信号，只记录点进 | 不移除 |
 | 收藏 | `favorite` | `true` | 显式意图 | 强正反馈，增强正向兴趣 | 收藏列表中出现 |
 | 取消收藏 | `favorite` | `false` | 显式意图 | stats only，弱负纠正 | 收藏列表中移除 |
@@ -97,8 +97,11 @@ state: {
 - “普通列表”指推荐、最新、搜索结果等以文章发现和阅读为主的列表。
 - 收藏列表和稍后读列表中的移除动作只影响当前对应列表，不代表删除文章。
 - `hidden` 与 `notInterested` 默认不在普通列表显示。
-- `unseen` 表示新文章尚未发生任何操作；`ignored` 表示在任意列表中被滚过但未点进；`opened` 表示已点进但尚未形成足够阅读深度；`reading/read` 由 `read_progress` 派生。
-- `open` 与 `impression` 互斥：一篇文章被忽略后，之后再次点进会回到 `opened`，并开始继续记录阅读深度。
+- `unseen` 是新文章默认状态，表示尚未发生任何行为，也是未读筛选和未读计数的唯一来源。
+- `seen` 表示发生过中性行为但没有保存、打开、阅读或忽略；`saved` 表示收藏、点赞或稍后读至少一个为真。`seen/saved` 都会移出未读，但不等于已读。
+- `ignored` 只表示完全未触达文章被列表划过：没有打开、收藏、点赞、稍后读、阅读进度或其他历史行为。收藏、稍后读、点赞、打开、阅读后的文章即使再次被划过，也不得变成 `ignored`，不得产生划过负分。
+- `opened` 表示已点进但尚未形成足够阅读深度；`reading/read` 由 `read_progress` 派生。被忽略文章再次点进后状态回到 `opened`，后续通过 `read_progress` 判断真实阅读深度。
+- 色条语义以状态派生为准：`unseen` 显示未读深松色条；`saved/opened/reading/read` 不显示未读色条，但可以叠加收藏黄条、稍后读绿条；`ignored` 是极淡弱化条，且与收藏/稍后读条互斥。
 
 ## 触发位置
 
