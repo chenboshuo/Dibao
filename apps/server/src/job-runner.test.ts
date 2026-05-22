@@ -33,7 +33,7 @@ import {
   FeedRefreshScheduler
 } from "./feed-refresh-job-service.js";
 import { FeedRefreshService, type FeedFetcher } from "./feed-refresh-service.js";
-import { JobRunner } from "./job-runner.js";
+import { DeferredJobRun, JobRunner } from "./job-runner.js";
 import {
   ProfileDecayJobService,
   PROFILE_DECAY_JOB_TYPE
@@ -58,6 +58,41 @@ afterEach(() => {
 });
 
 describe("job runner foundation", () => {
+  it("defers a job without spending an attempt when a handler requests a future run time", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+
+    try {
+      jobs.enqueue({
+        id: "job_deferred",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_deferred" }),
+        maxAttempts: 3,
+        runAfter: 1000,
+        now: 1000
+      });
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          feed_refresh: () => {
+            throw new DeferredJobRun("rate limited", 60_000);
+          }
+        },
+        now: () => 2000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({ id: "job_deferred" });
+      expect(jobs.findById("job_deferred")).toMatchObject({
+        status: "queued",
+        attempts: 0,
+        runAfter: 60_000,
+        error: "rate limited"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("continues running queued jobs after one job fails", async () => {
     const db = createEmptyDatabase();
     const jobs = new SqliteJobRepository(db);
@@ -697,6 +732,153 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("uses the active provider text slice length for embedding input", async () => {
+    const fixture = createEmbeddingPipelineFixture();
+    const { articles, adapter, db, embeddingJobs, embeddings, jobs } = fixture;
+    const seenTexts: string[] = [];
+
+    try {
+      embeddings.updateProvider({
+        id: "provider_openai",
+        textMaxChars: 1000,
+        now: 1000
+      });
+      insertEmbeddingArticleFixture(
+        db,
+        articles,
+        "article_short_slice",
+        "Long embedding article title"
+      );
+      articles.upsertContent({
+        articleId: "article_short_slice",
+        contentHtml: null,
+        contentText: "x".repeat(2000),
+        extractionStatus: "success",
+        extractedAt: 1000,
+        now: 1000
+      });
+      const [job] = embeddingJobs.enqueueArticlesForActiveIndex(["article_short_slice"]);
+      adapter.embedBatch = async ({ items }) => {
+        seenTexts.push(...items.map((input) => input.text));
+        return items.map((input) => ({
+          id: input.id,
+          vector: [0.1, 0.2, 0.3]
+        }));
+      };
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [EMBEDDING_GENERATE_JOB_TYPE]: (queuedJob) =>
+            embeddingJobs.handleEmbeddingGenerateJob(queuedJob)
+        },
+        now: () => 2000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({ id: job.id });
+      expect(seenTexts).toHaveLength(1);
+      expect(seenTexts[0]).toHaveLength(1000);
+      expect(seenTexts[0]).toContain("Long embedding article title");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("defers embedding jobs when provider QPM is exhausted", async () => {
+    const fixture = createEmbeddingPipelineFixture();
+    const { articles, adapter, db, embeddings, jobs, providerService, vectorStore } = fixture;
+    let adapterCalls = 0;
+
+    try {
+      embeddings.updateProvider({
+        id: "provider_openai",
+        requestsPerMinute: 1,
+        now: 1000
+      });
+      insertEmbeddingArticleFixture(db, articles, "article_qpm_limited", "QPM limited article");
+      const limitedEmbeddingJobs = new EmbeddingJobService({
+        articles,
+        embeddings,
+        jobs,
+        providerService,
+        vectorStore,
+        requestCountSince: () => 1,
+        jobIdFactory: () => `job_embedding_${randomFixtureId()}`,
+        now: () => 10_000
+      });
+      const [job] = limitedEmbeddingJobs.enqueueArticlesForActiveIndex(["article_qpm_limited"]);
+      adapter.embedBatch = async ({ items }) => {
+        adapterCalls += 1;
+        return items.map((input) => ({
+          id: input.id,
+          vector: [0.1, 0.2, 0.3]
+        }));
+      };
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [EMBEDDING_GENERATE_JOB_TYPE]: (queuedJob) =>
+            limitedEmbeddingJobs.handleEmbeddingGenerateJob(queuedJob)
+        },
+        now: () => 10_000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({ id: job.id });
+      expect(adapterCalls).toBe(0);
+      expect(jobs.findById(job.id)).toMatchObject({
+        status: "queued",
+        attempts: 0,
+        runAfter: 70_001
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("defers embedding jobs until the next local day when provider QPD is exhausted", async () => {
+    const fixture = createEmbeddingPipelineFixture();
+    const { articles, db, embeddings, jobs, providerService, vectorStore } = fixture;
+    const now = new Date(2026, 4, 22, 13, 30, 0, 0).getTime();
+    const nextDay = new Date(now);
+    nextDay.setHours(24, 0, 0, 0);
+
+    try {
+      embeddings.updateProvider({
+        id: "provider_openai",
+        requestsPerDay: 2,
+        now: 1000
+      });
+      insertEmbeddingArticleFixture(db, articles, "article_qpd_limited", "QPD limited article");
+      const limitedEmbeddingJobs = new EmbeddingJobService({
+        articles,
+        embeddings,
+        jobs,
+        providerService,
+        vectorStore,
+        requestCountSince: () => 2,
+        jobIdFactory: () => `job_embedding_${randomFixtureId()}`,
+        now: () => now
+      });
+      const [job] = limitedEmbeddingJobs.enqueueArticlesForActiveIndex(["article_qpd_limited"]);
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [EMBEDDING_GENERATE_JOB_TYPE]: (queuedJob) =>
+            limitedEmbeddingJobs.handleEmbeddingGenerateJob(queuedJob)
+        },
+        now: () => now
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({ id: job.id });
+      expect(jobs.findById(job.id)).toMatchObject({
+        status: "queued",
+        attempts: 0,
+        runAfter: nextDay.getTime()
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("does not let old succeeded embedding jobs block future enqueue", () => {
     const fixture = createEmbeddingPipelineFixture();
     const { db, articles, jobs, embeddingJobs } = fixture;
@@ -1173,6 +1355,9 @@ function createEmbeddingPipelineFixture() {
     articles,
     adapter,
     embeddingJobs,
+    embeddings,
+    providerService,
+    vectorStore,
     jobs
   };
 }

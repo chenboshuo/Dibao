@@ -911,7 +911,10 @@ describe("web i18n", () => {
     expect(html).toContain("API Key");
     expect(html).toContain("Base URL");
     expect(html).toContain("模型");
-    expect(html).toContain("bge-m3 / 1024");
+    expect(html).toContain("切片长度");
+    expect(html).toContain("QPM");
+    expect(html).toContain("QPD");
+    expect(html).toContain("新的向量空间");
     expect(html).toContain("测试连接");
   });
 
@@ -928,6 +931,7 @@ describe("web i18n", () => {
               providerId: "provider_ollama",
               model: "bge-m3",
               dimension: 1024,
+              textMaxChars: 8000,
               distanceMetric: "cosine",
               status: "active",
               candidateCount: 10,
@@ -957,6 +961,9 @@ describe("web i18n", () => {
               baseUrl: "http://127.0.0.1:11434",
               model: "bge-m3",
               dimension: 1024,
+              textMaxChars: 8000,
+              requestsPerMinute: 60,
+              requestsPerDay: 1000,
               enabled: true,
               qualityTier: "recommended",
               hasApiKey: false,
@@ -999,6 +1006,7 @@ describe("web i18n", () => {
     expect(html).toContain("待处理 2");
     expect(html).toContain("失败 1");
     expect(html).toContain("错误：Provider request failed");
+    expect(html).toContain("本地估算用量：6 篇/input · 3 次 batch 请求 · 1200 tokens");
     expect(html).toContain("补齐缺失向量");
     expect(html).toContain("重建向量索引");
     expect(html).toContain("bge-m3");

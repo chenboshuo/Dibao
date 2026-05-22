@@ -36,6 +36,9 @@ const removeCorpusTopicSnapshotsPath = fileURLToPath(
 const geminiEmbeddingProviderPath = fileURLToPath(
   new URL("../migrations/012_gemini_embedding_provider.sql", import.meta.url)
 );
+const embeddingProviderLimitsPath = fileURLToPath(
+  new URL("../migrations/013_embedding_provider_limits.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -93,6 +96,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "012",
       name: "gemini_embedding_provider",
       sql: readFileSync(geminiEmbeddingProviderPath, "utf8")
+    },
+    {
+      version: "013",
+      name: "embedding_provider_limits",
+      sql: readFileSync(embeddingProviderLimitsPath, "utf8")
     }
   ];
 }

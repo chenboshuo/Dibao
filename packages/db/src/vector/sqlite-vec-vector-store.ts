@@ -156,6 +156,7 @@ export class SqliteVecVectorStore implements VectorStore {
             ei.provider_id as providerId,
             ei.model,
             ei.dimension,
+            ei.text_max_chars as textMaxChars,
             ei.distance_metric as distanceMetric,
             ei.table_name as tableName,
             ei.status
@@ -275,6 +276,7 @@ export class SqliteVecVectorStore implements VectorStore {
             provider_id as providerId,
             model,
             dimension,
+            text_max_chars as textMaxChars,
             distance_metric as distanceMetric,
             table_name as tableName,
             status

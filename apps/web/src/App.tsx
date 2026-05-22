@@ -2431,6 +2431,9 @@ type EmbeddingProviderDraft = {
   baseUrl: string;
   model: string;
   dimension: string;
+  textMaxChars: string;
+  requestsPerMinute: string;
+  requestsPerDay: string;
   apiKey: string;
   enabled: boolean;
   qualityTier: "basic" | "recommended" | "best_quality";
@@ -2961,6 +2964,40 @@ export function SettingsWorkspace(props: {
               value={providerDraft.dimension}
             />
 
+            <NumberSettingField
+              id="settings-provider-text-max-chars"
+              label={t.settings.sections.provider.textMaxCharsLabel}
+              max={200000}
+              min={1000}
+              onChange={(value) => setProviderDraft({ ...providerDraft, textMaxChars: value })}
+              step={500}
+              value={providerDraft.textMaxChars}
+            />
+
+            <NumberSettingField
+              id="settings-provider-qpm"
+              label={t.settings.sections.provider.requestsPerMinuteLabel}
+              max={1000000}
+              min={1}
+              onChange={(value) =>
+                setProviderDraft({ ...providerDraft, requestsPerMinute: value })
+              }
+              placeholder={t.settings.sections.provider.unlimitedPlaceholder}
+              step={1}
+              value={providerDraft.requestsPerMinute}
+            />
+
+            <NumberSettingField
+              id="settings-provider-qpd"
+              label={t.settings.sections.provider.requestsPerDayLabel}
+              max={100000000}
+              min={1}
+              onChange={(value) => setProviderDraft({ ...providerDraft, requestsPerDay: value })}
+              placeholder={t.settings.sections.provider.unlimitedPlaceholder}
+              step={1}
+              value={providerDraft.requestsPerDay}
+            />
+
             {providerDraft.type !== "ollama" ? (
               <label className={styles.settingsField} htmlFor="settings-provider-api-key">
                 <span>{t.settings.sections.provider.apiKeyLabel}</span>
@@ -3013,7 +3050,9 @@ export function SettingsWorkspace(props: {
             </label>
           </div>
 
-          <p className={styles.managementHint}>{t.settings.sections.provider.modelHint}</p>
+          <p className={styles.providerWarning}>{t.settings.sections.provider.modelHint}</p>
+          <p className={styles.providerWarning}>{t.settings.sections.provider.textMaxCharsHint}</p>
+          <p className={styles.managementHint}>{t.settings.sections.provider.rateLimitHint}</p>
           <p className={styles.managementHint}>{t.settings.sections.provider.activateHint}</p>
 
           {selectedProvider ? (
@@ -3158,6 +3197,7 @@ export function SettingsWorkspace(props: {
                     <p className={styles.embeddingUsageLine}>
                       <ActionIcon name="sparkle" />
                       {t.settings.sections.provider.usage(
+                        index.usage.windows[usageWindow].itemCount,
                         index.usage.windows[usageWindow].requestCount,
                         index.usage.windows[usageWindow].estimatedTokens
                       )}
@@ -3979,6 +4019,7 @@ function NumberSettingField(props: {
   max: number;
   min: number;
   onChange: (value: string) => void;
+  placeholder?: string;
   step: number;
   unit?: string;
   value: string;
@@ -3992,6 +4033,7 @@ function NumberSettingField(props: {
           max={props.max}
           min={props.min}
           onChange={(event) => props.onChange(event.target.value)}
+          placeholder={props.placeholder}
           step={props.step}
           type="number"
           value={props.value}
@@ -5531,6 +5573,13 @@ function draftForEmbeddingProvider(provider: EmbeddingProvider | null): Embeddin
     baseUrl: provider?.baseUrl ?? defaults.baseUrl,
     model: provider?.model ?? defaults.model,
     dimension: String(provider?.dimension ?? defaults.dimension),
+    textMaxChars: String(provider?.textMaxChars ?? defaults.textMaxChars),
+    requestsPerMinute: provider?.requestsPerMinute === null || provider?.requestsPerMinute === undefined
+      ? ""
+      : String(provider.requestsPerMinute),
+    requestsPerDay: provider?.requestsPerDay === null || provider?.requestsPerDay === undefined
+      ? ""
+      : String(provider.requestsPerDay),
     apiKey: "",
     enabled: provider?.enabled ?? false,
     qualityTier: provider?.qualityTier ?? "recommended"
@@ -5563,6 +5612,11 @@ function draftWithProviderType(
       draft.dimension === String(previousDefaults.dimension) || draft.dimension.trim() === ""
         ? String(defaults.dimension)
         : draft.dimension,
+    textMaxChars:
+      draft.textMaxChars === String(previousDefaults.textMaxChars) ||
+      draft.textMaxChars.trim() === ""
+        ? String(defaults.textMaxChars)
+        : draft.textMaxChars,
     apiKey: type === "ollama" ? "" : draft.apiKey
   };
 }
@@ -5573,7 +5627,8 @@ function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {
       name: "Ollama",
       baseUrl: "http://127.0.0.1:11434",
       model: "nomic-embed-text",
-      dimension: 768
+      dimension: 768,
+      textMaxChars: 8000
     };
   }
 
@@ -5582,7 +5637,8 @@ function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {
       name: "Gemini AI Studio",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       model: "gemini-embedding-001",
-      dimension: 3072
+      dimension: 3072,
+      textMaxChars: 8000
     };
   }
 
@@ -5590,7 +5646,8 @@ function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {
     name: "OpenAI Compatible",
     baseUrl: "",
     model: "text-embedding-3-small",
-    dimension: 1536
+    dimension: 1536,
+    textMaxChars: 8000
   };
 }
 
@@ -5721,6 +5778,18 @@ function parseEmbeddingProviderDraft(
   if (dimension === null) {
     return { ok: false, error: t.settings.sections.provider.errors.dimension };
   }
+  const textMaxChars = parseNumberDraft(draft.textMaxChars, 1000, 200000, true);
+  if (textMaxChars === null) {
+    return { ok: false, error: t.settings.sections.provider.errors.textMaxChars };
+  }
+  const requestsPerMinute = parseOptionalNumberDraft(draft.requestsPerMinute, 1, 1_000_000);
+  if (requestsPerMinute === undefined) {
+    return { ok: false, error: t.settings.sections.provider.errors.requestsPerMinute };
+  }
+  const requestsPerDay = parseOptionalNumberDraft(draft.requestsPerDay, 1, 100_000_000);
+  if (requestsPerDay === undefined) {
+    return { ok: false, error: t.settings.sections.provider.errors.requestsPerDay };
+  }
 
   return {
     ok: true,
@@ -5730,6 +5799,9 @@ function parseEmbeddingProviderDraft(
       baseUrl,
       model,
       dimension,
+      textMaxChars,
+      requestsPerMinute,
+      requestsPerDay,
       enabled: draft.enabled,
       qualityTier: draft.qualityTier,
       ...(draft.type !== "ollama" && draft.apiKey.trim()
@@ -5760,6 +5832,19 @@ function parseNumberDraft(
   }
 
   return parsed;
+}
+
+function parseOptionalNumberDraft(
+  value: string,
+  min: number,
+  max: number
+): number | null | undefined {
+  if (value.trim() === "") {
+    return null;
+  }
+
+  const parsed = parseNumberDraft(value, min, max, true);
+  return parsed === null ? undefined : parsed;
 }
 
 function clampNumber(value: number, min: number, max: number): number {

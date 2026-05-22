@@ -685,6 +685,9 @@ export type EmbeddingProviderInput = {
   baseUrl?: string | null;
   model: string;
   dimension: number;
+  textMaxChars?: number;
+  requestsPerMinute?: number | null;
+  requestsPerDay?: number | null;
   apiKeyEncrypted?: string | null;
   enabled?: boolean;
   qualityTier?: "basic" | "recommended" | "best_quality";
@@ -698,6 +701,9 @@ export type EmbeddingProviderRow = {
   baseUrl: string | null;
   model: string;
   dimension: number;
+  textMaxChars: number;
+  requestsPerMinute: number | null;
+  requestsPerDay: number | null;
   apiKeyEncrypted: string | null;
   enabled: boolean;
   qualityTier: "basic" | "recommended" | "best_quality";
@@ -711,7 +717,17 @@ export type EmbeddingProviderRow = {
 export type UpdateEmbeddingProviderInput = Partial<
   Pick<
     EmbeddingProviderInput,
-    "type" | "name" | "baseUrl" | "model" | "dimension" | "apiKeyEncrypted" | "enabled" | "qualityTier"
+    | "type"
+    | "name"
+    | "baseUrl"
+    | "model"
+    | "dimension"
+    | "textMaxChars"
+    | "requestsPerMinute"
+    | "requestsPerDay"
+    | "apiKeyEncrypted"
+    | "enabled"
+    | "qualityTier"
   >
 > & {
   id: string;
@@ -731,6 +747,7 @@ export type EmbeddingIndexInput = {
   providerId: string;
   model: string;
   dimension: number;
+  textMaxChars?: number;
   distanceMetric?: "cosine";
   tableName: string;
   status?: "active" | "building" | "disabled" | "failed" | "retired";
@@ -742,6 +759,7 @@ export type EmbeddingIndexRow = {
   providerId: string;
   model: string;
   dimension: number;
+  textMaxChars: number;
   distanceMetric: "cosine";
   tableName: string;
   status: "active" | "building" | "disabled" | "failed" | "retired";

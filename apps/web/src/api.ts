@@ -275,6 +275,9 @@ export type EmbeddingProvider = {
   baseUrl: string | null;
   model: string;
   dimension: number;
+  textMaxChars: number;
+  requestsPerMinute: number | null;
+  requestsPerDay: number | null;
   enabled: boolean;
   qualityTier: EmbeddingProviderQualityTier;
   hasApiKey: boolean;
@@ -291,6 +294,9 @@ export type CreateEmbeddingProviderInput = {
   baseUrl: string;
   model: string;
   dimension: number;
+  textMaxChars?: number;
+  requestsPerMinute?: number | null;
+  requestsPerDay?: number | null;
   apiKey?: string | null;
   enabled: boolean;
   qualityTier?: EmbeddingProviderQualityTier;
@@ -313,6 +319,7 @@ export type EmbeddingIndex = {
   providerId: string;
   model: string;
   dimension: number;
+  textMaxChars: number;
   distanceMetric: "cosine";
   status: "active" | "building" | "disabled" | "failed" | "retired";
   candidateCount?: number;

@@ -18,6 +18,13 @@ export class PermanentJobFailure extends Error {
   }
 }
 
+export class DeferredJobRun extends Error {
+  constructor(message: string, readonly runAfter: number) {
+    super(message);
+    this.name = "DeferredJobRun";
+  }
+}
+
 export class JobRunner {
   private readonly now: () => number;
   private readonly pollIntervalMs: number;
@@ -96,6 +103,8 @@ export class JobRunner {
       const message = errorMessage(error);
       if (error instanceof PermanentJobFailure) {
         this.options.jobs.markFailed(job.id, message, this.now());
+      } else if (error instanceof DeferredJobRun) {
+        this.options.jobs.defer(job.id, message, error.runAfter, this.now());
       } else {
         this.options.jobs.markFailedOrRetry(job.id, message, this.now(), this.retryDelayMs);
       }

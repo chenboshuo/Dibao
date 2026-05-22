@@ -378,6 +378,20 @@ export function buildServer(options: BuildServerOptions = {}) {
         input.now
       );
     },
+    requestCountSince: (input) => {
+      const row = db
+        .prepare(
+          `
+            select coalesce(sum(request_count), 0) as count
+            from embedding_usage_events
+            where provider_id = ?
+              and created_at >= ?
+          `
+        )
+        .get(input.providerId, input.since) as { count: number } | undefined;
+
+      return row?.count ?? 0;
+    },
     vectorStore,
     now: options.now
   });

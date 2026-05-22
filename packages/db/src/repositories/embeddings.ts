@@ -19,6 +19,7 @@ const EMBEDDING_ELIGIBLE_TEXT_PREDICATE = `
     or trim(substr(coalesce(ac.content_text, ''), 1, 256)) != ''
   )
 `;
+const DEFAULT_EMBEDDING_TEXT_MAX_CHARS = 8_000;
 
 export interface EmbeddingRepository {
   deleteProvider(id: string): boolean;
@@ -104,19 +105,25 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
               base_url,
               model,
               dimension,
+              text_max_chars,
+              requests_per_minute,
+              requests_per_day,
               api_key_encrypted,
               enabled,
               quality_tier,
               created_at,
               updated_at
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(id) do update set
               type = excluded.type,
               name = excluded.name,
               base_url = excluded.base_url,
               model = excluded.model,
               dimension = excluded.dimension,
+              text_max_chars = excluded.text_max_chars,
+              requests_per_minute = excluded.requests_per_minute,
+              requests_per_day = excluded.requests_per_day,
               api_key_encrypted = excluded.api_key_encrypted,
               enabled = excluded.enabled,
               quality_tier = excluded.quality_tier,
@@ -130,6 +137,9 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
           input.baseUrl ?? null,
           input.model,
           input.dimension,
+          input.textMaxChars ?? DEFAULT_EMBEDDING_TEXT_MAX_CHARS,
+          input.requestsPerMinute ?? null,
+          input.requestsPerDay ?? null,
           input.apiKeyEncrypted ?? null,
           input.enabled ? 1 : 0,
           input.qualityTier ?? "basic",
@@ -163,6 +173,9 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
               base_url = ?,
               model = ?,
               dimension = ?,
+              text_max_chars = ?,
+              requests_per_minute = ?,
+              requests_per_day = ?,
               api_key_encrypted = ?,
               enabled = ?,
               quality_tier = ?,
@@ -176,6 +189,9 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
           input.baseUrl === undefined ? existing.baseUrl : input.baseUrl,
           input.model ?? existing.model,
           input.dimension ?? existing.dimension,
+          input.textMaxChars ?? existing.textMaxChars,
+          input.requestsPerMinute === undefined ? existing.requestsPerMinute : input.requestsPerMinute,
+          input.requestsPerDay === undefined ? existing.requestsPerDay : input.requestsPerDay,
           input.apiKeyEncrypted === undefined ? existing.apiKeyEncrypted : input.apiKeyEncrypted,
           enabled ? 1 : 0,
           input.qualityTier ?? existing.qualityTier,
@@ -248,13 +264,14 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
             provider_id,
             model,
             dimension,
+            text_max_chars,
             distance_metric,
             table_name,
             status,
             created_at,
             updated_at
           )
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       )
       .run(
@@ -262,6 +279,7 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
         input.providerId,
         input.model,
         input.dimension,
+        input.textMaxChars ?? DEFAULT_EMBEDDING_TEXT_MAX_CHARS,
         input.distanceMetric ?? "cosine",
         tableName,
         input.status ?? "active",
@@ -285,6 +303,7 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
             provider_id as providerId,
             model,
             dimension,
+            text_max_chars as textMaxChars,
             distance_metric as distanceMetric,
             table_name as tableName,
             status,
@@ -395,6 +414,7 @@ export class SqliteEmbeddingRepository implements EmbeddingRepository {
               ei.provider_id as providerId,
               ei.model,
               ei.dimension,
+              ei.text_max_chars as textMaxChars,
               ei.distance_metric as distanceMetric,
               ei.table_name as tableName,
               ei.status,
@@ -535,6 +555,9 @@ function baseProviderSelect(): string {
       base_url as baseUrl,
       model,
       dimension,
+      text_max_chars as textMaxChars,
+      requests_per_minute as requestsPerMinute,
+      requests_per_day as requestsPerDay,
       api_key_encrypted as apiKeyEncrypted,
       enabled,
       quality_tier as qualityTier,
@@ -602,6 +625,7 @@ function baseIndexSelect(): string {
       provider_id as providerId,
       model,
       dimension,
+      text_max_chars as textMaxChars,
       distance_metric as distanceMetric,
       table_name as tableName,
       status,

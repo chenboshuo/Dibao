@@ -191,7 +191,8 @@ describe("db package", () => {
         "008",
         "009",
         "011",
-        "012"
+        "012",
+        "013"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
@@ -202,6 +203,10 @@ describe("db package", () => {
       expect(hasColumn(db, "interest_cluster_evidence", "feed_title_snapshot")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
+      expect(hasColumn(db, "embedding_providers", "text_max_chars")).toBe(true);
+      expect(hasColumn(db, "embedding_providers", "requests_per_minute")).toBe(true);
+      expect(hasColumn(db, "embedding_providers", "requests_per_day")).toBe(true);
+      expect(hasColumn(db, "embedding_indexes", "text_max_chars")).toBe(true);
 
       db.prepare(
         `
@@ -582,7 +587,8 @@ describe("db package", () => {
         "008",
         "009",
         "011",
-        "012"
+        "012",
+        "013"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);

@@ -751,6 +751,9 @@ describe("server API vertical slice", () => {
         baseUrl: "https://api.example.com/v1/",
         model: "fixture-embedding",
         dimension: 3,
+        textMaxChars: 12000,
+        requestsPerMinute: 30,
+        requestsPerDay: 1000,
         apiKey: "secret",
         enabled: true,
         qualityTier: "recommended"
@@ -773,6 +776,9 @@ describe("server API vertical slice", () => {
             baseUrl: "https://api.example.com/v1",
             model: "fixture-embedding",
             dimension: 3,
+            textMaxChars: 12000,
+            requestsPerMinute: 30,
+            requestsPerDay: 1000,
             enabled: true,
             qualityTier: "recommended",
             hasApiKey: true
@@ -792,6 +798,7 @@ describe("server API vertical slice", () => {
             providerId,
             model: "fixture-embedding",
             dimension: 3,
+            textMaxChars: 12000,
             distanceMetric: "cosine",
             status: "active",
             embeddingCount: 0
@@ -1336,7 +1343,7 @@ describe("server API vertical slice", () => {
     }
   });
 
-  it("creates a new active index on model or dimension change without polluting the old index", async () => {
+  it("creates a new active index on model, dimension, or text slice change without polluting the old index", async () => {
     const db = createFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 1000 });
 
@@ -1376,13 +1383,14 @@ describe("server API vertical slice", () => {
         url: "/api/embedding/indexes"
       });
       expect(indexes.statusCode, indexes.body).toBe(200);
-      const data = (indexes.json() as { data: Array<{ id: string; status: string; model: string; dimension: number; embeddingCount: number; coverageRatio: number }> }).data;
+      const data = (indexes.json() as { data: Array<{ id: string; status: string; model: string; dimension: number; textMaxChars: number; embeddingCount: number; coverageRatio: number }> }).data;
       const active = data.find((index) => index.status === "active");
       const retired = data.find((index) => index.id === oldIndex.id);
 
       expect(active).toMatchObject({
         model: "fixture-embedding-v2",
         dimension: 4,
+        textMaxChars: 8000,
         embeddingCount: 0,
         coverageRatio: 0
       });
@@ -1392,8 +1400,33 @@ describe("server API vertical slice", () => {
         status: "retired",
         model: "fixture-embedding-v1",
         dimension: 3,
+        textMaxChars: 8000,
         embeddingCount: 1
       });
+
+      const textSliceUpdate = await injectJson(
+        app,
+        "PATCH",
+        `/api/embedding/providers/${providerId}`,
+        {
+          textMaxChars: 12000,
+          enabled: true
+        }
+      );
+      expect(textSliceUpdate.statusCode, textSliceUpdate.body).toBe(200);
+      const textSliceIndexes = await app.inject({
+        method: "GET",
+        url: "/api/embedding/indexes"
+      });
+      const textSliceData = (textSliceIndexes.json() as { data: Array<{ id: string; status: string; model: string; dimension: number; textMaxChars: number; embeddingCount: number }> }).data;
+      const textSliceActive = textSliceData.find((index) => index.status === "active");
+      expect(textSliceActive).toMatchObject({
+        model: "fixture-embedding-v2",
+        dimension: 4,
+        textMaxChars: 12000,
+        embeddingCount: 0
+      });
+      expect(textSliceActive?.id).not.toBe(active?.id);
 
       const recommended = await app.inject({
         method: "GET",
@@ -1402,7 +1435,7 @@ describe("server API vertical slice", () => {
       expect(recommended.json()).toMatchObject({
         data: {
           activeIndex: {
-            id: active?.id
+            id: textSliceActive?.id
           },
           activeRankContext: "rec_v2:embedding:cocoon_5:schema_2"
         }

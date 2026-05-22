@@ -237,12 +237,18 @@ export const zhCN = {
         geminiModelPlaceholder: "gemini-embedding-001",
         ollamaModelPlaceholder: "nomic-embed-text",
         dimensionLabel: "维度",
+        textMaxCharsLabel: "切片长度（字符）",
+        requestsPerMinuteLabel: "QPM（每分钟 batch 请求）",
+        requestsPerDayLabel: "QPD（每日 batch 请求）",
+        unlimitedPlaceholder: "留空不限",
         apiKeyLabel: "API Key",
         apiKeyPlaceholder: "可选，按 endpoint 要求填写",
         apiKeyRetainPlaceholder: "留空则保留已保存密钥",
         ollamaApiKeyHint: "Ollama 本地 API 默认不需要 API key。",
         geminiApiKeyHint: "Gemini AI Studio 使用 x-goog-api-key 调用 Gemini embedding API。",
-        modelHint: "Provider 切换只允许在同型号、同维度之间进行，例如 Ollama 1 的 bge-m3 / 1024 切换到 Ollama 2、硅基流动或 OpenRouter 的 BAAI/bge-m3 / 1024；不同模型族或维度会创建不兼容向量空间，系统会拒绝直接切换。",
+        modelHint: "警示：切换到不同模型族、维度或切片长度会创建新的向量空间，已有向量不会复用，新 index 需要重新生成向量后推荐语义能力才会恢复。",
+        textMaxCharsHint: "警示：修改切片长度会让已有向量与新策略不一致；保存并设为当前 Provider 后会创建新的 active index，请重新索引/补齐向量。",
+        rateLimitHint: "QPM/QPD 按 batch 请求计数；达到 QPM 会延后到下一分钟，达到 QPD 会暂停到本地时间第二天继续队列。留空表示不限制。",
         activateHint: "保存只会保存配置档；只有点击“设为当前 Provider”才会切换 embedding 生成、active index 和推荐使用的 Provider。",
         activeTitle: "当前生效 Provider",
         activeEmptyTitle: "当前未启用 Provider",
@@ -284,8 +290,8 @@ export const zhCN = {
           "7d": "7Days",
           "30d": "30Days"
         },
-        usage: (requestCount: number, estimatedTokens: number) =>
-          `本地估算用量：${requestCount} 次请求 · ${estimatedTokens} tokens`,
+        usage: (itemCount: number, requestCount: number, estimatedTokens: number) =>
+          `本地估算用量：${itemCount} 篇/input · ${requestCount} 次 batch 请求 · ${estimatedTokens} tokens`,
         noIndexes: "设为当前 Provider 后会创建 active index。",
         indexStatus: (model: string, status: string, count: number) =>
           `${model} · ${status} · ${count} 条 embedding`,
@@ -314,7 +320,10 @@ export const zhCN = {
           nameRequired: "请输入 provider 名称。",
           baseUrlRequired: "请输入 Base URL。",
           modelRequired: "请输入模型名称。",
-          dimension: "维度必须是 1 到 20000 的整数。"
+          dimension: "维度必须是 1 到 20000 的整数。",
+          textMaxChars: "切片长度必须是 1000 到 200000 的整数。",
+          requestsPerMinute: "QPM 必须留空或填写正整数。",
+          requestsPerDay: "QPD 必须留空或填写正整数。"
         }
       }
     },
@@ -1173,12 +1182,18 @@ export const enUS = {
         geminiModelPlaceholder: "gemini-embedding-001",
         ollamaModelPlaceholder: "nomic-embed-text",
         dimensionLabel: "Dimension",
+        textMaxCharsLabel: "Text slice length (chars)",
+        requestsPerMinuteLabel: "QPM (batch requests/min)",
+        requestsPerDayLabel: "QPD (batch requests/day)",
+        unlimitedPlaceholder: "Blank for unlimited",
         apiKeyLabel: "API Key",
         apiKeyPlaceholder: "Optional, depending on the endpoint",
         apiKeyRetainPlaceholder: "Leave blank to keep the saved key",
         ollamaApiKeyHint: "The local Ollama API does not require an API key by default.",
         geminiApiKeyHint: "Gemini AI Studio uses x-goog-api-key when calling the Gemini embedding API.",
-        modelHint: "Provider switching is allowed only between the same model family and dimension, such as Ollama 1 bge-m3 / 1024 to Ollama 2, SiliconFlow, or OpenRouter BAAI/bge-m3 / 1024. Different model families or dimensions create incompatible vector spaces and are rejected.",
+        modelHint: "Warning: switching to a different model family, dimension, or text slice length creates a new vector space. Existing vectors are not reused; semantic recommendations recover after the new index is generated.",
+        textMaxCharsHint: "Warning: changing the text slice length makes existing vectors inconsistent with the new strategy. Saving and setting the provider current creates a new active index; regenerate/backfill vectors afterwards.",
+        rateLimitHint: "QPM/QPD count batch requests. QPM pauses jobs until the next minute; QPD pauses them until the next local day. Leave blank for no limit.",
         activateHint: "Saving only updates the profile. Only “Set as current provider” switches embedding generation, the active index, and recommendation provider usage.",
         activeTitle: "Current provider",
         activeEmptyTitle: "No current provider",
@@ -1220,8 +1235,8 @@ export const enUS = {
           "7d": "7Days",
           "30d": "30Days"
         },
-        usage: (requestCount: number, estimatedTokens: number) =>
-          `Local estimate: ${requestCount} requests · ${estimatedTokens} tokens`,
+        usage: (itemCount: number, requestCount: number, estimatedTokens: number) =>
+          `Local estimate: ${itemCount} inputs · ${requestCount} batch requests · ${estimatedTokens} tokens`,
         noIndexes: "Setting the provider as current creates an active index.",
         indexStatus: (model: string, status: string, count: number) =>
           `${model} · ${status} · ${count} ${count === 1 ? "embedding" : "embeddings"}`,
@@ -1250,7 +1265,10 @@ export const enUS = {
           nameRequired: "Enter a provider name.",
           baseUrlRequired: "Enter the Base URL.",
           modelRequired: "Enter a model name.",
-          dimension: "Dimension must be an integer from 1 to 20000."
+          dimension: "Dimension must be an integer from 1 to 20000.",
+          textMaxChars: "Text slice length must be an integer from 1000 to 200000.",
+          requestsPerMinute: "QPM must be blank or a positive integer.",
+          requestsPerDay: "QPD must be blank or a positive integer."
         }
       }
     },

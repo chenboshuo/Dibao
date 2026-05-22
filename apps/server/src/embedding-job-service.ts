@@ -9,7 +9,7 @@ import type {
 } from "@dibao/db";
 import { EmbeddingProviderError } from "./embedding/types.js";
 import type { EmbeddingProviderService } from "./embedding-provider-service.js";
-import { PermanentJobFailure } from "./job-runner.js";
+import { DeferredJobRun, PermanentJobFailure } from "./job-runner.js";
 import type { ProfileService } from "./profile-service.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
@@ -47,6 +47,7 @@ export type EmbeddingJobServiceOptions = {
     estimatedTokens: number;
     now: number;
   }) => void;
+  requestCountSince?: (input: { providerId: string; since: number; now: number }) => number;
   vectorStore: Pick<VectorStore, "upsertArticleVector">;
   now?: () => number;
   jobIdFactory?: () => string;
@@ -154,19 +155,19 @@ export class EmbeddingJobService {
       return;
     }
 
+    const writtenArticleIds: string[] = [];
+
     try {
-      const vectors: Array<{ id: string; vector: number[] }> = [];
       for (const chunk of chunks(candidates, embeddingBatchSizeFor(provider.type))) {
+        this.assertProviderRequestAllowed(provider);
         const items = chunk.map((candidate) => ({
           id: candidate.articleId,
-          text: textForEmbedding(candidate)
+          text: textForEmbedding(candidate, provider.textMaxChars)
         }));
-        vectors.push(
-          ...(await active.adapter.embedBatch({
-            provider: active.provider,
-            items
-          }))
-        );
+        const vectors = await active.adapter.embedBatch({
+          provider: active.provider,
+          items
+        });
         this.options.recordUsage?.({
           providerId: provider.id,
           embeddingIndexId: index.id,
@@ -178,36 +179,33 @@ export class EmbeddingJobService {
           ),
           now: this.now()
         });
-      }
-      const vectorByArticleId = new Map(vectors.map((vector) => [vector.id, vector.vector]));
-      const now = this.now();
-      const writtenArticleIds: string[] = [];
+        const vectorByArticleId = new Map(vectors.map((vector) => [vector.id, vector.vector]));
+        const now = this.now();
+        for (const candidate of chunk) {
+          const vector = vectorByArticleId.get(candidate.articleId);
+          if (!vector) {
+            throw new PermanentJobFailure("Provider response did not include every article vector");
+          }
 
-      for (const candidate of candidates) {
-        const vector = vectorByArticleId.get(candidate.articleId);
-        if (!vector) {
-          throw new PermanentJobFailure("Provider response did not include every article vector");
+          this.options.vectorStore.upsertArticleVector({
+            articleId: candidate.articleId,
+            embeddingIndexId: index.id,
+            vector,
+            contentHash: candidate.contentHash,
+            now
+          });
+          writtenArticleIds.push(candidate.articleId);
         }
-
-        this.options.vectorStore.upsertArticleVector({
-          articleId: candidate.articleId,
-          embeddingIndexId: index.id,
-          vector,
-          contentHash: candidate.contentHash,
-          now
-        });
-        writtenArticleIds.push(candidate.articleId);
       }
 
-      const profileResult = this.options.profile?.processArticleEvents(writtenArticleIds);
-      if (profileResult?.profileChanged || profileResult?.feedStatsChanged) {
-        this.options.rankingJobs?.enqueueAll();
-      } else {
-        this.options.rankingJobs?.enqueueArticles(writtenArticleIds);
-      }
+      this.enqueueRankingForWrittenArticles(writtenArticleIds);
 
       this.enqueueNextBackfillBatchIfDrained(index.id, provider.type);
     } catch (error) {
+      if (error instanceof DeferredJobRun) {
+        this.enqueueRankingForWrittenArticles(writtenArticleIds);
+        throw error;
+      }
       if (error instanceof PermanentJobFailure) {
         throw error;
       }
@@ -281,6 +279,19 @@ export class EmbeddingJobService {
     return ids;
   }
 
+  private enqueueRankingForWrittenArticles(writtenArticleIds: string[]): void {
+    if (writtenArticleIds.length === 0) {
+      return;
+    }
+
+    const profileResult = this.options.profile?.processArticleEvents(writtenArticleIds);
+    if (profileResult?.profileChanged || profileResult?.feedStatsChanged) {
+      this.options.rankingJobs?.enqueueAll();
+    } else {
+      this.options.rankingJobs?.enqueueArticles(writtenArticleIds);
+    }
+  }
+
   private enqueueNextBackfillBatchIfDrained(
     embeddingIndexId: string,
     providerType: string
@@ -324,6 +335,47 @@ export class EmbeddingJobService {
 
     return jobs;
   }
+
+  private assertProviderRequestAllowed(provider: {
+    id: string;
+    requestsPerMinute: number | null;
+    requestsPerDay: number | null;
+  }): void {
+    if (!this.options.requestCountSince) {
+      return;
+    }
+
+    const now = this.now();
+    if (provider.requestsPerDay !== null) {
+      const dayStart = startOfLocalDay(now);
+      const requestsToday = this.options.requestCountSince({
+        providerId: provider.id,
+        since: dayStart,
+        now
+      });
+      if (requestsToday >= provider.requestsPerDay) {
+        throw new DeferredJobRun(
+          `Embedding provider daily request limit reached (${requestsToday}/${provider.requestsPerDay})`,
+          startOfNextLocalDay(now)
+        );
+      }
+    }
+
+    if (provider.requestsPerMinute !== null) {
+      const since = now - 60_000;
+      const requestsLastMinute = this.options.requestCountSince({
+        providerId: provider.id,
+        since,
+        now
+      });
+      if (requestsLastMinute >= provider.requestsPerMinute) {
+        throw new DeferredJobRun(
+          `Embedding provider per-minute request limit reached (${requestsLastMinute}/${provider.requestsPerMinute})`,
+          now + 60_001
+        );
+      }
+    }
+  }
 }
 
 export function parseEmbeddingGeneratePayload(
@@ -361,12 +413,12 @@ export function parseEmbeddingGeneratePayload(
   return null;
 }
 
-function textForEmbedding(article: ArticleEmbeddingCandidateRow): string {
+function textForEmbedding(article: ArticleEmbeddingCandidateRow, maxChars: number): string {
   return [article.title, article.summary, article.contentText]
     .map(plainTextForEmbedding)
     .filter(Boolean)
     .join("\n\n")
-    .slice(0, EMBEDDING_TEXT_MAX_CHARS);
+    .slice(0, maxChars);
 }
 
 function plainTextForEmbedding(value: string | null | undefined): string | null {
@@ -445,6 +497,18 @@ function embeddingBatchSizeFor(type: string): number {
   return type === "ollama"
     ? OLLAMA_EMBEDDING_BATCH_SIZE
     : OPENAI_COMPATIBLE_EMBEDDING_BATCH_SIZE;
+}
+
+function startOfLocalDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function startOfNextLocalDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  date.setHours(24, 0, 0, 0);
+  return date.getTime();
 }
 
 function randomJobId(): string {

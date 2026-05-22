@@ -19,6 +19,9 @@ export type EmbeddingProviderResponse = {
   baseUrl: string | null;
   model: string;
   dimension: number;
+  textMaxChars: number;
+  requestsPerMinute: number | null;
+  requestsPerDay: number | null;
   enabled: boolean;
   qualityTier: EmbeddingProviderRow["qualityTier"];
   hasApiKey: boolean;
@@ -34,6 +37,7 @@ export type EmbeddingIndexResponse = {
   providerId: string;
   model: string;
   dimension: number;
+  textMaxChars: number;
   distanceMetric: EmbeddingIndexRow["distanceMetric"];
   status: EmbeddingIndexRow["status"];
   candidateCount: number;
@@ -119,6 +123,9 @@ export class EmbeddingProviderService {
       baseUrl: input.baseUrl,
       model: input.model,
       dimension: input.dimension,
+      textMaxChars: input.textMaxChars,
+      requestsPerMinute: input.requestsPerMinute,
+      requestsPerDay: input.requestsPerDay,
       apiKeyEncrypted:
         providerTypeUsesApiKey(input.type) && input.apiKey !== undefined
           ? encodeApiKey(input.apiKey)
@@ -129,7 +136,7 @@ export class EmbeddingProviderService {
     });
 
     if (input.enabled) {
-      this.ensureActiveIndex(providerId, input.model, input.dimension, now);
+      this.ensureActiveIndex(providerId, input.model, input.dimension, input.textMaxChars, now);
     }
 
     return mapProvider(this.mustFindProvider(providerId));
@@ -146,6 +153,7 @@ export class EmbeddingProviderService {
     const nextEnabled = input.enabled ?? existing.enabled;
     const nextModel = input.model ?? existing.model;
     const nextDimension = input.dimension ?? existing.dimension;
+    const nextTextMaxChars = input.textMaxChars ?? existing.textMaxChars;
     const apiKeyEncryptedPatch =
       input.apiKey !== undefined
         ? encodeApiKey(input.apiKey)
@@ -167,6 +175,11 @@ export class EmbeddingProviderService {
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.dimension !== undefined ? { dimension: input.dimension } : {}),
+      ...(input.textMaxChars !== undefined ? { textMaxChars: input.textMaxChars } : {}),
+      ...(input.requestsPerMinute !== undefined
+        ? { requestsPerMinute: input.requestsPerMinute }
+        : {}),
+      ...(input.requestsPerDay !== undefined ? { requestsPerDay: input.requestsPerDay } : {}),
       ...(apiKeyEncryptedPatch !== undefined ? { apiKeyEncrypted: apiKeyEncryptedPatch } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.qualityTier !== undefined ? { qualityTier: input.qualityTier } : {}),
@@ -178,7 +191,7 @@ export class EmbeddingProviderService {
     }
 
     if (nextEnabled) {
-      this.ensureActiveIndex(id, nextModel, nextDimension, now);
+      this.ensureActiveIndex(id, nextModel, nextDimension, nextTextMaxChars, now);
     }
 
     return mapProvider(this.mustFindProvider(id));
@@ -204,7 +217,7 @@ export class EmbeddingProviderService {
       throw notFound("Embedding provider not found");
     }
 
-    this.ensureActiveIndex(id, existing.model, existing.dimension, now);
+    this.ensureActiveIndex(id, existing.model, existing.dimension, existing.textMaxChars, now);
     return mapProvider(this.mustFindProvider(id));
   }
 
@@ -258,9 +271,20 @@ export class EmbeddingProviderService {
     }
   }
 
-  ensureActiveIndex(providerId: string, model: string, dimension: number, now = this.now()) {
+  ensureActiveIndex(
+    providerId: string,
+    model: string,
+    dimension: number,
+    textMaxChars: number,
+    now = this.now()
+  ) {
     const existing = this.options.embeddings.findActiveIndexForProvider(providerId);
-    if (existing && existing.model === model && existing.dimension === dimension) {
+    if (
+      existing &&
+      existing.model === model &&
+      existing.dimension === dimension &&
+      existing.textMaxChars === textMaxChars
+    ) {
       this.options.vectorStore.ensureIndex(existing.id);
       return existing;
     }
@@ -270,6 +294,7 @@ export class EmbeddingProviderService {
       providerId,
       model,
       dimension,
+      textMaxChars,
       status: "active",
       now
     });
@@ -380,6 +405,9 @@ type CreateProviderInput = {
   baseUrl: string | null;
   model: string;
   dimension: number;
+  textMaxChars: number;
+  requestsPerMinute: number | null;
+  requestsPerDay: number | null;
   apiKey?: string;
   enabled: boolean;
   qualityTier: EmbeddingProviderRow["qualityTier"];
@@ -395,6 +423,9 @@ function parseCreateProviderBody(body: unknown): CreateProviderInput {
     "baseUrl",
     "model",
     "dimension",
+    "textMaxChars",
+    "requestsPerMinute",
+    "requestsPerDay",
     "apiKey",
     "enabled",
     "qualityTier"
@@ -409,6 +440,18 @@ function parseCreateProviderBody(body: unknown): CreateProviderInput {
     baseUrl,
     model: parseNonEmptyString(input.model, "model"),
     dimension: parseDimension(input.dimension),
+    textMaxChars:
+      input.textMaxChars === undefined
+        ? 8_000
+        : parseTextMaxChars(input.textMaxChars),
+    requestsPerMinute:
+      input.requestsPerMinute === undefined
+        ? null
+        : parseOptionalPositiveInteger(input.requestsPerMinute, "requestsPerMinute"),
+    requestsPerDay:
+      input.requestsPerDay === undefined
+        ? null
+        : parseOptionalPositiveInteger(input.requestsPerDay, "requestsPerDay"),
     ...(input.apiKey !== undefined ? { apiKey: parseApiKey(input.apiKey) } : {}),
     enabled: input.enabled === undefined ? false : parseBoolean(input.enabled, "enabled"),
     qualityTier:
@@ -427,6 +470,9 @@ function parseUpdateProviderBody(
     "baseUrl",
     "model",
     "dimension",
+    "textMaxChars",
+    "requestsPerMinute",
+    "requestsPerDay",
     "apiKey",
     "enabled",
     "qualityTier"
@@ -440,6 +486,20 @@ function parseUpdateProviderBody(
       : {}),
     ...(input.model !== undefined ? { model: parseNonEmptyString(input.model, "model") } : {}),
     ...(input.dimension !== undefined ? { dimension: parseDimension(input.dimension) } : {}),
+    ...(input.textMaxChars !== undefined
+      ? { textMaxChars: parseTextMaxChars(input.textMaxChars) }
+      : {}),
+    ...(input.requestsPerMinute !== undefined
+      ? {
+          requestsPerMinute: parseOptionalPositiveInteger(
+            input.requestsPerMinute,
+            "requestsPerMinute"
+          )
+        }
+      : {}),
+    ...(input.requestsPerDay !== undefined
+      ? { requestsPerDay: parseOptionalPositiveInteger(input.requestsPerDay, "requestsPerDay") }
+      : {}),
     ...(input.apiKey !== undefined ? { apiKey: parseApiKey(input.apiKey) } : {}),
     ...(input.enabled !== undefined ? { enabled: parseBoolean(input.enabled, "enabled") } : {}),
     ...(input.qualityTier !== undefined
@@ -571,6 +631,30 @@ function parseDimension(value: unknown): number {
   return value;
 }
 
+function parseTextMaxChars(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1_000 || value > 200_000) {
+    throw validationError("textMaxChars must be an integer between 1000 and 200000", {
+      field: "textMaxChars",
+      min: 1_000,
+      max: 200_000
+    });
+  }
+  return value;
+}
+
+function parseOptionalPositiveInteger(value: unknown, field: string): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw validationError(`${field} must be a positive integer or null`, {
+      field,
+      min: 1
+    });
+  }
+  return value;
+}
+
 function parseQualityTier(value: unknown): EmbeddingProviderRow["qualityTier"] {
   if (value === "basic" || value === "recommended" || value === "best_quality") {
     return value;
@@ -588,6 +672,9 @@ function configForProvider(provider: EmbeddingProviderRow) {
     baseUrl: provider.baseUrl,
     model: provider.model,
     dimension: provider.dimension,
+    textMaxChars: provider.textMaxChars,
+    requestsPerMinute: provider.requestsPerMinute,
+    requestsPerDay: provider.requestsPerDay,
     apiKey: decodeApiKey(provider.apiKeyEncrypted)
   };
 }
@@ -634,6 +721,9 @@ function mapProvider(provider: EmbeddingProviderRow): EmbeddingProviderResponse 
     baseUrl: provider.baseUrl,
     model: provider.model,
     dimension: provider.dimension,
+    textMaxChars: provider.textMaxChars,
+    requestsPerMinute: provider.requestsPerMinute,
+    requestsPerDay: provider.requestsPerDay,
     enabled: provider.enabled,
     qualityTier: provider.qualityTier,
     hasApiKey: Boolean(provider.apiKeyEncrypted),
@@ -651,6 +741,7 @@ function mapIndex(index: EmbeddingIndexListRow): EmbeddingIndexResponse {
     providerId: index.providerId,
     model: index.model,
     dimension: index.dimension,
+    textMaxChars: index.textMaxChars,
     distanceMetric: index.distanceMetric,
     status: index.status,
     candidateCount: index.candidateCount,

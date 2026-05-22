@@ -2,7 +2,15 @@ import type { EmbeddingProviderRow } from "@dibao/db";
 
 export type EmbeddingProviderConfig = Pick<
   EmbeddingProviderRow,
-  "id" | "type" | "name" | "baseUrl" | "model" | "dimension"
+  | "id"
+  | "type"
+  | "name"
+  | "baseUrl"
+  | "model"
+  | "dimension"
+  | "textMaxChars"
+  | "requestsPerMinute"
+  | "requestsPerDay"
 > & {
   apiKey: string | null;
 };
