@@ -344,7 +344,10 @@ export class EmbeddingProviderService {
       return;
     }
 
-    if (active.index.model === model && active.index.dimension === dimension) {
+    if (
+      sameEmbeddingModelFamily(active.index.model, model) &&
+      active.index.dimension === dimension
+    ) {
       return;
     }
 
@@ -591,6 +594,16 @@ function configForProvider(provider: EmbeddingProviderRow) {
 
 function providerTypeUsesApiKey(type: EmbeddingProviderRow["type"]): boolean {
   return type === "openai_compatible" || type === "gemini";
+}
+
+function sameEmbeddingModelFamily(left: string, right: string): boolean {
+  return normalizedEmbeddingModelKey(left) === normalizedEmbeddingModelKey(right);
+}
+
+function normalizedEmbeddingModelKey(model: string): string {
+  const normalized = model.trim().toLowerCase().replace(/^models\//u, "");
+  const segments = normalized.split("/").filter(Boolean);
+  return segments.at(-1) ?? normalized;
 }
 
 function encodeApiKey(apiKey: string): string | null {

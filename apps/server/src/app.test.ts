@@ -1218,7 +1218,7 @@ describe("server API vertical slice", () => {
         type: "ollama",
         name: "Second Provider",
         baseUrl: "http://127.0.0.1:11434",
-        model: "bge-m3",
+        model: "BAAI/bge-m3",
         dimension: 1024,
         enabled: false
       });
@@ -1233,7 +1233,7 @@ describe("server API vertical slice", () => {
         data: {
           id: secondProviderId,
           enabled: true,
-          model: "bge-m3",
+          model: "BAAI/bge-m3",
           dimension: 1024
         }
       });
