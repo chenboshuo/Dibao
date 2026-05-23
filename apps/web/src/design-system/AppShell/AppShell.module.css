@@ -353,7 +353,7 @@
 
 .feedManagementSection {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -458,6 +458,179 @@
   line-height: 1.5;
 }
 
+.feedDiscoveryPanel,
+.feedDiagnosticsPanel {
+  display: grid;
+  gap: var(--space-3);
+  border-bottom: var(--border-subtle);
+  padding: var(--space-4);
+  background: var(--color-surface);
+}
+
+.feedDiscoveryHeader,
+.feedDiagnosticsHeader,
+.feedDiscoveryCandidateHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.feedDiscoveryHeader small,
+.feedDiagnosticsHeader p,
+.feedDiscoveryCandidateHeader p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.feedDiscoveryWarnings,
+.feedDiscoveryEmpty,
+.feedDiscoveryError {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.feedDiscoveryWarnings ul,
+.feedDiscoveryRecent ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}
+
+.feedDiscoveryCandidates {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.feedDiscoveryCandidate {
+  display: grid;
+  gap: var(--space-2);
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--color-paper);
+}
+
+.feedDiscoveryCandidate h3,
+.feedDiagnosticsHeader h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.feedDiscoveryMeta {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.feedDiscoveryMeta div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.feedDiscoveryMeta dt {
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+
+.feedDiscoveryMeta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.feedDiscoveryRecent {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.feedDiscoveryRecent li {
+  margin-block: 2px;
+}
+
+.feedDiscoveryRecent span,
+.feedDiscoveryRecent small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.feedDiagnosticSummaryPills,
+.feedDiagnosticFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.feedDiagnosticSummaryPills span,
+.feedDiagnosticFilter,
+.feedDiagnosticFilterActive,
+.feedHealthBadge,
+.feedFailureDot {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.feedDiagnosticSummaryPills span,
+.feedDiagnosticFilter {
+  background: var(--color-surface-subtle);
+  color: var(--color-muted);
+}
+
+.feedDiagnosticFilterActive {
+  border-color: var(--color-pine);
+  background: var(--color-pine-soft);
+  color: var(--color-pine);
+}
+
+.feedHealthBadge {
+  width: fit-content;
+  white-space: nowrap;
+}
+
+.feedHealthBadgeOk {
+  border-color: rgb(49 95 114 / 0.35);
+  background: var(--color-pine-soft);
+  color: var(--color-pine);
+}
+
+.feedHealthBadgeInfo {
+  border-color: rgb(143 117 49 / 0.3);
+  background: rgb(252 245 219 / 0.8);
+  color: rgb(103 78 23);
+}
+
+.feedHealthBadgeWarning {
+  border-color: rgb(172 99 48 / 0.35);
+  background: rgb(252 238 222 / 0.9);
+  color: rgb(126 65 29);
+}
+
+.feedHealthBadgeError,
+.feedFailureDot {
+  border-color: rgb(157 61 48 / 0.35);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.feedHealthBadgeDisabled {
+  background: var(--color-surface-subtle);
+  color: var(--color-faint);
+}
+
 .feedManagementGrid {
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 1fr);
@@ -499,6 +672,10 @@
 }
 
 .managementFeedTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
 }
@@ -1886,6 +2063,21 @@
 .feedList > .mobileSourceCloseButton {
   width: calc(100% - var(--space-6));
   margin: var(--space-3);
+}
+
+.feedTitleLine {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.feedTitleLine > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .secondaryButton {

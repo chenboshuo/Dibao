@@ -30,8 +30,13 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("button", { name: "完成设置" }).click();
 
     await expect(page.getByRole("heading", { name: "添加订阅源" })).toBeVisible();
-    await page.getByLabel("RSS / Atom URL").fill(`${fixture.origin}/feeds/main.xml`);
-    await page.getByRole("button", { name: "添加订阅源" }).click();
+    await page.getByLabel("网站或 RSS / Atom URL").fill(`${fixture.origin}/site-with-feeds`);
+    await page.getByRole("button", { name: "检查" }).click();
+    await expect(page.getByText("发现的订阅源")).toBeVisible();
+    await expect(page.getByText("E2E Fixture Feed")).toBeVisible();
+    await expect(page.getByText("E2E Alternate Feed")).toBeVisible();
+    await expect(page.getByText("E2E Article Alpha")).toBeVisible();
+    await page.getByRole("button", { name: "添加此源" }).first().click();
 
     await expect(page.getByRole("heading", { name: "推荐能力" })).toBeVisible();
     await page.getByRole("button", { name: "暂不配置，继续" }).click();
@@ -199,9 +204,24 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("link", { name: "订阅源" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "订阅源管理" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "导入、导出与刷新" })).toBeVisible();
-    await expect(page.getByLabel("RSS / Atom URL")).toBeVisible();
+    await expect(page.getByLabel("网站或 RSS / Atom URL")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "订阅源健康" })).toBeVisible();
+    await expect(page.getByText("正常").first()).toBeVisible();
     await expect(page.getByRole("button", { name: "刷新全部" })).toBeVisible();
     await expect(page.getByText("Feed URL")).toBeVisible();
+
+    await page.getByLabel("Feed URL").fill(`${fixture.origin}/feeds/broken.xml`);
+    await page.getByRole("button", { name: "保存" }).click();
+    await page.getByRole("link", { name: "最新" }).click();
+    await page.getByRole("button", { name: "打开来源" }).click();
+    await page.getByTitle("刷新 E2E Fixture Feed").click();
+    await expect(page.getByText("Feed candidate fetch failed").or(page.getByText("Feed fetch failed"))).toBeVisible();
+    await page.getByRole("link", { name: "订阅源" }).click();
+    await expect(page.getByText("抓取失败").first()).toBeVisible();
+    await expect(page.getByText("Feed fetch failed").first()).toBeVisible();
+    await page.getByRole("button", { name: "只看异常" }).click();
+    await expect(page.getByRole("button", { name: "重试刷新" })).toBeVisible();
+    await page.getByRole("button", { name: "重试刷新" }).click();
 
     await page.context().setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event("offline")));

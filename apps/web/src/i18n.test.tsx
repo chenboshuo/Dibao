@@ -234,10 +234,14 @@ describe("web i18n", () => {
     const sourcesHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
         <SetupSourcesPanel
+          discovery={null}
+          discoveryError={null}
           error={null}
           feedUrl=""
           isAddingFeed={false}
+          isDiscoveringFeeds={false}
           isImportingOpml={false}
+          onAddCandidate={() => undefined}
           onAddFeed={() => undefined}
           onImportOpml={() => undefined}
           onUpdateFeedUrl={() => undefined}
@@ -255,7 +259,7 @@ describe("web i18n", () => {
     expect(welcomeHtml).toContain("开始设置");
     expect(sourcesHtml).toContain("添加订阅源");
     expect(sourcesHtml).toContain("导入 OPML 文件");
-    expect(sourcesHtml).toContain("RSS / Atom URL");
+    expect(sourcesHtml).toContain("网站或 RSS / Atom URL");
     expect(providerHtml).toContain("推荐能力");
     expect(providerHtml).toContain("当前使用基础排序");
     expect(providerHtml).toContain("暂不配置，继续");
@@ -269,6 +273,7 @@ describe("web i18n", () => {
     const feedPanel = renderToStaticMarkup(
       <DibaoI18nProvider>
         <FeedPanel
+          diagnosticsByFeedId={{}}
           feedError={null}
           feedFolders={[
             {
@@ -817,6 +822,10 @@ describe("web i18n", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <FeedManagementWorkspace
+          diagnostics={null}
+          diagnosticsByFeedId={{}}
+          feedDiscovery={null}
+          feedDiscoveryError={null}
           feedError={null}
           feedUrl=""
           feedFolders={[
@@ -845,21 +854,26 @@ describe("web i18n", () => {
             }
           ]}
           isAddingFeed={false}
+          isDiscoveringFeeds={false}
+          isFeedDiagnosticsLoading={false}
           isExportingOpml={false}
           isImportingOpml={false}
           isLoading={false}
           isRefreshingAllFeeds={false}
+          onAddCandidate={() => undefined}
           onAddFeed={() => Promise.resolve()}
           onCreateFolder={() => Promise.resolve()}
           onDeleteFeed={() => Promise.resolve()}
           onDeleteFolder={() => Promise.resolve()}
           onExportOpml={() => undefined}
           onImportOpml={() => undefined}
+          onRefreshFeed={() => undefined}
           onRefreshAllFeeds={() => undefined}
           onUpdateFeed={() => Promise.resolve()}
           onUpdateFeedUrl={() => undefined}
           onUpdateFolder={() => Promise.resolve()}
           opmlSummary={null}
+          refreshingFeedId={null}
         />
       </DibaoI18nProvider>
     );
@@ -868,8 +882,9 @@ describe("web i18n", () => {
     expect(html).toContain("导入 OPML");
     expect(html).toContain("导出 OPML");
     expect(html).toContain("刷新全部");
-    expect(html).toContain("添加订阅源");
-    expect(html).toContain("RSS / Atom URL");
+    expect(html).toContain("检查");
+    expect(html).toContain("网站或 RSS / Atom URL");
+    expect(html).toContain("订阅源健康");
     expect(html).toContain("导入、导出与刷新");
     expect(html).toContain("重命名");
     expect(html).toContain("删除");

@@ -68,7 +68,7 @@ Dockerfile 内置 HEALTHCHECK 不依赖 `curl`/`wget`，而是用 Node `fetch()`
 
 1. 打开 Web 页面。
 2. 设置单用户访问密码。
-3. 导入 OPML，或手动添加一个 RSS / Atom feed。
+3. 导入 OPML，或输入网站首页 / RSS / Atom 地址，先检查候选订阅源再确认添加。
 4. Embedding provider 可以稍后配置；未配置时邸报继续使用基础排序。
 5. 进入阅读器后，可以刷新订阅源、打开文章、收藏、稍后读或标记不感兴趣。
 
@@ -78,8 +78,9 @@ Dockerfile 内置 HEALTHCHECK 不依赖 `curl`/`wget`，而是用 Node `fetch()`
 
 - OPML 导入：阅读器左侧点击“导入 OPML”，选择 `.opml` 或 `.xml` 文件。
 - OPML 导出：点击“导出 OPML”，下载 `dibao-subscriptions.opml`。
-- 手动添加：在 RSS / Atom URL 输入框里粘贴 feed 地址并添加。
+- 手动添加：在“网站或 RSS / Atom URL”输入框里粘贴网站首页或 feed 地址，邸报会先预检候选 feed、展示最近文章和重复订阅状态，确认后才写入数据库。
 - 刷新：单个 feed 可点“刷新”；“刷新全部”会把启用的 feeds 加入刷新队列，不表示已经全部抓取完成。
+- 健康诊断：订阅源管理页会显示正常、待抓取、长时间未成功、抓取失败、已停用等状态；可以只看异常源，并对失败源手动重试。
 
 导入 OPML 不会自动抓取所有文章；添加单个 feed 会同步做一次最小刷新。
 

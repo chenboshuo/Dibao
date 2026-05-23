@@ -78,6 +78,17 @@ import {
   FeedManagementServiceError
 } from "./feed-management-service.js";
 import {
+  FeedDiscoveryError,
+  FeedDiscoveryService,
+  type FeedDiscoveryCandidate,
+  type FeedDiscoveryResult
+} from "./feed-discovery-service.js";
+import {
+  FeedHealthService,
+  type FeedDiagnosticsResult,
+  type FeedHealthDiagnostic
+} from "./feed-health-service.js";
+import {
   DEFAULT_FEED_REFRESH_INTERVAL_MS,
   FeedRefreshCoordinator,
   FeedRefreshJobService,
@@ -174,6 +185,10 @@ type FeedQuery = {
 type CreateFeedBody = {
   feedUrl?: unknown;
   folderId?: unknown;
+};
+
+type DiscoverFeedBody = {
+  url?: unknown;
 };
 
 type FeedFolderParams = {
@@ -439,6 +454,14 @@ export function buildServer(options: BuildServerOptions = {}) {
     articles,
     ranking: rankingService,
     fetcher: options.feedFetcher,
+    now: options.now
+  });
+  const feedDiscoveryService = new FeedDiscoveryService({
+    feeds,
+    fetcher: options.feedFetcher
+  });
+  const feedHealthService = new FeedHealthService({
+    feeds,
     now: options.now
   });
   const feedRefreshCoordinator = new FeedRefreshCoordinator({
@@ -1237,6 +1260,25 @@ export function buildServer(options: BuildServerOptions = {}) {
       data: feeds.list(input).map(mapFeed)
     };
   });
+
+  app.post<{ Body: DiscoverFeedBody }>("/api/feeds/discover", async (request, reply) => {
+    const parsed = parseDiscoverFeedBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    try {
+      return {
+        data: mapFeedDiscoveryResult(await feedDiscoveryService.discover(parsed.input))
+      };
+    } catch (error) {
+      return sendFeedDiscoveryError(reply, error);
+    }
+  });
+
+  app.get("/api/feeds/diagnostics", async () => ({
+    data: mapFeedDiagnosticsResult(feedHealthService.diagnostics())
+  }));
 
   app.post<{ Body: CreateFeedBody }>("/api/feeds", async (request, reply) => {
     const parsed = parseCreateFeedBody(request.body);
@@ -3688,6 +3730,31 @@ function parseCreateFeedBody(body: CreateFeedBody | undefined):
   };
 }
 
+function parseDiscoverFeedBody(body: DiscoverFeedBody | undefined):
+  | { ok: true; input: { url: string } }
+  | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+
+  if (typeof body.url !== "string" || body.url.trim() === "") {
+    return {
+      ok: false,
+      message: "url is required",
+      details: {
+        field: "url"
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    input: {
+      url: body.url.trim()
+    }
+  };
+}
+
 function parsePasswordBody(body: PasswordBody | undefined):
   | { ok: true; password: string }
   | { ok: false; message: string; details?: unknown } {
@@ -4117,6 +4184,42 @@ function mapFeed(feed: FeedRow) {
   };
 }
 
+function mapFeedDiscoveryResult(result: FeedDiscoveryResult) {
+  return {
+    ...result,
+    candidates: result.candidates.map(mapFeedDiscoveryCandidate)
+  };
+}
+
+function mapFeedDiscoveryCandidate(candidate: FeedDiscoveryCandidate) {
+  return {
+    ...candidate,
+    recentItems: candidate.recentItems.map((item) => ({
+      ...item,
+      publishedAt: timestampToIso(item.publishedAt)
+    }))
+  };
+}
+
+function mapFeedDiagnosticsResult(result: FeedDiagnosticsResult) {
+  return {
+    summary: result.summary,
+    items: result.items.map((item) => ({
+      feed: item.feed,
+      diagnostic: mapFeedHealthDiagnostic(item.diagnostic)
+    }))
+  };
+}
+
+function mapFeedHealthDiagnostic(diagnostic: FeedHealthDiagnostic) {
+  return {
+    ...diagnostic,
+    lastFetchedAt: timestampToIso(diagnostic.lastFetchedAt),
+    lastSuccessAt: timestampToIso(diagnostic.lastSuccessAt),
+    nextRefreshAt: timestampToIso(diagnostic.nextRefreshAt)
+  };
+}
+
 function mapJob(job: JobRow) {
   return {
     id: job.id,
@@ -4209,6 +4312,14 @@ function sendApiError(
 
 function sendFeedIngestionError(reply: FastifyReply, error: unknown) {
   if (error instanceof FeedIngestionError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendFeedDiscoveryError(reply: FastifyReply, error: unknown) {
+  if (error instanceof FeedDiscoveryError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 

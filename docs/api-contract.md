@@ -496,9 +496,128 @@ enabled=true|false
 }
 ```
 
+### POST /api/feeds/discover
+
+添加前预检网站或 RSS / Atom URL。
+
+说明：
+
+- 需要认证。
+- 不写数据库。
+- 不创建 feed。
+- 不 enqueue jobs。
+- 输入必须是 `http` / `https` URL，会去除 hash 并规范化。
+- 系统会先尝试把输入直接解析为 RSS / Atom；如果不是 feed，再把它当作 HTML 页面解析 `<link rel="alternate">`。
+- 支持 `application/rss+xml`、`application/atom+xml`、`application/xml`、`text/xml` 的 alternate link，支持相对 URL 和属性顺序变化。
+- 页面没有声明 feed 时，会尝试 `/feed`、`/feed.xml`、`/rss`、`/rss.xml`、`/atom.xml`、`/index.xml`，最多 6 个常见路径。
+- 预检候选会返回 `valid`、`duplicate` 或 `invalid`。`duplicate` 表示该 `feedUrl` 已订阅，前端不应再次调用 `POST /api/feeds`。
+- URL 格式错误返回 `400 VALIDATION_ERROR`。输入 URL 完全无法抓取可返回 `502 PROVIDER_ERROR`。候选 feed 抓取或解析失败通常返回 `200`，并在 candidate 上标记 `invalid` 与 `error`。
+
+请求：
+
+```json
+{
+  "url": "https://example.com"
+}
+```
+
+响应：
+
+```json
+{
+  "data": {
+    "inputUrl": "https://example.com",
+    "normalizedUrl": "https://example.com/",
+    "inputKind": "html",
+    "candidates": [
+      {
+        "feedUrl": "https://example.com/feed.xml",
+        "title": "Example Feed",
+        "siteUrl": "https://example.com/",
+        "description": "Example description",
+        "format": "rss",
+        "status": "valid",
+        "existingFeedId": null,
+        "itemCount": 12,
+        "recentItems": [
+          {
+            "title": "Latest post",
+            "url": "https://example.com/latest",
+            "publishedAt": "2026-05-23T00:00:00.000Z"
+          }
+        ],
+        "error": null
+      }
+    ],
+    "warnings": []
+  }
+}
+```
+
+### GET /api/feeds/diagnostics
+
+读取订阅源健康诊断。
+
+说明：
+
+- 需要认证。
+- 只读，不写数据库。
+- 不 enqueue jobs。
+- 健康状态基于 `enabled`、`lastFetchedAt`、`lastSuccessAt`、`nextRefreshAt`、`lastError` 计算，不新增数据库字段。
+- 状态包括 `healthy`、`never_fetched`、`due`、`stale`、`failing`、`disabled`。
+- `stale` 表示最近成功超过 7 天且已到下次抓取时间。
+- `failing` 优先级高于 `never_fetched`、`due`、`stale`，因为 `lastError` 是用户最需要看到的状态。
+
+响应：
+
+```json
+{
+  "data": {
+    "summary": {
+      "total": 10,
+      "enabled": 9,
+      "healthy": 7,
+      "warning": 1,
+      "error": 1,
+      "disabled": 1,
+      "neverFetched": 1
+    },
+    "items": [
+      {
+        "feed": {
+          "id": "feed_01",
+          "title": "Example",
+          "feedUrl": "https://example.com/feed.xml",
+          "siteUrl": "https://example.com",
+          "enabled": true
+        },
+        "diagnostic": {
+          "feedId": "feed_01",
+          "status": "failing",
+          "severity": "error",
+          "code": "FETCH_FAILED",
+          "message": "The latest feed fetch failed.",
+          "lastFetchedAt": "2026-05-23T00:00:00.000Z",
+          "lastSuccessAt": "2026-05-20T00:00:00.000Z",
+          "nextRefreshAt": "2026-05-23T01:00:00.000Z",
+          "lastError": "Feed parse failed"
+        }
+      }
+    ]
+  }
+}
+```
+
 ### POST /api/feeds
 
 添加 RSS / Atom 订阅源。
+
+说明：
+
+- 保持兼容：调用方仍可直接传 `feedUrl` 添加订阅源。
+- Web UI 默认先调用 `POST /api/feeds/discover`，用户确认候选后再把 `candidate.feedUrl` 传给本接口。
+- 本接口会实际抓取、解析并写入 feed/articles。
+- 已存在的 `feedUrl` 会沿用当前 upsert 语义，恢复或更新该 feed，并同步刷新文章；前端应优先通过 discovery 的 `duplicate` 状态避免让用户重复添加。
 
 请求：
 

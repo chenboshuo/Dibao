@@ -28,6 +28,8 @@ It is designed for people who want a local and controllable alternative to algor
 ### Reader
 
 - Add RSS/Atom feeds manually.
+- Discover RSS/Atom feeds from website homepages before adding.
+- Preview feed title, URL, description, recent items, and duplicate status before confirming an add.
 - Refresh a single feed or enqueue refresh for all enabled feeds.
 - Browse latest and recommended article lists.
 - Open article detail.
@@ -43,6 +45,7 @@ It is designed for people who want a local and controllable alternative to algor
 - Export current subscriptions as `dibao-subscriptions.opml`.
 - Create, rename, and delete folders.
 - Edit feed title, folder, enabled state, and source weight.
+- View feed health diagnostics, filter to unhealthy/disabled/never-successful feeds, and retry failing feeds.
 - Soft-delete feeds without physically deleting historical article rows.
 
 ### Recommendation
@@ -104,6 +107,8 @@ The E2E and Docker smoke suites use local RSS and embedding fixtures and do not 
 - Search v0 does not support semantic search, complex search syntax, or external search services.
 - Bulk reader cleanup only supports marking unread articles as read; it does not support bulk delete, bulk favorite, bulk read-later, or bulk not-interested.
 - Reader Command cleanup has no complex undo history.
+- Feed discovery depends on declared `<link rel="alternate">` metadata or a small set of common feed paths; it does not do complex webpage scraping.
+- Feed discovery does not perform full-text fetching and does not automatically repair already-invalid feed URLs.
 - Recommendation quality is still early and benefits from explicit user behavior and complete embedding coverage.
 
 ## Upgrade Notes

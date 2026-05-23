@@ -3546,6 +3546,274 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("discovers a direct feed URL without writing database rows", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({
+      db,
+      logger: false,
+      feedFetcher: fixtureFetcher({ "https://example.com/feed.xml": fixtureRss })
+    });
+
+    try {
+      const response = await postJson(app, "/api/feeds/discover", {
+        url: "https://example.com/feed.xml#reader"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          normalizedUrl: "https://example.com/feed.xml",
+          inputKind: "feed",
+          candidates: [
+            {
+              feedUrl: "https://example.com/feed.xml",
+              title: "Example Feed",
+              siteUrl: "https://example.com/",
+              description: "Fixture feed",
+              format: "rss",
+              status: "valid",
+              existingFeedId: null,
+              itemCount: 2,
+              recentItems: [
+                {
+                  title: "First fixture article",
+                  url: "https://example.com/first",
+                  publishedAt: "2026-05-14T07:00:00.000Z"
+                },
+                {
+                  title: "Second fixture article",
+                  url: "https://example.com/second",
+                  publishedAt: "2026-05-14T07:30:00.000Z"
+                }
+              ]
+            }
+          ]
+        }
+      });
+      expect(db.prepare("select count(*) as count from feeds").get()).toEqual({ count: 0 });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("discovers alternate and relative feed links from a website homepage", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    feeds.upsert({
+      id: "feed_existing",
+      title: "Existing Feed",
+      feedUrl: "https://example.com/feeds/main.xml",
+      now: 1000
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      feedFetcher: fixtureFetcher({
+        "https://example.com/": fixtureHtmlWithFeeds,
+        "https://example.com/feeds/main.xml": fixtureRss,
+        "https://example.com/atom.xml": fixtureAtom
+      })
+    });
+
+    try {
+      const response = await postJson(app, "/api/feeds/discover", {
+        url: "https://example.com/"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          inputKind: "html",
+          candidates: [
+            {
+              feedUrl: "https://example.com/feeds/main.xml",
+              status: "duplicate",
+              existingFeedId: "feed_existing"
+            },
+            {
+              feedUrl: "https://example.com/atom.xml",
+              status: "valid",
+              format: "atom",
+              title: "Atom Fixture"
+            }
+          ]
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("returns discovery warnings for missing feeds and invalid candidates", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({
+      db,
+      logger: false,
+      feedFetcher: fixtureFetcher({
+        "https://example.com/": fixtureHtmlWithInvalidFeed,
+        "https://example.com/broken.xml": "<html>not a feed</html>"
+      })
+    });
+
+    try {
+      const response = await postJson(app, "/api/feeds/discover", {
+        url: "https://example.com/"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          candidates: [
+            {
+              feedUrl: "https://example.com/broken.xml",
+              status: "invalid",
+              error: expect.stringContaining("Feed parse failed")
+            }
+          ],
+          warnings: [expect.stringContaining("No addable")]
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("validates discovery input and protects diagnostics when auth is required", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+    const protectedDb = createEmptyDatabase();
+    const protectedApp = buildRealServer({ db: protectedDb, logger: false, cookieSecure: false });
+
+    try {
+      const invalid = await postJson(app, "/api/feeds/discover", {
+        url: "not a url"
+      });
+      const protectedDiagnostics = await protectedApp.inject({
+        method: "GET",
+        url: "/api/feeds/diagnostics"
+      });
+
+      expect(invalid.statusCode, invalid.body).toBe(400);
+      expect(invalid.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR"
+        }
+      });
+      expect(protectedDiagnostics.statusCode, protectedDiagnostics.body).toBe(401);
+    } finally {
+      await app.close();
+      await protectedApp.close();
+      db.close();
+      protectedDb.close();
+    }
+  });
+
+  it("reports feed diagnostics summary and health states", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    feeds.upsert({
+      id: "feed_healthy",
+      title: "Healthy",
+      feedUrl: "https://example.com/healthy.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.recordFetchSuccess("feed_healthy", Date.parse("2026-05-23T07:30:00.000Z"));
+    feeds.upsert({
+      id: "feed_disabled",
+      title: "Disabled",
+      feedUrl: "https://example.com/disabled.xml",
+      enabled: false,
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_never",
+      title: "Never",
+      feedUrl: "https://example.com/never.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.upsert({
+      id: "feed_failing",
+      title: "Failing",
+      feedUrl: "https://example.com/failing.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.recordFetchFailure(
+      "feed_failing",
+      "Feed parse failed",
+      Date.parse("2026-05-23T08:00:00.000Z")
+    );
+    feeds.upsert({
+      id: "feed_stale",
+      title: "Stale",
+      feedUrl: "https://example.com/stale.xml",
+      enabled: true,
+      now: 1000
+    });
+    feeds.recordFetchSuccess("feed_stale", Date.parse("2026-05-01T00:00:00.000Z"));
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => Date.parse("2026-05-23T08:29:00.000Z")
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/feeds/diagnostics"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          summary: {
+            total: 5,
+            enabled: 4,
+            healthy: 1,
+            warning: 1,
+            error: 1,
+            disabled: 1,
+            neverFetched: 1
+          },
+          items: expect.arrayContaining([
+            expect.objectContaining({
+              feed: expect.objectContaining({ id: "feed_healthy" }),
+              diagnostic: expect.objectContaining({ status: "healthy", code: "OK" })
+            }),
+            expect.objectContaining({
+              feed: expect.objectContaining({ id: "feed_disabled" }),
+              diagnostic: expect.objectContaining({ status: "disabled", code: "DISABLED" })
+            }),
+            expect.objectContaining({
+              feed: expect.objectContaining({ id: "feed_never" }),
+              diagnostic: expect.objectContaining({ status: "never_fetched", code: "NEVER_FETCHED" })
+            }),
+            expect.objectContaining({
+              feed: expect.objectContaining({ id: "feed_failing" }),
+              diagnostic: expect.objectContaining({
+                status: "failing",
+                code: "FETCH_FAILED",
+                lastError: "Feed parse failed"
+              })
+            }),
+            expect.objectContaining({
+              feed: expect.objectContaining({ id: "feed_stale" }),
+              diagnostic: expect.objectContaining({ status: "stale", code: "STALE" })
+            })
+          ])
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("refreshes an existing feed and writes articles", async () => {
     const db = createEmptyDatabase();
     const feeds = new SqliteFeedRepository(db);
@@ -6603,6 +6871,38 @@ const fixtureRss = `<?xml version="1.0"?>
     </item>
   </channel>
 </rss>`;
+
+const fixtureAtom = `<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom Fixture</title>
+  <link href="https://example.com/" rel="alternate" />
+  <link href="https://example.com/atom.xml" rel="self" />
+  <subtitle>Atom feed fixture</subtitle>
+  <entry>
+    <title>Atom article</title>
+    <link href="https://example.com/atom-article" />
+    <id>atom-article</id>
+    <updated>2026-05-14T08:00:00.000Z</updated>
+    <summary>Atom summary</summary>
+  </entry>
+</feed>`;
+
+const fixtureHtmlWithFeeds = `<!doctype html>
+<html>
+  <head>
+    <link title="Main Feed" href="/feeds/main.xml" rel="alternate feed" type="application/rss+xml">
+    <link href="https://example.com/atom.xml" type="application/atom+xml" rel="alternate">
+  </head>
+  <body>Example</body>
+</html>`;
+
+const fixtureHtmlWithInvalidFeed = `<!doctype html>
+<html>
+  <head>
+    <link rel="alternate" type="application/rss+xml" href="/broken.xml" title="Broken">
+  </head>
+  <body>Example</body>
+</html>`;
 
 const fixtureRssWithMovedFirstArticle = fixtureRss.replace(
   "https://example.com/first",

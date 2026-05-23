@@ -112,6 +112,145 @@ describe("web API client", () => {
     expect(calls).toEqual(["/api/feed-folders"]);
   });
 
+  it("discovers feeds with the expected request body", async () => {
+    const calls: Array<{ path: string; method: string | undefined; body: unknown }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      calls.push({
+        path: String(input),
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : null
+      });
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            inputUrl: "https://example.com",
+            normalizedUrl: "https://example.com/",
+            inputKind: "html",
+            candidates: [
+              {
+                feedUrl: "https://example.com/feed.xml",
+                title: "Example Feed",
+                siteUrl: "https://example.com/",
+                description: "Fixture",
+                format: "rss",
+                status: "valid",
+                existingFeedId: null,
+                itemCount: 1,
+                recentItems: [
+                  {
+                    title: "Latest",
+                    url: "https://example.com/latest",
+                    publishedAt: "2026-05-23T00:00:00.000Z"
+                  }
+                ],
+                error: null
+              }
+            ],
+            warnings: []
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(api.discoverFeeds("https://example.com")).resolves.toMatchObject({
+      inputKind: "html",
+      candidates: [
+        {
+          feedUrl: "https://example.com/feed.xml",
+          status: "valid",
+          recentItems: [
+            {
+              title: "Latest",
+              publishedAt: "2026-05-23T00:00:00.000Z"
+            }
+          ]
+        }
+      ]
+    });
+    expect(calls).toEqual([
+      {
+        path: "/api/feeds/discover",
+        method: "POST",
+        body: {
+          url: "https://example.com"
+        }
+      }
+    ]);
+  });
+
+  it("fetches feed diagnostics", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            summary: {
+              total: 1,
+              enabled: 1,
+              healthy: 0,
+              warning: 0,
+              error: 1,
+              disabled: 0,
+              neverFetched: 0
+            },
+            items: [
+              {
+                feed: {
+                  id: "feed_1",
+                  title: "Feed",
+                  feedUrl: "https://example.com/feed.xml",
+                  siteUrl: "https://example.com/",
+                  enabled: true
+                },
+                diagnostic: {
+                  feedId: "feed_1",
+                  status: "failing",
+                  severity: "error",
+                  code: "FETCH_FAILED",
+                  message: "The latest feed fetch failed.",
+                  lastFetchedAt: "2026-05-23T00:00:00.000Z",
+                  lastSuccessAt: null,
+                  nextRefreshAt: "2026-05-23T01:00:00.000Z",
+                  lastError: "Feed parse failed"
+                }
+              }
+            ]
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(api.getFeedDiagnostics()).resolves.toMatchObject({
+      summary: {
+        error: 1
+      },
+      items: [
+        {
+          diagnostic: {
+            status: "failing",
+            lastError: "Feed parse failed"
+          }
+        }
+      ]
+    });
+    expect(calls).toEqual(["/api/feeds/diagnostics"]);
+  });
+
   it("fetches setup status", async () => {
     const calls: string[] = [];
     const api = createDibaoApi(async (input) => {

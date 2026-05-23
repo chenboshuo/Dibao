@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent 
 import {
   userMessageForError,
   type Feed,
+  type FeedDiagnosticItem,
+  type FeedDiagnosticsResponse,
+  type FeedDiscoveryCandidate,
+  type FeedDiscoveryResponse,
   type FeedFolder,
   type OpmlImportResponse,
   type UpdateFeedInput,
@@ -19,6 +23,9 @@ type PendingManagementAction =
   | "updateFeed"
   | "deleteFeed";
 
+type FeedDiagnosticsByFeedId = Record<string, FeedDiagnosticItem["diagnostic"]>;
+type FeedDiagnosticFilter = "all" | "unhealthy" | "disabled" | "neverFetched";
+
 type FeedDraft = {
   title: string;
   feedUrl: string;
@@ -28,26 +35,35 @@ type FeedDraft = {
 };
 
 export type FeedManagementWorkspaceProps = {
+  diagnostics: FeedDiagnosticsResponse | null;
+  diagnosticsByFeedId: FeedDiagnosticsByFeedId;
   feedError: string | null;
+  feedDiscovery: FeedDiscoveryResponse | null;
+  feedDiscoveryError: string | null;
   feedUrl: string;
   feedFolders: FeedFolder[];
   feeds: Feed[];
   isAddingFeed: boolean;
+  isDiscoveringFeeds: boolean;
+  isFeedDiagnosticsLoading: boolean;
   isExportingOpml: boolean;
   isImportingOpml: boolean;
   isLoading: boolean;
   isRefreshingAllFeeds: boolean;
+  onAddCandidate: (candidate: FeedDiscoveryCandidate) => void;
   onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
   onCreateFolder: (title: string) => Promise<void>;
   onDeleteFeed: (feedId: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
   onExportOpml: () => void;
   onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
+  onRefreshFeed: (feed: Feed) => void;
   onRefreshAllFeeds: () => void;
   onUpdateFeed: (feedId: string, input: UpdateFeedInput) => Promise<void>;
   onUpdateFeedUrl: (value: string) => void;
   onUpdateFolder: (folderId: string, input: UpdateFeedFolderInput) => Promise<void>;
   opmlSummary: OpmlImportResponse | null;
+  refreshingFeedId: string | null;
 };
 
 export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
@@ -74,7 +90,18 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
   const [confirmDeleteFeedId, setConfirmDeleteFeedId] = useState<string | null>(null);
   const [confirmDeleteFolderId, setConfirmDeleteFolderId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingManagementAction | null>(null);
+  const [diagnosticFilter, setDiagnosticFilter] = useState<FeedDiagnosticFilter>("all");
   const [error, setError] = useState<string | null>(null);
+  const visibleFeeds = useMemo(
+    () =>
+      props.feeds.filter((feed) =>
+        matchesDiagnosticFilter(feed, props.diagnosticsByFeedId[feed.id], diagnosticFilter)
+      ),
+    [diagnosticFilter, props.diagnosticsByFeedId, props.feeds]
+  );
+  const selectedDiagnostic = selectedFeed
+    ? props.diagnosticsByFeedId[selectedFeed.id] ?? null
+    : null;
 
   useEffect(() => {
     if (props.feeds.length === 0) {
@@ -403,13 +430,61 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
             />
             <button
               className={styles.primaryButton}
-              disabled={props.isAddingFeed}
+              disabled={props.isAddingFeed || props.isDiscoveringFeeds}
               type="submit"
             >
-              {props.isAddingFeed ? t.feeds.adding : t.setup.sources.addFeed}
+              {props.isDiscoveringFeeds ? t.feedDiscovery.checking : t.feedDiscovery.check}
             </button>
           </div>
         </form>
+
+        <ManagementFeedDiscoveryPanel
+          discovery={props.feedDiscovery}
+          error={props.feedDiscoveryError}
+          isAddingFeed={props.isAddingFeed}
+          onAddCandidate={props.onAddCandidate}
+        />
+
+        <section className={styles.feedDiagnosticsPanel} aria-labelledby="feed-diagnostics-title">
+          <div className={styles.feedDiagnosticsHeader}>
+            <div>
+              <h3 id="feed-diagnostics-title">{t.feedDiagnostics.title}</h3>
+              <p>
+                {props.diagnostics
+                  ? t.feedDiagnostics.summary(
+                      props.diagnostics.summary.total,
+                      props.diagnostics.summary.error,
+                      props.diagnostics.summary.warning
+                    )
+                  : props.isFeedDiagnosticsLoading
+                    ? t.feedManagement.loading
+                    : t.feedManagement.na}
+              </p>
+            </div>
+            <div className={styles.feedDiagnosticSummaryPills}>
+              <span>{t.feedDiagnostics.statuses.healthy}: {props.diagnostics?.summary.healthy ?? 0}</span>
+              <span>{t.feedDiagnostics.statuses.failing}: {props.diagnostics?.summary.error ?? 0}</span>
+              <span>{t.feedDiagnostics.statuses.never_fetched}: {props.diagnostics?.summary.neverFetched ?? 0}</span>
+              <span>{t.feedDiagnostics.statuses.disabled}: {props.diagnostics?.summary.disabled ?? 0}</span>
+            </div>
+          </div>
+          <div className={styles.feedDiagnosticFilters} aria-label={t.feedDiagnostics.title}>
+            {(["all", "unhealthy", "disabled", "neverFetched"] as const).map((filter) => (
+              <button
+                className={
+                  diagnosticFilter === filter
+                    ? styles.feedDiagnosticFilterActive
+                    : styles.feedDiagnosticFilter
+                }
+                key={filter}
+                onClick={() => setDiagnosticFilter(filter)}
+                type="button"
+              >
+                {t.feedDiagnostics.filters[filter]}
+              </button>
+            ))}
+          </div>
+        </section>
 
         {props.feedError ? <p className={styles.errorText}>{props.feedError}</p> : null}
         {error ? <p className={styles.errorText}>{error}</p> : null}
@@ -423,8 +498,16 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                 body={t.feedManagement.feeds.emptyBody}
               />
             ) : null}
+            {!props.isLoading && props.feeds.length > 0 && visibleFeeds.length === 0 ? (
+              <ManagementEmptyState
+                title={t.feedDiagnostics.noIssues}
+                body={t.feedDiagnostics.noIssues}
+              />
+            ) : null}
             {!props.isLoading &&
-              props.feeds.map((feed) => (
+              visibleFeeds.map((feed) => {
+                const diagnostic = props.diagnosticsByFeedId[feed.id] ?? null;
+                return (
                 <button
                   className={
                     selectedFeed?.id === feed.id
@@ -435,7 +518,16 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                   onClick={() => setSelectedFeedId(feed.id)}
                   type="button"
                 >
-                  <span className={styles.managementFeedTitle}>{feed.title}</span>
+                  <span className={styles.managementFeedTitle}>
+                    {feed.title}
+                    {diagnostic ? (
+                      <span
+                        className={`${styles.feedHealthBadge} ${feedHealthBadgeClass(diagnostic.severity, styles)}`}
+                      >
+                        {t.feedDiagnostics.statuses[diagnostic.status]}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className={styles.managementFeedUrl}>{feed.feedUrl}</span>
                   <span className={styles.managementFeedMeta}>
                     {folderLabel(feed, folderById, t.feedManagement.feeds.ungrouped)} ·{" "}
@@ -458,7 +550,8 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                     <span className={styles.managementFeedError}>{feed.lastError}</span>
                   ) : null}
                 </button>
-              ))}
+                );
+              })}
           </div>
 
           <section className={styles.managementEditor} aria-labelledby="feed-editor-title">
@@ -469,6 +562,13 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                     <p className={styles.kicker}>{t.feedManagement.editor.kicker}</p>
                     <h3 id="feed-editor-title">{selectedFeed.title}</h3>
                   </div>
+                  {selectedDiagnostic ? (
+                    <span
+                      className={`${styles.feedHealthBadge} ${feedHealthBadgeClass(selectedDiagnostic.severity, styles)}`}
+                    >
+                      {t.feedDiagnostics.statuses[selectedDiagnostic.status]}
+                    </span>
+                  ) : null}
                 </div>
                 <form className={styles.managementForm} onSubmit={handleUpdateFeed}>
                   <label htmlFor="managed-feed-title">
@@ -558,6 +658,12 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                   />
 
                   <dl className={styles.managementStatusRows}>
+                    {selectedDiagnostic ? (
+                      <div>
+                        <dt>{t.feedDiagnostics.title}</dt>
+                        <dd>{feedDiagnosticMessage(selectedDiagnostic, t.feedDiagnostics.messages)}</dd>
+                      </div>
+                    ) : null}
                     <div>
                       <dt>{t.feedManagement.editor.lastFetchedAt}</dt>
                       <dd>
@@ -598,6 +704,20 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                         ? t.feedManagement.actions.saving
                         : t.feedManagement.actions.save}
                     </button>
+                    {selectedDiagnostic &&
+                    (selectedDiagnostic.status === "failing" ||
+                      selectedDiagnostic.status === "stale") ? (
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={props.refreshingFeedId === selectedFeed.id}
+                        onClick={() => props.onRefreshFeed(selectedFeed)}
+                        type="button"
+                      >
+                        {props.refreshingFeedId === selectedFeed.id
+                          ? t.feeds.refreshing
+                          : t.feedDiagnostics.retry}
+                      </button>
+                    ) : null}
                     <button
                       className={styles.dangerButton}
                       disabled={pendingAction === "deleteFeed"}
@@ -639,6 +759,112 @@ function draftForFeed(feed: Feed): FeedDraft {
   };
 }
 
+function ManagementFeedDiscoveryPanel(props: {
+  discovery: FeedDiscoveryResponse | null;
+  error: string | null;
+  isAddingFeed: boolean;
+  onAddCandidate: (candidate: FeedDiscoveryCandidate) => void;
+}) {
+  const { t, formatDate } = useI18n();
+
+  if (!props.discovery && !props.error) {
+    return null;
+  }
+
+  return (
+    <section className={styles.feedDiscoveryPanel} aria-live="polite">
+      {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+      {props.discovery ? (
+        <>
+          <div className={styles.feedDiscoveryHeader}>
+            <strong>
+              {props.discovery.candidates.length > 0
+                ? t.feedDiscovery.candidatesTitle
+                : t.feedDiscovery.noCandidatesTitle}
+            </strong>
+            <small>{props.discovery.normalizedUrl}</small>
+          </div>
+          {props.discovery.warnings.length > 0 ? (
+            <div className={styles.feedDiscoveryWarnings}>
+              <strong>{t.feedDiscovery.warningsTitle}</strong>
+              <ul>
+                {props.discovery.warnings.map((warning, index) => (
+                  <li key={`${warning}-${index}`}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {props.discovery.candidates.length === 0 ? (
+            <p className={styles.feedDiscoveryEmpty}>{t.feedDiscovery.noCandidatesBody}</p>
+          ) : (
+            <div className={styles.feedDiscoveryCandidates}>
+              {props.discovery.candidates.map((candidate) => (
+                <article className={styles.feedDiscoveryCandidate} key={candidate.feedUrl}>
+                  <div className={styles.feedDiscoveryCandidateHeader}>
+                    <div>
+                      <h3>{candidate.title ?? candidate.feedUrl}</h3>
+                      <p>{candidate.description ?? candidate.siteUrl ?? candidate.feedUrl}</p>
+                    </div>
+                    <span
+                      className={`${styles.feedHealthBadge} ${
+                        candidate.status === "valid"
+                          ? styles.feedHealthBadgeOk
+                          : candidate.status === "duplicate"
+                            ? styles.feedHealthBadgeInfo
+                            : styles.feedHealthBadgeError
+                      }`}
+                    >
+                      {t.feedDiscovery.statuses[candidate.status]}
+                    </span>
+                  </div>
+                  <dl className={styles.feedDiscoveryMeta}>
+                    <div>
+                      <dt>URL</dt>
+                      <dd>{candidate.feedUrl}</dd>
+                    </div>
+                    <div>
+                      <dt>{candidate.format.toUpperCase()}</dt>
+                      <dd>{t.feedDiscovery.itemCount(candidate.itemCount)}</dd>
+                    </div>
+                  </dl>
+                  {candidate.recentItems.length > 0 ? (
+                    <div className={styles.feedDiscoveryRecent}>
+                      <strong>{t.feedDiscovery.recentItems}</strong>
+                      <ul>
+                        {candidate.recentItems.map((item, index) => (
+                          <li key={`${candidate.feedUrl}-${item.url ?? item.title}-${index}`}>
+                            <span>{item.title}</span>
+                            <small>{item.publishedAt ? formatDate(item.publishedAt) : ""}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {candidate.error ? (
+                    <p className={styles.feedDiscoveryError}>{candidate.error}</p>
+                  ) : null}
+                  <button
+                    className={styles.primaryButton}
+                    disabled={candidate.status !== "valid" || props.isAddingFeed}
+                    onClick={() => props.onAddCandidate(candidate)}
+                    type="button"
+                  >
+                    {props.isAddingFeed
+                      ? t.feedDiscovery.addingCandidate
+                      : candidate.status === "duplicate"
+                        ? t.feedDiscovery.duplicate
+                        : t.feedDiscovery.addCandidate}
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 function emptyFeedDraft(): FeedDraft {
   return {
     title: "",
@@ -665,6 +891,54 @@ function folderLabel(
   ungroupedLabel: string
 ): string {
   return feed.folderId ? folderById.get(feed.folderId)?.title ?? ungroupedLabel : ungroupedLabel;
+}
+
+function matchesDiagnosticFilter(
+  feed: Feed,
+  diagnostic: FeedDiagnosticItem["diagnostic"] | null | undefined,
+  filter: FeedDiagnosticFilter
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "disabled") {
+    return diagnostic?.status === "disabled" || !feed.enabled;
+  }
+  if (filter === "neverFetched") {
+    return diagnostic?.status === "never_fetched" || feed.lastSuccessAt === null;
+  }
+  return (
+    diagnostic?.severity === "error" ||
+    diagnostic?.severity === "warning" ||
+    diagnostic?.status === "due" ||
+    diagnostic?.status === "never_fetched"
+  );
+}
+
+function feedHealthBadgeClass(
+  severity: FeedDiagnosticItem["diagnostic"]["severity"],
+  styleMap: typeof styles
+): string {
+  if (severity === "error") {
+    return styleMap.feedHealthBadgeError;
+  }
+  if (severity === "warning") {
+    return styleMap.feedHealthBadgeWarning;
+  }
+  if (severity === "disabled") {
+    return styleMap.feedHealthBadgeDisabled;
+  }
+  if (severity === "info") {
+    return styleMap.feedHealthBadgeInfo;
+  }
+  return styleMap.feedHealthBadgeOk;
+}
+
+function feedDiagnosticMessage(
+  diagnostic: FeedDiagnosticItem["diagnostic"],
+  messages: Record<string, string>
+): string {
+  return messages[diagnostic.code] ?? diagnostic.message;
 }
 
 function ManagementEmptyState(props: { title: string; body: string }) {

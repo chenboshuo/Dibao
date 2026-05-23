@@ -49,6 +49,21 @@ async function handleFixtureRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/site-with-feeds") {
+    sendResponse(response, 200, "text/html; charset=utf-8", fixtureSiteWithFeeds);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/feeds/alt.xml") {
+    sendResponse(response, 200, "application/atom+xml; charset=utf-8", fixtureAtom);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/feeds/broken.xml") {
+    sendResponse(response, 500, "application/xml; charset=utf-8", "<rss>");
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/embeddings") {
     const body = await readBody(request);
     const input = parseEmbeddingInput(body);
@@ -165,3 +180,26 @@ const fixtureRss = `<?xml version="1.0"?>
     ${extraFixtureItems}
   </channel>
 </rss>`;
+
+const fixtureAtom = `<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>E2E Alternate Feed</title>
+  <link href="http://127.0.0.1/alternate" rel="alternate" />
+  <entry>
+    <title>E2E Alternate Article</title>
+    <link href="http://127.0.0.1/articles/alternate" />
+    <id>e2e-alternate</id>
+    <updated>2026-05-14T09:00:00.000Z</updated>
+    <summary>Alternate summary.</summary>
+  </entry>
+</feed>`;
+
+const fixtureSiteWithFeeds = `<!doctype html>
+<html>
+  <head>
+    <title>E2E Fixture Site</title>
+    <link rel="alternate feed" type="application/rss+xml" href="/feeds/main.xml" title="Main RSS">
+    <link rel="alternate" type="application/atom+xml" href="/feeds/alt.xml" title="Alt Atom">
+  </head>
+  <body>E2E fixture site</body>
+</html>`;

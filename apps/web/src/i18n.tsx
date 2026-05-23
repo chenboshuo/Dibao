@@ -130,13 +130,13 @@ export const zhCN = {
   feeds: {
     kicker: "订阅源",
     title: "Feeds",
-    inputLabel: "RSS / Atom URL",
-    inputPlaceholder: "https://example.com/feed.xml",
+    inputLabel: "网站或 RSS / Atom URL",
+    inputPlaceholder: "https://example.com 或 https://example.com/feed.xml",
     add: "添加",
     adding: "添加中",
     allFeeds: "全部订阅源",
     sourceCount: (count: number) => `${count} 个来源`,
-    feedUrlRequired: "请输入 RSS / Atom 地址。",
+    feedUrlRequired: "请输入网站或 RSS / Atom 地址。",
     successAt: (date: string) => `成功：${date}`,
     nextRefreshAt: (date: string) => `下次抓取：${date}`,
     refresh: "刷新",
@@ -147,6 +147,67 @@ export const zhCN = {
     openSourcesLabel: "打开来源",
     closeSources: "关闭来源",
     refreshTitle: (feedTitle: string) => `刷新 ${feedTitle}`
+  },
+  feedDiscovery: {
+    inputLabel: "网站或 RSS / Atom URL",
+    inputPlaceholder: "https://example.com 或 https://example.com/feed.xml",
+    check: "检查",
+    checking: "检查中",
+    candidatesTitle: "发现的订阅源",
+    noCandidatesTitle: "没有发现可用订阅源",
+    noCandidatesBody: "可以尝试直接输入 RSS / Atom 地址，或确认网站是否声明了 feed。",
+    addCandidate: "添加此源",
+    addingCandidate: "添加中",
+    duplicate: "已订阅",
+    invalid: "不可用",
+    valid: "可添加",
+    statuses: {
+      valid: "可添加",
+      duplicate: "已订阅",
+      invalid: "不可用"
+    },
+    recentItems: "最近文章",
+    itemCount: (count: number) => `${count} 篇文章`,
+    warningsTitle: "提示",
+    errors: {
+      urlRequired: "请输入网站或 RSS / Atom 地址。",
+      discoverFailed: "订阅源检查失败，请稍后重试。"
+    }
+  },
+  feedDiagnostics: {
+    title: "订阅源健康",
+    summary: (total: number, error: number, warning: number) =>
+      `${total} 个订阅源 · ${error} 个异常 · ${warning} 个需要关注`,
+    filters: {
+      all: "全部",
+      unhealthy: "只看异常",
+      disabled: "已停用",
+      neverFetched: "从未成功"
+    },
+    statuses: {
+      healthy: "正常",
+      never_fetched: "从未抓取",
+      due: "待抓取",
+      stale: "长时间未成功",
+      failing: "抓取失败",
+      disabled: "已停用"
+    },
+    fields: {
+      lastFetchedAt: "最近抓取",
+      lastSuccessAt: "最近成功",
+      nextRefreshAt: "下次抓取",
+      lastError: "最近错误"
+    },
+    messages: {
+      OK: "订阅源抓取正常。",
+      DISABLED: "订阅源已停用。",
+      NEVER_FETCHED: "订阅源尚未抓取。",
+      DUE: "订阅源已到抓取时间。",
+      STALE: "订阅源超过 7 天没有成功抓取。",
+      FETCH_FAILED: "最近抓取失败。"
+    },
+    retry: "重试刷新",
+    noIssues: "没有异常订阅源。"
   },
   folders: {
     title: "分组",
@@ -1161,13 +1222,13 @@ export const enUS = {
   feeds: {
     kicker: "Feeds",
     title: "Feeds",
-    inputLabel: "RSS / Atom URL",
-    inputPlaceholder: "https://example.com/feed.xml",
+    inputLabel: "Website or RSS / Atom URL",
+    inputPlaceholder: "https://example.com or https://example.com/feed.xml",
     add: "Add",
     adding: "Adding",
     allFeeds: "All feeds",
     sourceCount: (count: number) => `${count} ${count === 1 ? "source" : "sources"}`,
-    feedUrlRequired: "Enter an RSS / Atom URL.",
+    feedUrlRequired: "Enter a website or RSS / Atom URL.",
     successAt: (date: string) => `Success: ${date}`,
     nextRefreshAt: (date: string) => `Next fetch: ${date}`,
     refresh: "Refresh",
@@ -1178,6 +1239,67 @@ export const enUS = {
     openSourcesLabel: "Open sources",
     closeSources: "Close sources",
     refreshTitle: (feedTitle: string) => `Refresh ${feedTitle}`
+  },
+  feedDiscovery: {
+    inputLabel: "Website or RSS / Atom URL",
+    inputPlaceholder: "https://example.com or https://example.com/feed.xml",
+    check: "Check",
+    checking: "Checking",
+    candidatesTitle: "Discovered feeds",
+    noCandidatesTitle: "No usable feed found",
+    noCandidatesBody: "Try a direct RSS / Atom URL, or check whether the site declares a feed.",
+    addCandidate: "Add this feed",
+    addingCandidate: "Adding",
+    duplicate: "Already subscribed",
+    invalid: "Unavailable",
+    valid: "Can add",
+    statuses: {
+      valid: "Can add",
+      duplicate: "Already subscribed",
+      invalid: "Unavailable"
+    },
+    recentItems: "Recent articles",
+    itemCount: (count: number) => `${count} ${count === 1 ? "article" : "articles"}`,
+    warningsTitle: "Notes",
+    errors: {
+      urlRequired: "Enter a website or RSS / Atom URL.",
+      discoverFailed: "Feed check failed. Please try again later."
+    }
+  },
+  feedDiagnostics: {
+    title: "Feed health",
+    summary: (total: number, error: number, warning: number) =>
+      `${total} ${total === 1 ? "feed" : "feeds"} · ${error} failing · ${warning} need attention`,
+    filters: {
+      all: "All",
+      unhealthy: "Issues only",
+      disabled: "Disabled",
+      neverFetched: "Never successful"
+    },
+    statuses: {
+      healthy: "Healthy",
+      never_fetched: "Never fetched",
+      due: "Due",
+      stale: "Stale",
+      failing: "Fetch failed",
+      disabled: "Disabled"
+    },
+    fields: {
+      lastFetchedAt: "Last fetched",
+      lastSuccessAt: "Last success",
+      nextRefreshAt: "Next fetch",
+      lastError: "Last error"
+    },
+    messages: {
+      OK: "Feed fetches are healthy.",
+      DISABLED: "The feed is disabled.",
+      NEVER_FETCHED: "The feed has not been fetched yet.",
+      DUE: "The feed is due for refresh.",
+      STALE: "The feed has not fetched successfully for more than 7 days.",
+      FETCH_FAILED: "The latest feed fetch failed."
+    },
+    retry: "Retry refresh",
+    noIssues: "No feed issues."
   },
   folders: {
     title: "Folders",

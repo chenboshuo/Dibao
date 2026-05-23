@@ -21,6 +21,10 @@ import {
   type EmbeddingProviderType,
   type FavoriteArticleSort,
   type Feed,
+  type FeedDiagnosticItem,
+  type FeedDiagnosticsResponse,
+  type FeedDiscoveryCandidate,
+  type FeedDiscoveryResponse,
   type FeedFolder,
   type OpmlImportResponse,
   type RankExplanation,
@@ -99,6 +103,8 @@ type Notice =
 type PwaUpdateAvailableEvent = CustomEvent<{
   applyUpdate: () => void;
 }>;
+
+type FeedDiagnosticsByFeedId = Record<string, FeedDiagnosticItem["diagnostic"]>;
 
 export type SourceSelection =
   | { type: "all" }
@@ -293,6 +299,11 @@ export function App() {
   const [isRecommendationStatusLoading, setIsRecommendationStatusLoading] = useState(false);
   const [recommendationStatusError, setRecommendationStatusError] = useState<string | null>(null);
   const [feedUrl, setFeedUrl] = useState("");
+  const [feedDiscovery, setFeedDiscovery] = useState<FeedDiscoveryResponse | null>(null);
+  const [feedDiscoveryError, setFeedDiscoveryError] = useState<string | null>(null);
+  const [isDiscoveringFeeds, setIsDiscoveringFeeds] = useState(false);
+  const [feedDiagnostics, setFeedDiagnostics] = useState<FeedDiagnosticsResponse | null>(null);
+  const [isFeedDiagnosticsLoading, setIsFeedDiagnosticsLoading] = useState(false);
   const [isFeedsLoading, setIsFeedsLoading] = useState(true);
   const [isArticlesLoading, setIsArticlesLoading] = useState(true);
   const [isLoadingMoreArticles, setIsLoadingMoreArticles] = useState(false);
@@ -349,6 +360,13 @@ export function App() {
         : null,
     [feedFolders, sourceSelection]
   );
+  const feedDiagnosticsByFeedId = useMemo<FeedDiagnosticsByFeedId>(() => {
+    const diagnosticsByFeedId: FeedDiagnosticsByFeedId = {};
+    for (const item of feedDiagnostics?.items ?? []) {
+      diagnosticsByFeedId[item.feed.id] = item.diagnostic;
+    }
+    return diagnosticsByFeedId;
+  }, [feedDiagnostics]);
   const currentArticleView = appPage.type === "reader" ? appPage.view : "latest";
   const articleListScrollKey = useMemo(
     () =>
@@ -850,6 +868,18 @@ export function App() {
     }
   }, [t.errors.api]);
 
+  const loadFeedDiagnostics = useCallback(async () => {
+    setIsFeedDiagnosticsLoading(true);
+
+    try {
+      setFeedDiagnostics(await dibaoApi.getFeedDiagnostics());
+    } catch (error) {
+      setFeedError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsFeedDiagnosticsLoading(false);
+    }
+  }, [t.errors.api]);
+
   const loadFeedFolders = useCallback(async () => {
     try {
       const nextFolders = await dibaoApi.listFeedFolders();
@@ -1000,8 +1030,8 @@ export function App() {
       return;
     }
 
-    void Promise.all([loadFeedFolders(), loadFeeds()]);
-  }, [appPage.type, appStage.type, loadFeedFolders, loadFeeds]);
+    void Promise.all([loadFeedFolders(), loadFeeds(), loadFeedDiagnostics()]);
+  }, [appPage.type, appStage.type, loadFeedDiagnostics, loadFeedFolders, loadFeeds]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || appPage.type !== "reader") {
@@ -1242,19 +1272,43 @@ export function App() {
     const nextFeedUrl = feedUrl.trim();
 
     if (!nextFeedUrl) {
-      setFeedError(t.feeds.feedUrlRequired);
+      setFeedDiscoveryError(t.feedDiscovery.errors.urlRequired);
+      return;
+    }
+
+    setIsDiscoveringFeeds(true);
+    setFeedError(null);
+    setFeedDiscoveryError(null);
+    setFeedDiscovery(null);
+    setNotice(null);
+
+    try {
+      setFeedDiscovery(await dibaoApi.discoverFeeds(nextFeedUrl));
+    } catch (error) {
+      setFeedDiscoveryError(
+        userMessageForError(error, t.errors.api) || t.feedDiscovery.errors.discoverFailed
+      );
+    } finally {
+      setIsDiscoveringFeeds(false);
+    }
+  }
+
+  async function handleAddDiscoveredFeed(candidate: FeedDiscoveryCandidate) {
+    if (candidate.status !== "valid") {
       return;
     }
 
     setIsAddingFeed(true);
     setFeedError(null);
+    setFeedDiscoveryError(null);
     setNotice(null);
 
     try {
-      const result = await dibaoApi.createFeed(nextFeedUrl);
+      const result = await dibaoApi.createFeed(candidate.feedUrl);
       setFeedUrl("");
+      setFeedDiscovery(null);
       setNotice({ type: "feedAddedAndRefreshed", feedTitle: result.feed.title });
-      await loadFeeds();
+      await Promise.all([loadFeeds(), loadFeedDiagnostics()]);
       handleSelectSource({ type: "feed", feedId: result.feed.id });
     } catch (error) {
       setFeedError(userMessageForError(error, t.errors.api));
@@ -1279,17 +1333,41 @@ export function App() {
     const nextFeedUrl = feedUrl.trim();
 
     if (!nextFeedUrl) {
-      setSetupSourceError(t.feeds.feedUrlRequired);
+      setSetupSourceError(t.feedDiscovery.errors.urlRequired);
+      return;
+    }
+
+    setIsDiscoveringFeeds(true);
+    setSetupSourceError(null);
+    setFeedDiscoveryError(null);
+    setFeedDiscovery(null);
+    setOpmlSummary(null);
+
+    try {
+      setFeedDiscovery(await dibaoApi.discoverFeeds(nextFeedUrl));
+    } catch (error) {
+      setSetupSourceError(
+        userMessageForError(error, t.errors.api) || t.feedDiscovery.errors.discoverFailed
+      );
+    } finally {
+      setIsDiscoveringFeeds(false);
+    }
+  }
+
+  async function handleSetupAddDiscoveredFeed(candidate: FeedDiscoveryCandidate) {
+    if (candidate.status !== "valid") {
       return;
     }
 
     setIsAddingFeed(true);
     setSetupSourceError(null);
+    setFeedDiscoveryError(null);
     setOpmlSummary(null);
 
     try {
-      await dibaoApi.createFeed(nextFeedUrl);
+      await dibaoApi.createFeed(candidate.feedUrl);
       setFeedUrl("");
+      setFeedDiscovery(null);
       await advanceSetupAfterSource(t.setup.sources.noFeedsAfterAdd);
     } catch (error) {
       setSetupSourceError(userMessageForError(error, t.errors.api));
@@ -1339,6 +1417,7 @@ export function App() {
       setNotice({ type: "feedRefreshed", feedTitle: feed.title });
       await Promise.all([
         loadFeeds(),
+        loadFeedDiagnostics(),
         appPage.type === "reader"
           ? loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, readLaterSort, timeWindow)
           : Promise.resolve()
@@ -1358,7 +1437,7 @@ export function App() {
     try {
       const result = await dibaoApi.refreshAllFeeds();
       setNotice({ type: "allFeedsRefreshQueued", jobCount: result.jobIds.length });
-      await loadFeeds();
+      await Promise.all([loadFeeds(), loadFeedDiagnostics()]);
     } catch (error) {
       setFeedError(userMessageForError(error, t.errors.api));
     } finally {
@@ -1386,6 +1465,7 @@ export function App() {
       await Promise.all([
         loadFeedFolders(),
         loadFeeds(),
+        loadFeedDiagnostics(),
         appPage.type === "reader"
           ? loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, readLaterSort, timeWindow)
           : Promise.resolve()
@@ -1414,14 +1494,16 @@ export function App() {
   }
 
   async function refreshSourcesAfterManagementMutation() {
-    const [nextFolders, nextFeeds] = await Promise.all([
+    const [nextFolders, nextFeeds, nextDiagnostics] = await Promise.all([
       dibaoApi.listFeedFolders(),
-      dibaoApi.listFeeds()
+      dibaoApi.listFeeds(),
+      dibaoApi.getFeedDiagnostics()
     ]);
     const nextSourceSelection = correctSourceSelection(sourceSelection, nextFeeds, nextFolders);
 
     setFeedFolders(nextFolders);
     setFeeds(nextFeeds);
+    setFeedDiagnostics(nextDiagnostics);
 
     if (!sameSourceSelection(sourceSelection, nextSourceSelection)) {
       resetArticleListForPendingQuery();
@@ -2146,9 +2228,13 @@ export function App() {
         {pwaStatusBanner}
         <SetupSourcesPanel
           error={setupSourceError}
+          discovery={feedDiscovery}
+          discoveryError={feedDiscoveryError}
           feedUrl={feedUrl}
           isAddingFeed={isAddingFeed}
+          isDiscoveringFeeds={isDiscoveringFeeds}
           isImportingOpml={isImportingOpml}
+          onAddCandidate={handleSetupAddDiscoveredFeed}
           onAddFeed={handleSetupAddFeed}
           onImportOpml={handleSetupImportOpml}
           onUpdateFeedUrl={setFeedUrl}
@@ -2282,26 +2368,35 @@ export function App() {
 
         {appPage.type === "feed-management" ? (
           <FeedManagementWorkspace
+            diagnostics={feedDiagnostics}
+            diagnosticsByFeedId={feedDiagnosticsByFeedId}
             feedError={feedError}
+            feedDiscovery={feedDiscovery}
+            feedDiscoveryError={feedDiscoveryError}
             feedUrl={feedUrl}
             feedFolders={feedFolders}
             feeds={feeds}
             isAddingFeed={isAddingFeed}
+            isDiscoveringFeeds={isDiscoveringFeeds}
+            isFeedDiagnosticsLoading={isFeedDiagnosticsLoading}
             isExportingOpml={isExportingOpml}
             isImportingOpml={isImportingOpml}
             isLoading={isFeedsLoading}
             isRefreshingAllFeeds={isRefreshingAllFeeds}
+            onAddCandidate={handleAddDiscoveredFeed}
             onAddFeed={handleAddFeed}
             onCreateFolder={handleCreateManagedFolder}
             onDeleteFeed={handleDeleteManagedFeed}
             onDeleteFolder={handleDeleteManagedFolder}
             onExportOpml={handleExportOpml}
             onImportOpml={handleImportOpml}
+            onRefreshFeed={handleRefreshFeed}
             onRefreshAllFeeds={handleRefreshAllFeeds}
             onUpdateFeedUrl={setFeedUrl}
             onUpdateFeed={handleUpdateManagedFeed}
             onUpdateFolder={handleUpdateManagedFolder}
             opmlSummary={opmlSummary}
+            refreshingFeedId={refreshingFeedId}
           />
         ) : appPage.type === "settings" ? (
           <SettingsWorkspace
@@ -2445,6 +2540,7 @@ export function App() {
               type="button"
             />
             <FeedPanel
+              diagnosticsByFeedId={feedDiagnosticsByFeedId}
               feedError={feedError}
               feedFolders={feedFolders}
               feeds={feeds}
@@ -2685,10 +2781,14 @@ export function AuthGatePanel(props: {
 }
 
 export function SetupSourcesPanel(props: {
+  discovery: FeedDiscoveryResponse | null;
+  discoveryError: string | null;
   error: string | null;
   feedUrl: string;
   isAddingFeed: boolean;
+  isDiscoveringFeeds: boolean;
   isImportingOpml: boolean;
+  onAddCandidate: (candidate: FeedDiscoveryCandidate) => void;
   onAddFeed: (event: FormEvent<HTMLFormElement>) => void;
   onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
   onUpdateFeedUrl: (value: string) => void;
@@ -2742,12 +2842,19 @@ export function SetupSourcesPanel(props: {
         />
         <button
           className={styles.primaryButton}
-          disabled={props.isAddingFeed || props.isImportingOpml}
+          disabled={props.isAddingFeed || props.isDiscoveringFeeds || props.isImportingOpml}
           type="submit"
         >
-          {props.isAddingFeed ? t.feeds.adding : t.setup.sources.addFeed}
+          {props.isDiscoveringFeeds ? t.feedDiscovery.checking : t.feedDiscovery.check}
         </button>
       </form>
+
+      <FeedDiscoveryPanel
+        discovery={props.discovery}
+        error={props.discoveryError}
+        isAddingFeed={props.isAddingFeed}
+        onAddCandidate={props.onAddCandidate}
+      />
 
       {props.opmlSummary ? (
         <div className={styles.opmlSummary}>
@@ -2772,6 +2879,115 @@ export function SetupSourcesPanel(props: {
       ) : null}
 
       {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+    </section>
+  );
+}
+
+export function FeedDiscoveryPanel(props: {
+  discovery: FeedDiscoveryResponse | null;
+  error: string | null;
+  isAddingFeed: boolean;
+  onAddCandidate: (candidate: FeedDiscoveryCandidate) => void;
+}) {
+  const { t, formatDate } = useI18n();
+
+  if (!props.discovery && !props.error) {
+    return null;
+  }
+
+  return (
+    <section className={styles.feedDiscoveryPanel} aria-live="polite">
+      {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+      {props.discovery ? (
+        <>
+          <div className={styles.feedDiscoveryHeader}>
+            <strong>
+              {props.discovery.candidates.length > 0
+                ? t.feedDiscovery.candidatesTitle
+                : t.feedDiscovery.noCandidatesTitle}
+            </strong>
+            <small>{props.discovery.normalizedUrl}</small>
+          </div>
+          {props.discovery.warnings.length > 0 ? (
+            <div className={styles.feedDiscoveryWarnings}>
+              <strong>{t.feedDiscovery.warningsTitle}</strong>
+              <ul>
+                {props.discovery.warnings.map((warning, index) => (
+                  <li key={`${warning}-${index}`}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {props.discovery.candidates.length === 0 ? (
+            <p className={styles.feedDiscoveryEmpty}>{t.feedDiscovery.noCandidatesBody}</p>
+          ) : (
+            <div className={styles.feedDiscoveryCandidates}>
+              {props.discovery.candidates.map((candidate) => (
+                <article className={styles.feedDiscoveryCandidate} key={candidate.feedUrl}>
+                  <div className={styles.feedDiscoveryCandidateHeader}>
+                    <div>
+                      <h3>{candidate.title ?? candidate.feedUrl}</h3>
+                      <p>{candidate.description ?? candidate.siteUrl ?? candidate.feedUrl}</p>
+                    </div>
+                    <span
+                      className={classNames(
+                        styles.feedHealthBadge,
+                        candidate.status === "valid"
+                          ? styles.feedHealthBadgeOk
+                          : candidate.status === "duplicate"
+                            ? styles.feedHealthBadgeInfo
+                            : styles.feedHealthBadgeError
+                      )}
+                    >
+                      {t.feedDiscovery.statuses[candidate.status]}
+                    </span>
+                  </div>
+                  <dl className={styles.feedDiscoveryMeta}>
+                    <div>
+                      <dt>URL</dt>
+                      <dd>{candidate.feedUrl}</dd>
+                    </div>
+                    <div>
+                      <dt>{candidate.format.toUpperCase()}</dt>
+                      <dd>{t.feedDiscovery.itemCount(candidate.itemCount)}</dd>
+                    </div>
+                  </dl>
+                  {candidate.recentItems.length > 0 ? (
+                    <div className={styles.feedDiscoveryRecent}>
+                      <strong>{t.feedDiscovery.recentItems}</strong>
+                      <ul>
+                        {candidate.recentItems.map((item, index) => (
+                          <li key={`${candidate.feedUrl}-${item.url ?? item.title}-${index}`}>
+                            <span>{item.title}</span>
+                            <small>
+                              {item.publishedAt ? formatDate(item.publishedAt) : candidate.siteUrl}
+                            </small>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {candidate.error ? (
+                    <p className={styles.feedDiscoveryError}>{candidate.error}</p>
+                  ) : null}
+                  <button
+                    className={styles.primaryButton}
+                    disabled={candidate.status !== "valid" || props.isAddingFeed}
+                    onClick={() => props.onAddCandidate(candidate)}
+                    type="button"
+                  >
+                    {props.isAddingFeed
+                      ? t.feedDiscovery.addingCandidate
+                      : candidate.status === "duplicate"
+                        ? t.feedDiscovery.duplicate
+                        : t.feedDiscovery.addCandidate}
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
     </section>
   );
 }
@@ -4481,6 +4697,7 @@ function RangeSettingField(props: {
 }
 
 export function FeedPanel(props: {
+  diagnosticsByFeedId: FeedDiagnosticsByFeedId;
   feedError: string | null;
   feedFolders: FeedFolder[];
   feeds: Feed[];
@@ -4547,7 +4764,9 @@ export function FeedPanel(props: {
         ) : null}
 
         {!props.isFeedsLoading &&
-          props.feeds.map((feed) => (
+          props.feeds.map((feed) => {
+            const diagnostic = props.diagnosticsByFeedId[feed.id] ?? null;
+            return (
             <div className={styles.feedRow} key={feed.id}>
               <button
                 className={
@@ -4559,7 +4778,12 @@ export function FeedPanel(props: {
                 onClick={() => props.onSelectSource({ type: "feed", feedId: feed.id })}
                 type="button"
               >
-                <span>{feed.title}</span>
+                <span className={styles.feedTitleLine}>
+                  <span>{feed.title}</span>
+                  {diagnostic?.severity === "error" ? (
+                    <span className={styles.feedFailureDot}>{t.feedDiagnostics.statuses.failing}</span>
+                  ) : null}
+                </span>
                 <small>
                   {feed.lastSuccessAt
                     ? t.feeds.successAt(formatDate(feed.lastSuccessAt))
@@ -4581,7 +4805,8 @@ export function FeedPanel(props: {
                 {props.refreshingFeedId === feed.id ? t.feeds.refreshing : t.feeds.refresh}
               </button>
             </div>
-          ))}
+            );
+          })}
       </div>
     </section>
   );

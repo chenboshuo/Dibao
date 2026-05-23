@@ -19,6 +19,71 @@ export type Feed = {
   updatedAt: string;
 };
 
+export type FeedDiscoveryCandidateStatus = "valid" | "duplicate" | "invalid";
+
+export type FeedDiscoveryCandidate = {
+  feedUrl: string;
+  title: string | null;
+  siteUrl: string | null;
+  description: string | null;
+  format: "rss" | "atom" | "unknown";
+  status: FeedDiscoveryCandidateStatus;
+  existingFeedId: string | null;
+  itemCount: number;
+  recentItems: Array<{
+    title: string;
+    url: string | null;
+    publishedAt: string | null;
+  }>;
+  error: string | null;
+};
+
+export type FeedDiscoveryResponse = {
+  inputUrl: string;
+  normalizedUrl: string;
+  inputKind: "feed" | "html" | "unknown";
+  candidates: FeedDiscoveryCandidate[];
+  warnings: string[];
+};
+
+export type FeedHealthStatus =
+  | "healthy"
+  | "never_fetched"
+  | "due"
+  | "stale"
+  | "failing"
+  | "disabled";
+
+export type FeedHealthSeverity = "ok" | "info" | "warning" | "error" | "disabled";
+
+export type FeedDiagnosticItem = {
+  feed: Pick<Feed, "id" | "title" | "feedUrl" | "siteUrl" | "enabled">;
+  diagnostic: {
+    feedId: string;
+    status: FeedHealthStatus;
+    severity: FeedHealthSeverity;
+    code: string;
+    message: string;
+    lastFetchedAt: string | null;
+    lastSuccessAt: string | null;
+    nextRefreshAt: string | null;
+    lastError: string | null;
+  };
+};
+
+export type FeedDiagnosticsResponse = {
+  summary: {
+    total: number;
+    enabled: number;
+    healthy: number;
+    warning: number;
+    error: number;
+    disabled: number;
+    neverFetched: number;
+  };
+  items: FeedDiagnosticItem[];
+};
+
 export type FeedFolder = {
   id: string;
   title: string;
@@ -1122,6 +1187,19 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async listFeeds(): Promise<Feed[]> {
       return (await request<Feed[]>("/api/feeds")).data;
+    },
+
+    async discoverFeeds(url: string): Promise<FeedDiscoveryResponse> {
+      return (
+        await request<FeedDiscoveryResponse>("/api/feeds/discover", {
+          method: "POST",
+          body: JSON.stringify({ url })
+        })
+      ).data;
+    },
+
+    async getFeedDiagnostics(): Promise<FeedDiagnosticsResponse> {
+      return (await request<FeedDiagnosticsResponse>("/api/feeds/diagnostics")).data;
     },
 
     async createFeed(feedUrl: string, folderId?: string | null): Promise<CreateFeedResponse> {

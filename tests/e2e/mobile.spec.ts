@@ -68,6 +68,22 @@ test("mobile MVP reader smoke has visible controls and no horizontal overflow", 
   expect(overflow).toBeLessThanOrEqual(4);
 });
 
+test("mobile feed diagnostics stay compact without horizontal overflow", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { exact: true, name: "更多" }).click();
+  await page.getByRole("menuitem", { name: "订阅源" }).click();
+  await expect(page.getByRole("region", { name: "订阅源管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "订阅源健康" })).toBeVisible();
+  await expect(page.getByLabel("网站或 RSS / Atom URL")).toBeVisible();
+  await expect(page.getByRole("button", { name: "只看异常" })).toBeVisible();
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(4);
+});
+
 test("mobile unread debt control can cancel and confirm clearing without overflow", async ({
   page
 }) => {
