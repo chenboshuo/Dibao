@@ -184,6 +184,12 @@ describe("db package", () => {
         "001"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(false);
+      db.prepare(
+        `
+          insert into auth_credentials (id, password_hash, password_algo, created_at, updated_at)
+          values ('single_user', 'scrypt:v1:old', 'scrypt:v1', 1000, 1000)
+        `
+      ).run();
 
       expect(runMigrations(db, loadDefaultMigrations(), () => 2000).map((migration) => migration.version)).toEqual([
         "002",
@@ -198,9 +204,14 @@ describe("db package", () => {
         "012",
         "013",
         "014",
-        "015"
+        "015",
+        "016"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
+      expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
+      expect(db.prepare("select username from auth_credentials where id = ?").get("single_user")).toEqual({
+        username: null
+      });
       expect(hasColumn(db, "feeds", "full_content_mode")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
       expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
@@ -598,7 +609,8 @@ describe("db package", () => {
         "012",
         "013",
         "014",
-        "015"
+        "015",
+        "016"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -615,6 +627,7 @@ describe("db package", () => {
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
       expect(hasTableOrView(db, "reader_command_events")).toBe(true);
+      expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
     } finally {
       db.close();
     }
@@ -1718,6 +1731,7 @@ describe("db package", () => {
       expect(credentials.hasCredential()).toBe(false);
       credentials.createCredential({
         id: "single_user",
+        username: "Pls",
         passwordHash: "scrypt:v1:hash",
         passwordAlgo: "scrypt:v1",
         now: 1000
@@ -1725,6 +1739,7 @@ describe("db package", () => {
       expect(credentials.hasCredential()).toBe(true);
       expect(credentials.findCredential()).toMatchObject({
         id: "single_user",
+        username: "Pls",
         passwordHash: "scrypt:v1:hash",
         passwordAlgo: "scrypt:v1",
         createdAt: 1000,

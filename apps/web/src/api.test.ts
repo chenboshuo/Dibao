@@ -42,8 +42,9 @@ describe("web API client", () => {
       setupCompleted: true,
       authenticated: false
     });
-    await api.setupAuth("correct horse battery");
-    await api.login("correct horse battery");
+    await api.setupAuth("Pls", "correct horse battery");
+    await api.login("Pls", "correct horse battery");
+    await api.changePassword("correct horse battery", "new correct horse battery");
     await api.logout();
 
     expect(calls).toEqual([
@@ -58,6 +59,7 @@ describe("web API client", () => {
         method: "POST",
         credentials: "same-origin",
         body: {
+          username: "Pls",
           password: "correct horse battery"
         }
       },
@@ -66,7 +68,17 @@ describe("web API client", () => {
         method: "POST",
         credentials: "same-origin",
         body: {
+          username: "Pls",
           password: "correct horse battery"
+        }
+      },
+      {
+        path: "/api/auth/password",
+        method: "POST",
+        credentials: "same-origin",
+        body: {
+          currentPassword: "correct horse battery",
+          newPassword: "new correct horse battery"
         }
       },
       {

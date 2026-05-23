@@ -201,8 +201,14 @@ type FeedFolderParams = {
   id: string;
 };
 
-type PasswordBody = {
+type AuthCredentialBody = {
+  username?: unknown;
   password?: unknown;
+};
+
+type ChangePasswordBody = {
+  currentPassword?: unknown;
+  newPassword?: unknown;
 };
 
 type FeedParams = {
@@ -833,14 +839,14 @@ export function buildServer(options: BuildServerOptions = {}) {
     data: authService.getSessionStatus(readSessionCookie(request.headers.cookie))
   }));
 
-  app.post<{ Body: PasswordBody }>("/api/auth/setup", async (request, reply) => {
-    const parsed = parsePasswordBody(request.body);
+  app.post<{ Body: AuthCredentialBody }>("/api/auth/setup", async (request, reply) => {
+    const parsed = parseAuthCredentialBody(request.body);
     if (!parsed.ok) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
 
     try {
-      const session = await authService.setup(parsed.password, requestMeta(request));
+      const session = await authService.setup(parsed.username, parsed.password, requestMeta(request));
       reply.header(
         "set-cookie",
         serializeSessionCookie(session.token, session.expiresAt, cookieOptions)
@@ -855,14 +861,14 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   });
 
-  app.post<{ Body: PasswordBody }>("/api/auth/login", async (request, reply) => {
-    const parsed = parsePasswordBody(request.body);
+  app.post<{ Body: AuthCredentialBody }>("/api/auth/login", async (request, reply) => {
+    const parsed = parseAuthCredentialBody(request.body);
     if (!parsed.ok) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
 
     try {
-      const session = await authService.login(parsed.password, requestMeta(request));
+      const session = await authService.login(parsed.username, parsed.password, requestMeta(request));
       reply.header(
         "set-cookie",
         serializeSessionCookie(session.token, session.expiresAt, cookieOptions)
@@ -885,6 +891,24 @@ export function buildServer(options: BuildServerOptions = {}) {
         ok: true
       }
     };
+  });
+
+  app.post<{ Body: ChangePasswordBody }>("/api/auth/password", async (request, reply) => {
+    const parsed = parseChangePasswordBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    try {
+      await authService.changePassword(parsed.currentPassword, parsed.newPassword);
+      return {
+        data: {
+          ok: true
+        }
+      };
+    } catch (error) {
+      return sendAuthError(reply, error);
+    }
   });
 
   app.get("/api/setup/status", async () => ({
@@ -3861,11 +3885,19 @@ function parseDiscoverFeedBody(body: DiscoverFeedBody | undefined):
   };
 }
 
-function parsePasswordBody(body: PasswordBody | undefined):
-  | { ok: true; password: string }
+function parseAuthCredentialBody(body: AuthCredentialBody | undefined):
+  | { ok: true; username: string; password: string }
   | { ok: false; message: string; details?: unknown } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, message: "request body must be an object" };
+  }
+
+  if (typeof body.username !== "string" || body.username.trim().length === 0) {
+    return {
+      ok: false,
+      message: "username is required",
+      details: { field: "username" }
+    };
   }
 
   if (typeof body.password !== "string" || body.password.length === 0) {
@@ -3878,7 +3910,38 @@ function parsePasswordBody(body: PasswordBody | undefined):
 
   return {
     ok: true,
+    username: body.username,
     password: body.password
+  };
+}
+
+function parseChangePasswordBody(body: ChangePasswordBody | undefined):
+  | { ok: true; currentPassword: string; newPassword: string }
+  | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+
+  if (typeof body.currentPassword !== "string" || body.currentPassword.length === 0) {
+    return {
+      ok: false,
+      message: "currentPassword is required",
+      details: { field: "currentPassword" }
+    };
+  }
+
+  if (typeof body.newPassword !== "string" || body.newPassword.length === 0) {
+    return {
+      ok: false,
+      message: "newPassword is required",
+      details: { field: "newPassword" }
+    };
+  }
+
+  return {
+    ok: true,
+    currentPassword: body.currentPassword,
+    newPassword: body.newPassword
   };
 }
 

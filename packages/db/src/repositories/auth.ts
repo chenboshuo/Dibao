@@ -8,6 +8,7 @@ import type {
 
 type AuthCredentialDbRow = {
   id: string;
+  username: string | null;
   passwordHash: string;
   passwordAlgo: string;
   createdAt: number;
@@ -27,7 +28,9 @@ type SessionDbRow = {
 export interface AuthCredentialRepository {
   createCredential(input: CreateAuthCredentialInput): AuthCredentialRow;
   findCredential(): AuthCredentialRow | null;
+  findCredentialByUsername(username: string): AuthCredentialRow | null;
   hasCredential(): boolean;
+  updatePasswordHash(id: string, passwordHash: string, passwordAlgo: string, now?: number): void;
 }
 
 export interface SessionRepository {
@@ -49,15 +52,16 @@ export class SqliteAuthCredentialRepository implements AuthCredentialRepository 
         `
           insert into auth_credentials (
             id,
+            username,
             password_hash,
             password_algo,
             created_at,
             updated_at
           )
-          values (?, ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?)
         `
       )
-      .run(input.id, input.passwordHash, input.passwordAlgo, now, now);
+      .run(input.id, input.username, input.passwordHash, input.passwordAlgo, now, now);
 
     const row = this.findCredential();
     if (!row) {
@@ -80,12 +84,40 @@ export class SqliteAuthCredentialRepository implements AuthCredentialRepository 
     return row ? mapCredential(row) : null;
   }
 
+  findCredentialByUsername(username: string): AuthCredentialRow | null {
+    const row = this.db
+      .prepare(`${baseCredentialSelect()} where username = ? limit 1`)
+      .get(username) as AuthCredentialDbRow | undefined;
+
+    return row ? mapCredential(row) : null;
+  }
+
   hasCredential(): boolean {
     const row = this.db
       .prepare("select 1 as found from auth_credentials limit 1")
       .get() as { found: 1 } | undefined;
 
     return Boolean(row);
+  }
+
+  updatePasswordHash(
+    id: string,
+    passwordHash: string,
+    passwordAlgo: string,
+    now = Date.now()
+  ): void {
+    this.db
+      .prepare(
+        `
+          update auth_credentials
+          set
+            password_hash = ?,
+            password_algo = ?,
+            updated_at = ?
+          where id = ?
+        `
+      )
+      .run(passwordHash, passwordAlgo, now, id);
   }
 }
 
@@ -152,6 +184,7 @@ function baseCredentialSelect(): string {
   return `
     select
       id,
+      username,
       password_hash as passwordHash,
       password_algo as passwordAlgo,
       created_at as createdAt,

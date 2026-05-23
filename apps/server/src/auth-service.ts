@@ -14,6 +14,8 @@ export const SCRYPT_SALT_BYTES = 32;
 export const SCRYPT_KEYLEN = 64;
 export const PASSWORD_MIN_LENGTH = 8;
 export const PASSWORD_MAX_LENGTH = 1024;
+export const USERNAME_MIN_LENGTH = 1;
+export const USERNAME_MAX_LENGTH = 128;
 export const SESSION_TOKEN_BYTES = 32;
 export const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -58,7 +60,13 @@ export class AuthService {
     this.now = options.now ?? Date.now;
   }
 
-  async setup(password: string, meta: AuthRequestMeta = {}): Promise<AuthSessionResult> {
+  async setup(
+    username: string,
+    password: string,
+    meta: AuthRequestMeta = {}
+  ): Promise<AuthSessionResult> {
+    const normalizedUsername = normalizeUsername(username);
+    validateUsername(normalizedUsername);
     validatePassword(password);
 
     if (this.options.credentials.hasCredential()) {
@@ -69,6 +77,7 @@ export class AuthService {
     const passwordHash = await hashPassword(password);
     this.options.credentials.createCredential({
       id: AUTH_CREDENTIAL_ID,
+      username: normalizedUsername,
       passwordHash,
       passwordAlgo: PASSWORD_ALGO,
       now
@@ -78,17 +87,26 @@ export class AuthService {
     return this.createSession(meta, now);
   }
 
-  async login(password: string, meta: AuthRequestMeta = {}): Promise<AuthSessionResult> {
+  async login(
+    username: string,
+    password: string,
+    meta: AuthRequestMeta = {}
+  ): Promise<AuthSessionResult> {
+    const normalizedUsername = normalizeUsername(username);
+    validateUsernameLengthForLogin(normalizedUsername);
     validatePasswordLengthForLogin(password);
 
-    const credential = this.options.credentials.findCredential();
+    const credential = this.options.credentials.findCredentialByUsername(normalizedUsername);
     if (!credential) {
-      throw new AuthServiceError(409, "CONFLICT", "Setup has not been completed");
+      if (!this.options.credentials.hasCredential()) {
+        throw new AuthServiceError(409, "CONFLICT", "Setup has not been completed");
+      }
+      throw new AuthServiceError(401, "UNAUTHORIZED", "Invalid username or password");
     }
 
     const ok = await verifyPassword(password, credential.passwordHash);
     if (!ok) {
-      throw new AuthServiceError(401, "UNAUTHORIZED", "Invalid password");
+      throw new AuthServiceError(401, "UNAUTHORIZED", "Invalid username or password");
     }
 
     return this.createSession(meta, this.now());
@@ -130,6 +148,28 @@ export class AuthService {
     }
 
     this.options.sessions.deleteByHash(hashSessionToken(token));
+  }
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    validatePasswordLengthForLogin(currentPassword);
+    validatePassword(newPassword);
+
+    const credential = this.options.credentials.findCredential();
+    if (!credential) {
+      throw new AuthServiceError(409, "CONFLICT", "Setup has not been completed");
+    }
+
+    const ok = await verifyPassword(currentPassword, credential.passwordHash);
+    if (!ok) {
+      throw new AuthServiceError(401, "UNAUTHORIZED", "Invalid current password");
+    }
+
+    this.options.credentials.updatePasswordHash(
+      credential.id,
+      await hashPassword(newPassword),
+      PASSWORD_ALGO,
+      this.now()
+    );
   }
 
   deleteExpiredSessions(): void {
@@ -230,6 +270,36 @@ function validatePassword(password: string): void {
     throw new AuthServiceError(400, "VALIDATION_ERROR", "Password is too long", {
       field: "password",
       maxLength: PASSWORD_MAX_LENGTH
+    });
+  }
+}
+
+function normalizeUsername(username: string): string {
+  return username.trim();
+}
+
+function validateUsername(username: string): void {
+  if (username.length < USERNAME_MIN_LENGTH) {
+    throw new AuthServiceError(400, "VALIDATION_ERROR", "Username is required", {
+      field: "username",
+      minLength: USERNAME_MIN_LENGTH
+    });
+  }
+
+  validateUsernameLengthForLogin(username);
+
+  if (/[\u0000-\u001f\u007f]/u.test(username)) {
+    throw new AuthServiceError(400, "VALIDATION_ERROR", "Username cannot contain control characters", {
+      field: "username"
+    });
+  }
+}
+
+function validateUsernameLengthForLogin(username: string): void {
+  if (username.length > USERNAME_MAX_LENGTH) {
+    throw new AuthServiceError(400, "VALIDATION_ERROR", "Username is too long", {
+      field: "username",
+      maxLength: USERNAME_MAX_LENGTH
     });
   }
 }

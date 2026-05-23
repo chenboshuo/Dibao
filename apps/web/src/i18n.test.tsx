@@ -219,7 +219,8 @@ describe("web i18n", () => {
       </DibaoI18nProvider>
     );
 
-    expect(setupHtml).toContain("设置访问密码");
+    expect(setupHtml).toContain("设置用户名和访问密码");
+    expect(setupHtml).toContain("用户名");
     expect(setupHtml).toContain("完成设置");
     expect(loginHtml).toContain("Log in to Dibao");
     expect(loginHtml).toContain("Invalid password");
@@ -938,6 +939,7 @@ describe("web i18n", () => {
           onActivateEmbeddingProvider={() => Promise.resolve()}
           onBackfillEmbeddingIndex={() => Promise.resolve()}
           onDeleteEmbeddingProvider={() => Promise.resolve()}
+          onChangePassword={() => Promise.resolve()}
           onOpenAlgorithmTransparency={() => undefined}
           onPreviewSettings={() => undefined}
           onRebuildEmbeddingIndex={() => Promise.resolve()}
@@ -952,6 +954,8 @@ describe("web i18n", () => {
     expect(html).toContain("设置");
     expect(html).toContain("界面语言");
     expect(html).toContain("首页默认打开");
+    expect(html).toContain("账户安全");
+    expect(html).toContain("修改密码");
     expect(html).toContain("查看算法透明说明");
     expect(html).toContain("稍后读中的文章读完后，自动移出稍后读");
     expect(html).toContain("type=\"range\"");
@@ -1044,6 +1048,7 @@ describe("web i18n", () => {
           onActivateEmbeddingProvider={() => Promise.resolve()}
           onBackfillEmbeddingIndex={() => Promise.resolve()}
           onDeleteEmbeddingProvider={() => Promise.resolve()}
+          onChangePassword={() => Promise.resolve()}
           onOpenAlgorithmTransparency={() => undefined}
           onPreviewSettings={() => undefined}
           onRebuildEmbeddingIndex={() => Promise.resolve()}

@@ -154,6 +154,7 @@ export type UpdateFeedFolderInput = {
 
 export type AuthCredentialRow = {
   id: string;
+  username: string | null;
   passwordHash: string;
   passwordAlgo: string;
   createdAt: number;
@@ -162,6 +163,7 @@ export type AuthCredentialRow = {
 
 export type CreateAuthCredentialInput = {
   id: string;
+  username: string;
   passwordHash: string;
   passwordAlgo: string;
   now?: number;

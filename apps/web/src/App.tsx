@@ -1233,7 +1233,12 @@ export function App() {
     t.errors.api
   ]);
 
-  async function handleAuthSubmit(mode: AuthMode, password: string) {
+  async function handleAuthSubmit(mode: AuthMode, username: string, password: string) {
+    if (!username.trim()) {
+      setAuthError(t.auth.usernameRequired);
+      return;
+    }
+
     if (!password.trim()) {
       setAuthError(t.auth.passwordRequired);
       return;
@@ -1244,11 +1249,11 @@ export function App() {
 
     try {
       if (mode === "setup") {
-        await dibaoApi.setupAuth(password);
+        await dibaoApi.setupAuth(username, password);
         resetReaderState();
         setAppStage({ type: "setup-sources" });
       } else {
-        await dibaoApi.login(password);
+        await dibaoApi.login(username, password);
         setAppStage({ type: "setup-status-loading" });
       }
     } catch (error) {
@@ -1592,6 +1597,10 @@ export function App() {
     } finally {
       setIsSavingSettings(false);
     }
+  }
+
+  async function handleChangePassword(currentPassword: string, newPassword: string) {
+    await dibaoApi.changePassword(currentPassword, newPassword);
   }
 
   async function handleSaveEmbeddingProvider(
@@ -2446,6 +2455,7 @@ export function App() {
             onBackfillEmbeddingIndex={handleBackfillEmbeddingIndex}
             onActivateEmbeddingProvider={handleActivateEmbeddingProvider}
             onDeleteEmbeddingProvider={handleDeleteEmbeddingProvider}
+            onChangePassword={handleChangePassword}
             onPreviewSettings={handlePreviewSettings}
             onRebuildEmbeddingIndex={handleRebuildEmbeddingIndex}
             onOpenAlgorithmTransparency={() => navigateToAppPage({ type: "algorithm-transparency" })}
@@ -2746,9 +2756,10 @@ export function AuthGatePanel(props: {
   error?: string | null;
   isSubmitting: boolean;
   mode: AuthMode | "loading";
-  onSubmit?: (mode: AuthMode, password: string) => void;
+  onSubmit?: (mode: AuthMode, username: string, password: string) => void;
 }) {
   const { t } = useI18n();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
   if (props.mode === "loading") {
@@ -2772,7 +2783,7 @@ export function AuthGatePanel(props: {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    props.onSubmit?.(props.mode as AuthMode, password);
+    props.onSubmit?.(props.mode as AuthMode, username, password);
   }
 
   return (
@@ -2791,6 +2802,15 @@ export function AuthGatePanel(props: {
       </div>
 
       <form className={styles.authForm} onSubmit={handleSubmit}>
+        <label htmlFor="auth-username">{t.auth.usernameLabel}</label>
+        <input
+          autoComplete="username"
+          id="auth-username"
+          onChange={(event) => setUsername(event.target.value)}
+          placeholder={t.auth.usernamePlaceholder}
+          type="text"
+          value={username}
+        />
         <label htmlFor="auth-password">{t.auth.passwordLabel}</label>
         <input
           autoComplete={props.mode === "setup" ? "new-password" : "current-password"}
@@ -3203,6 +3223,7 @@ export function SettingsWorkspace(props: {
   onBackfillEmbeddingIndex: (indexId: string) => Promise<void>;
   onDeleteEmbeddingProvider: (providerId: string) => Promise<void>;
   onOpenAlgorithmTransparency: () => void;
+  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onPreviewSettings: (settings: AppSettings) => void;
   onRebuildEmbeddingIndex: (indexId: string) => Promise<void>;
   onSaveSettings: (input: UpdateSettingsInput) => Promise<void>;
@@ -3226,6 +3247,14 @@ export function SettingsWorkspace(props: {
   const [localError, setLocalError] = useState<string | null>(null);
   const [providerLocalError, setProviderLocalError] = useState<string | null>(null);
   const [usageWindow, setUsageWindow] = useState<"24h" | "7d" | "30d">("24h");
+  const [passwordDraft, setPasswordDraft] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  });
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordNotice, setPasswordNotice] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   useEffect(() => {
     setDraft(draftForSettings(props.settings));
@@ -3301,6 +3330,42 @@ export function SettingsWorkspace(props: {
     }
   }
 
+  async function handleChangePassword() {
+    if (!passwordDraft.currentPassword.trim()) {
+      setPasswordError(t.settings.sections.account.errors.currentRequired);
+      return;
+    }
+    if (!passwordDraft.newPassword.trim()) {
+      setPasswordError(t.settings.sections.account.errors.newRequired);
+      return;
+    }
+    if (!passwordDraft.confirmPassword.trim()) {
+      setPasswordError(t.settings.sections.account.errors.confirmRequired);
+      return;
+    }
+    if (passwordDraft.newPassword !== passwordDraft.confirmPassword) {
+      setPasswordError(t.settings.sections.account.errors.mismatch);
+      return;
+    }
+
+    setIsChangingPassword(true);
+    setPasswordError(null);
+    setPasswordNotice(null);
+    try {
+      await props.onChangePassword(passwordDraft.currentPassword, passwordDraft.newPassword);
+      setPasswordDraft({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: ""
+      });
+      setPasswordNotice(t.settings.sections.account.saved);
+    } catch (error) {
+      setPasswordError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsChangingPassword(false);
+    }
+  }
+
   const selectedProvider =
     providerDraft.providerId === newEmbeddingProviderId
       ? null
@@ -3352,13 +3417,17 @@ export function SettingsWorkspace(props: {
               onChange={(event) =>
                 applyDraft({
                   ...draft,
-                  locale: event.target.value === "en-US" ? "en-US" : "zh-CN"
+                  locale:
+                    event.target.value === "en-US" || event.target.value === "ja-JP"
+                      ? event.target.value
+                      : "zh-CN"
                 })
               }
               value={draft.locale}
             >
               <option value="zh-CN">{t.settings.sections.language.zhCN}</option>
               <option value="en-US">{t.settings.sections.language.enUS}</option>
+              <option value="ja-JP">{t.settings.sections.language.jaJP}</option>
             </select>
           </label>
           <label className={styles.settingsField} htmlFor="settings-default-home-view">
@@ -3380,6 +3449,72 @@ export function SettingsWorkspace(props: {
               <option value="latest">{t.settings.sections.language.defaultHomeViewLatest}</option>
             </select>
           </label>
+        </section>
+
+        <section className={classNames(styles.settingsSection, "settings-card")} aria-labelledby="settings-account-title">
+          <div>
+            <h3 id="settings-account-title">{t.settings.sections.account.title}</h3>
+            <p>{t.settings.sections.account.body}</p>
+          </div>
+          <div className={styles.settingsGrid}>
+            <label className={styles.settingsField} htmlFor="settings-current-password">
+              <span>{t.settings.sections.account.currentPasswordLabel}</span>
+              <input
+                autoComplete="current-password"
+                id="settings-current-password"
+                onChange={(event) => {
+                  setPasswordDraft({ ...passwordDraft, currentPassword: event.target.value });
+                  setPasswordError(null);
+                  setPasswordNotice(null);
+                }}
+                placeholder={t.settings.sections.account.currentPasswordPlaceholder}
+                type="password"
+                value={passwordDraft.currentPassword}
+              />
+            </label>
+            <label className={styles.settingsField} htmlFor="settings-new-password">
+              <span>{t.settings.sections.account.newPasswordLabel}</span>
+              <input
+                autoComplete="new-password"
+                id="settings-new-password"
+                onChange={(event) => {
+                  setPasswordDraft({ ...passwordDraft, newPassword: event.target.value });
+                  setPasswordError(null);
+                  setPasswordNotice(null);
+                }}
+                placeholder={t.settings.sections.account.newPasswordPlaceholder}
+                type="password"
+                value={passwordDraft.newPassword}
+              />
+            </label>
+            <label className={styles.settingsField} htmlFor="settings-confirm-password">
+              <span>{t.settings.sections.account.confirmPasswordLabel}</span>
+              <input
+                autoComplete="new-password"
+                id="settings-confirm-password"
+                onChange={(event) => {
+                  setPasswordDraft({ ...passwordDraft, confirmPassword: event.target.value });
+                  setPasswordError(null);
+                  setPasswordNotice(null);
+                }}
+                placeholder={t.settings.sections.account.confirmPasswordPlaceholder}
+                type="password"
+                value={passwordDraft.confirmPassword}
+              />
+            </label>
+          </div>
+          <button
+            className={styles.secondaryButton}
+            disabled={isChangingPassword}
+            onClick={() => void handleChangePassword()}
+            type="button"
+          >
+            {isChangingPassword
+              ? t.settings.sections.account.submitting
+              : t.settings.sections.account.submit}
+          </button>
+          {passwordNotice ? <p className={styles.settingsNotice}>{passwordNotice}</p> : null}
+          {passwordError ? <p className={styles.errorText}>{passwordError}</p> : null}
         </section>
 
         <section className={classNames(styles.settingsSection, "settings-card")} aria-labelledby="settings-behavior-title">

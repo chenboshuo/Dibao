@@ -45,6 +45,9 @@ const readerCommandEventsPath = fileURLToPath(
 const feedFullContentModePath = fileURLToPath(
   new URL("../migrations/015_feed_full_content_mode.sql", import.meta.url)
 );
+const authUsernamePath = fileURLToPath(
+  new URL("../migrations/016_auth_username.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -117,6 +120,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "015",
       name: "feed_full_content_mode",
       sql: readFileSync(feedFullContentModePath, "utf8")
+    },
+    {
+      version: "016",
+      name: "auth_username",
+      sql: readFileSync(authUsernamePath, "utf8")
     }
   ];
 }

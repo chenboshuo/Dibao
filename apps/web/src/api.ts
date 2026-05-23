@@ -297,7 +297,7 @@ export type SetupStatus = {
   firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
 };
 
-export type SettingsLocale = "zh-CN" | "en-US";
+export type SettingsLocale = "zh-CN" | "en-US" | "ja-JP";
 export type DefaultHomeView = "recommended" | "latest";
 
 export type ReaderSettings = {
@@ -943,20 +943,20 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       return (await request<AuthSession>("/api/auth/session")).data;
     },
 
-    async setupAuth(password: string): Promise<AuthOkResponse> {
+    async setupAuth(username: string, password: string): Promise<AuthOkResponse> {
       return (
         await request<AuthOkResponse>("/api/auth/setup", {
           method: "POST",
-          body: JSON.stringify({ password })
+          body: JSON.stringify({ username, password })
         })
       ).data;
     },
 
-    async login(password: string): Promise<AuthOkResponse> {
+    async login(username: string, password: string): Promise<AuthOkResponse> {
       return (
         await request<AuthOkResponse>("/api/auth/login", {
           method: "POST",
-          body: JSON.stringify({ password })
+          body: JSON.stringify({ username, password })
         })
       ).data;
     },
@@ -965,6 +965,15 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       return (
         await request<AuthOkResponse>("/api/auth/logout", {
           method: "POST"
+        })
+      ).data;
+    },
+
+    async changePassword(currentPassword: string, newPassword: string): Promise<AuthOkResponse> {
+      return (
+        await request<AuthOkResponse>("/api/auth/password", {
+          method: "POST",
+          body: JSON.stringify({ currentPassword, newPassword })
         })
       ).data;
     },

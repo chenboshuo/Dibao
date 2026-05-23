@@ -15,7 +15,7 @@ export const BEHAVIOR_SETTINGS_KEY = "behavior.settings";
 export const RECOMMENDATION_SETTINGS_KEY = "recommendation.settings";
 export const RECOMMENDATION_MAINTENANCE_SETTINGS_KEY = "recommendation.maintenanceSettings";
 
-export const supportedSettingsLocales = ["zh-CN", "en-US"] as const;
+export const supportedSettingsLocales = ["zh-CN", "en-US", "ja-JP"] as const;
 export type SettingsLocale = (typeof supportedSettingsLocales)[number];
 export const supportedDefaultHomeViews = ["recommended", "latest"] as const;
 export type DefaultHomeView = (typeof supportedDefaultHomeViews)[number];
@@ -648,7 +648,7 @@ function parseUiPatch(value: unknown): SettingsPatch["ui"] {
 
   if (Object.hasOwn(input, "locale")) {
     if (!isSettingsLocale(input.locale)) {
-      throw validationError("ui.locale must be zh-CN or en-US", {
+      throw validationError("ui.locale must be zh-CN, en-US, or ja-JP", {
         field: "ui.locale",
         allowed: supportedSettingsLocales
       });

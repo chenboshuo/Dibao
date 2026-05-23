@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 export const defaultLocale = "zh-CN";
-export const supportedLocales = ["zh-CN", "en-US"] as const;
+export const supportedLocales = ["zh-CN", "en-US", "ja-JP"] as const;
 
 export type Locale = (typeof supportedLocales)[number];
 
@@ -87,10 +87,12 @@ export const zhCN = {
   },
   auth: {
     loading: "正在检查登录状态",
-    setupTitle: "设置访问密码",
-    setupBody: "这是单用户自托管实例。设置一个访问密码后即可进入阅读器。",
+    setupTitle: "设置用户名和访问密码",
+    setupBody: "这是单用户自托管实例。设置用户名和访问密码后即可进入阅读器。",
     loginTitle: "登录邸报",
-    loginBody: "输入访问密码继续。",
+    loginBody: "输入用户名和访问密码继续。",
+    usernameLabel: "用户名",
+    usernamePlaceholder: "输入用户名",
     passwordLabel: "访问密码",
     passwordPlaceholder: "至少 8 个字符",
     setupSubmit: "完成设置",
@@ -98,6 +100,7 @@ export const zhCN = {
     submitting: "处理中",
     logout: "退出",
     logoutTitle: "退出登录",
+    usernameRequired: "请输入用户名。",
     passwordRequired: "请输入访问密码。",
     errors: {
       session: "无法读取登录状态。",
@@ -312,9 +315,29 @@ export const zhCN = {
         localeLabel: "界面语言",
         zhCN: "简体中文",
         enUS: "English",
+        jaJP: "日本語",
         defaultHomeViewLabel: "首页默认打开",
         defaultHomeViewRecommended: "推荐",
         defaultHomeViewLatest: "最新"
+      },
+      account: {
+        title: "账户安全",
+        body: "修改当前访问密码。为了确认是本人操作，需要先输入当前密码。",
+        currentPasswordLabel: "当前密码",
+        newPasswordLabel: "新密码",
+        confirmPasswordLabel: "确认新密码",
+        currentPasswordPlaceholder: "输入当前访问密码",
+        newPasswordPlaceholder: "至少 8 个字符",
+        confirmPasswordPlaceholder: "再次输入新密码",
+        submit: "修改密码",
+        submitting: "修改中",
+        saved: "访问密码已更新。",
+        errors: {
+          currentRequired: "请输入当前密码。",
+          newRequired: "请输入新密码。",
+          confirmRequired: "请再次输入新密码。",
+          mismatch: "两次输入的新密码不一致。"
+        }
       },
       behavior: {
         title: "行为记录",
@@ -1231,10 +1254,12 @@ export const enUS = {
   },
   auth: {
     loading: "Checking session",
-    setupTitle: "Set access password",
-    setupBody: "This is a single-user self-hosted instance. Set an access password to enter the reader.",
+    setupTitle: "Set username and access password",
+    setupBody: "This is a single-user self-hosted instance. Set a username and access password to enter the reader.",
     loginTitle: "Log in to Dibao",
-    loginBody: "Enter the access password to continue.",
+    loginBody: "Enter your username and access password to continue.",
+    usernameLabel: "Username",
+    usernamePlaceholder: "Enter username",
     passwordLabel: "Access password",
     passwordPlaceholder: "At least 8 characters",
     setupSubmit: "Finish setup",
@@ -1242,6 +1267,7 @@ export const enUS = {
     submitting: "Working",
     logout: "Log out",
     logoutTitle: "Log out",
+    usernameRequired: "Enter the username.",
     passwordRequired: "Enter the access password.",
     errors: {
       session: "Unable to read session state.",
@@ -1457,9 +1483,29 @@ export const enUS = {
         localeLabel: "Interface language",
         zhCN: "简体中文",
         enUS: "English",
+        jaJP: "日本語",
         defaultHomeViewLabel: "Default home view",
         defaultHomeViewRecommended: "Recommended",
         defaultHomeViewLatest: "Latest"
+      },
+      account: {
+        title: "Account security",
+        body: "Change the current access password. Enter the current password first to confirm it is you.",
+        currentPasswordLabel: "Current password",
+        newPasswordLabel: "New password",
+        confirmPasswordLabel: "Confirm new password",
+        currentPasswordPlaceholder: "Enter current access password",
+        newPasswordPlaceholder: "At least 8 characters",
+        confirmPasswordPlaceholder: "Enter the new password again",
+        submit: "Change password",
+        submitting: "Changing",
+        saved: "Access password updated.",
+        errors: {
+          currentRequired: "Enter the current password.",
+          newRequired: "Enter the new password.",
+          confirmRequired: "Enter the new password again.",
+          mismatch: "The new passwords do not match."
+        }
       },
       behavior: {
         title: "Behavior tracking",
@@ -2278,9 +2324,1161 @@ export const enUS = {
   }
 } as const satisfies Dictionary;
 
+export const jaJP = {
+  common: {
+    brandMark: "邸",
+    brandName: "邸報",
+    brandSubtitle: "Dibao",
+    close: "閉じる",
+    version: (version: string) => `v${version}`
+  },
+  navigation: {
+    ariaLabel: "メインナビゲーション",
+    utilityMenuLabel: "その他",
+    items: {
+      latest: "最新",
+      recommended: "おすすめ",
+      favorites: "お気に入り",
+      read_later: "あとで読む",
+      search: "検索",
+      feeds: "フィード",
+      settings: "設定"
+    }
+  },
+  shell: {
+    kicker: "RSS Ingestion",
+    pageTitle: "最新記事",
+    pageTitles: {
+      latest: "最新記事",
+      recommended: "おすすめ記事",
+      favorites: "お気に入り記事",
+      read_later: "あとで読む"
+    },
+    loadingArticles: "記事を読み込んでいます",
+    latestView: "最新ビュー",
+    viewStatus: {
+      latest: "最新ビュー",
+      recommended: "おすすめビュー",
+      favorites: "お気に入りビュー",
+      read_later: "あとで読むビュー"
+    }
+  },
+  search: {
+    pageTitle: "検索",
+    title: "記事を検索",
+    body: "ローカルの記事ライブラリから、タイトル、要約、本文を検索します。",
+    inputLabel: "キーワード",
+    inputPlaceholder: "タイトル、要約、本文を検索",
+    submit: "検索",
+    submitting: "検索中",
+    sortLabel: "並び順",
+    sorts: {
+      relevance: "関連度",
+      recommended: "おすすめ優先",
+      latest: "新しい順"
+    },
+    recommendedSortHint: "検索結果の中だけを、あなたのおすすめモデルで並び替えます。",
+    stateLabel: "状態",
+    advancedSearch: "詳細検索",
+    hideAdvancedSearch: "詳細検索を閉じる",
+    sourceLabel: "ソース",
+    folderLabel: "フォルダー",
+    feedLabel: "フィード",
+    allSources: "すべてのソース",
+    allFolders: "すべてのフォルダー",
+    allFeeds: "すべてのフィード",
+    dateFromLabel: "開始日",
+    dateToLabel: "終了日",
+    states: {
+      all: "すべて",
+      unread: "未読",
+      read: "既読",
+      favorites: "お気に入り",
+      read_later: "あとで読む"
+    },
+    emptyTitle: "記事が見つかりません",
+    emptyBody: "別のキーワードを試すか、ソース、状態、期間の条件を広げてください。",
+    initialTitle: "RSS 記事ライブラリを検索",
+    initialBody: "キーワードを入力すると、タイトル、要約、本文から検索できます。",
+    resultsCount: (count: number) => `${count} 件の結果`,
+    loadMore: "さらに読み込む"
+  },
+  auth: {
+    loading: "ログイン状態を確認しています",
+    setupTitle: "ユーザー名とアクセスパスワードを設定",
+    setupBody: "これは単一ユーザー向けのセルフホスト環境です。ユーザー名とアクセスパスワードを設定すると、リーダーを開けます。",
+    loginTitle: "邸報にログイン",
+    loginBody: "ユーザー名とアクセスパスワードを入力してください。",
+    usernameLabel: "ユーザー名",
+    usernamePlaceholder: "ユーザー名を入力",
+    passwordLabel: "アクセスパスワード",
+    passwordPlaceholder: "8 文字以上",
+    setupSubmit: "設定を完了",
+    loginSubmit: "ログイン",
+    submitting: "処理中",
+    logout: "ログアウト",
+    logoutTitle: "ログアウト",
+    usernameRequired: "ユーザー名を入力してください。",
+    passwordRequired: "アクセスパスワードを入力してください。",
+    errors: {
+      session: "ログイン状態を取得できませんでした。",
+      logout: "ログアウトに失敗しました。"
+    }
+  },
+  setup: {
+    kicker: "初期設定",
+    welcome: {
+      title: "邸報へようこそ",
+      body: "セルフホストできる個人用 RSS おすすめリーダーです。必要な設定を済ませてから、リーダーを開きます。",
+      start: "設定を始める"
+    },
+    sources: {
+      title: "フィードを追加",
+      body: "OPML ファイルをインポートするか、RSS / Atom フィードを手動で追加します。続行するには少なくとも 1 つのフィードが必要です。",
+      importOpml: "OPML ファイルをインポート",
+      addFeed: "フィードを追加",
+      noFeedsAfterImport: "インポートは完了しましたが、新しいフィードは作成されませんでした。OPML ファイルを確認するか、RSS / Atom URL を手動で追加してください。",
+      noFeedsAfterAdd: "フィードを作成できませんでした。もう一度お試しください。"
+    },
+    provider: {
+      title: "おすすめ機能",
+      body: "今は基本の並び替えを使用します。Embedding provider は後ほど設定できます。この手順では記事本文を外部サービスへ送信しません。",
+      currentTitle: "基本の並び替えを使用中",
+      currentBody: "読む、お気に入り、あとで読む、といった操作は引き続き利用でき、基本の並び替えにも反映されます。",
+      continue: "今は設定せずに進む"
+    }
+  },
+  feeds: {
+    kicker: "フィード",
+    title: "フィード",
+    inputLabel: "Web サイトまたは RSS / Atom URL",
+    inputPlaceholder: "https://example.com または https://example.com/feed.xml",
+    add: "追加",
+    adding: "追加中",
+    allFeeds: "すべてのフィード",
+    sourceCount: (count: number) => `${count} 件のソース`,
+    feedUrlRequired: "Web サイトまたは RSS / Atom URL を入力してください。",
+    successAt: (date: string) => `成功：${date}`,
+    nextRefreshAt: (date: string) => `次回取得：${date}`,
+    refresh: "更新",
+    refreshing: "…",
+    refreshAll: "すべて更新",
+    refreshingAll: "キューに追加中",
+    openSources: "ソース",
+    openSourcesLabel: "ソースを開く",
+    closeSources: "ソースを閉じる",
+    refreshTitle: (feedTitle: string) => `${feedTitle} を更新`
+  },
+  feedDiscovery: {
+    inputLabel: "Web サイトまたは RSS / Atom URL",
+    inputPlaceholder: "https://example.com または https://example.com/feed.xml",
+    check: "確認",
+    checking: "確認中",
+    candidatesTitle: "見つかったフィード",
+    noCandidatesTitle: "利用できるフィードが見つかりません",
+    noCandidatesBody: "RSS / Atom URL を直接入力するか、サイトがフィードを公開しているか確認してください。",
+    addCandidate: "このフィードを追加",
+    addingCandidate: "追加中",
+    duplicate: "購読済み",
+    invalid: "利用不可",
+    valid: "追加できます",
+    statuses: {
+      valid: "追加できます",
+      duplicate: "購読済み",
+      invalid: "利用不可"
+    },
+    recentItems: "最近の記事",
+    itemCount: (count: number) => `${count} 件の記事`,
+    warningsTitle: "メモ",
+    errors: {
+      urlRequired: "Web サイトまたは RSS / Atom URL を入力してください。",
+      discoverFailed: "フィードの確認に失敗しました。しばらくしてからもう一度お試しください。"
+    }
+  },
+  feedDiagnostics: {
+    title: "フィードの状態",
+    summary: (total: number, error: number, warning: number) =>
+      `${total} 件のフィード · ${error} 件のエラー · ${warning} 件は確認が必要`,
+    filters: {
+      all: "すべて",
+      unhealthy: "問題のみ",
+      disabled: "無効",
+      neverFetched: "成功履歴なし"
+    },
+    statuses: {
+      healthy: "正常",
+      never_fetched: "未取得",
+      due: "取得待ち",
+      stale: "長期間成功なし",
+      failing: "取得失敗",
+      disabled: "無効"
+    },
+    fields: {
+      lastFetchedAt: "最終取得",
+      lastSuccessAt: "最終成功",
+      nextRefreshAt: "次回取得",
+      lastError: "最新エラー"
+    },
+    messages: {
+      OK: "フィード取得は正常です。",
+      DISABLED: "このフィードは無効です。",
+      NEVER_FETCHED: "このフィードはまだ取得されていません。",
+      DUE: "このフィードは取得時刻を過ぎています。",
+      STALE: "7 日以上、取得に成功していません。",
+      FETCH_FAILED: "直近のフィード取得に失敗しました。"
+    },
+    retry: "再取得",
+    noIssues: "問題のあるフィードはありません。"
+  },
+  folders: {
+    title: "フォルダー",
+    feedCount: (count: number) => `${count} 件のフィード`
+  },
+  feedManagement: {
+    pageTitle: "フィード管理",
+    loading: "フィードを読み込んでいます",
+    status: (feedCount: number, folderCount: number) =>
+      `${feedCount} 件のフィード · ${folderCount} 件のフォルダー`,
+    na: "なし",
+    folders: {
+      kicker: "Folders",
+      title: "フォルダー",
+      newLabel: "新しいフォルダー",
+      newPlaceholder: "例：テクノロジー",
+      create: "作成",
+      emptyTitle: "フォルダーはまだありません",
+      emptyBody: "フォルダーを作成すると、フィードをまとめて整理できます。",
+      renameLabel: (title: string) => `${title} の名前を変更`,
+      confirmDelete: "削除を確認",
+      deleteHint: "フォルダーを削除してもフィードは削除されません。フィードは未分類へ移動します。"
+    },
+    operations: {
+      kicker: "Operations",
+      title: "インポート、エクスポート、更新"
+    },
+    feeds: {
+      kicker: "Feeds",
+      title: "フィード",
+      emptyTitle: "フィードはまだありません",
+      emptyBody: "リーダーのサイドバーから RSS / Atom フィードを追加するか、OPML をインポートしてください。",
+      ungrouped: "未分類",
+      enabled: "有効",
+      disabled: "無効",
+      weight: (value: number) => `重み ${value}`,
+      lastSuccess: (value: string) => `最終成功：${value}`,
+      nextRefresh: (value: string) => `次回取得：${value}`,
+      confirmDelete: "削除を確認",
+      deleteHint: "フィードを削除しても過去の記事は物理削除されませんが、記事一覧には表示されなくなります。"
+    },
+    editor: {
+      kicker: "Edit feed",
+      titleLabel: "タイトル",
+      feedUrlLabel: "Feed URL",
+      folderLabel: "フォルダー",
+      enabledLabel: "フィードを有効にする",
+      sourceWeightLabel: "ソースの重み",
+      lastFetchedAt: "最終取得",
+      lastSuccessAt: "最終成功",
+      nextRefreshAt: "次回取得",
+      lastError: "最新エラー",
+      emptyTitle: "フィードを選択",
+      emptyBody: "フィードを選択すると、タイトル、フォルダー、有効状態、ソースの重みを編集できます。"
+    },
+    fullContent: {
+      label: "本文ソース",
+      modes: {
+        feed_only: "Feed の内容を使用（既定）",
+        fetch_full_content: "Web 記事全文を取得"
+      },
+      feedOnlyHint: "全文配信の RSS では、多くの場合これが高速で安定しています。",
+      fetchHint:
+        "要約のみの RSS に向いています。失敗する場合があり、ペイウォールは回避しません。",
+      preview: "全文取得をプレビュー",
+      backfill: "現在の Feed 記事を取得",
+      backfilling: "取得中",
+      backfillConfirm:
+        "現在の RSS を再読み込みし、その RSS にまだ含まれている記事だけを対象に Web 全文を取得します。このフィードの全履歴は走査しません。",
+      stats: {
+        articlesSeen: "現在の RSS 記事数",
+        attempted: "試行",
+        succeeded: "成功",
+        failed: "失敗",
+        skipped: "スキップ",
+        changed: "内容変更",
+        limited: "50 件制限"
+      },
+      limited: "先頭 50 件に制限",
+      notLimited: "未実行"
+    },
+    actions: {
+      save: "保存",
+      saving: "保存中",
+      cancel: "キャンセル",
+      rename: "名前を変更",
+      delete: "削除"
+    },
+    errors: {
+      folderTitleRequired: "フォルダー名を入力してください。",
+      feedTitleRequired: "フィードのタイトルを入力してください。",
+      sourceWeight: "ソースの重みは -1 から 1 までの数値で入力してください。"
+    }
+  },
+  settings: {
+    pageTitle: "設定",
+    loading: "設定を読み込んでいます",
+    status: "設定は最新です",
+    sections: {
+      language: {
+        title: "言語",
+        body: "画面に表示する言語を選びます。保存した設定は再読み込み後も引き継がれます。",
+        localeLabel: "表示言語",
+        zhCN: "简体中文",
+        enUS: "English",
+        jaJP: "日本語",
+        defaultHomeViewLabel: "最初に開く画面",
+        defaultHomeViewRecommended: "おすすめ",
+        defaultHomeViewLatest: "最新"
+      },
+      account: {
+        title: "アカウントのセキュリティ",
+        body: "現在のアクセスパスワードを変更します。本人確認のため、先に現在のパスワードを入力してください。",
+        currentPasswordLabel: "現在のパスワード",
+        newPasswordLabel: "新しいパスワード",
+        confirmPasswordLabel: "新しいパスワードの確認",
+        currentPasswordPlaceholder: "現在のアクセスパスワードを入力",
+        newPasswordPlaceholder: "8 文字以上",
+        confirmPasswordPlaceholder: "新しいパスワードをもう一度入力",
+        submit: "パスワードを変更",
+        submitting: "変更中",
+        saved: "アクセスパスワードを更新しました。",
+        errors: {
+          currentRequired: "現在のパスワードを入力してください。",
+          newRequired: "新しいパスワードを入力してください。",
+          confirmRequired: "新しいパスワードをもう一度入力してください。",
+          mismatch: "新しいパスワードが一致しません。"
+        }
+      },
+      behavior: {
+        title: "行動の記録",
+        body: "記事一覧とあとで読むキューで、自動的に記録する閲覧行動を管理します。",
+        algorithmTransparencyLink: "アルゴリズムの透明性を見る",
+        markScrolledArticlesIgnored: "開かずに通過した記事を無視済みにし、未読から外す",
+        removeReadLaterOnReadComplete: "あとで読むの記事を読み終えたら、あとで読むから外す",
+        cocoonLevel: "パーソナライズ度",
+        cocoonLevelHint: "1 はより開かれた分散的な探索、10 はより個人に合わせた安定的で控えめな変化です。どのレベルでも購読フィード内だけで並び替え、重複排除と明示的な低評価を尊重します。"
+      },
+      reader: {
+        title: "読書",
+        body: "記事本文の読みやすさと密度を調整します。変更はすぐにリーダーへ反映されます。",
+        fontSize: "文字サイズ",
+        lineHeight: "行間",
+        paragraphGap: "段落間隔",
+        readerWidth: "本文幅"
+      },
+      retention: {
+        title: "記事の保持",
+        body: "保持期間を過ぎた記事はバックグラウンドで整理されます。0 を指定すると永続保持です。お気に入りとあとで読むは個別に保持できます。",
+        retentionDays: "保持日数",
+        keepFavorites: "お気に入り記事を保持",
+        keepReadLater: "あとで読む記事を保持",
+        enabled: "オン",
+        disabled: "オフ",
+        mappingHint: "API フィールド retention.retentionDays は storage key retention.articleDays に保存されます。"
+      },
+      provider: {
+        title: "インテリジェンス",
+        body: "OpenAI 互換、Gemini AI Studio、Ollama の embedding provider を設定します。有効な provider がない場合、邸報は基本の並び替えを使い続けます。",
+        loading: "インテリジェンス設定を読み込んでいます",
+        providerLabel: "Provider",
+        newProvider: "新しい embedding provider",
+        typeLabel: "種類",
+        openaiCompatible: "OpenAI 互換",
+        gemini: "Gemini AI Studio",
+        ollama: "Ollama",
+        nameLabel: "名前",
+        baseUrlLabel: "Base URL",
+        baseUrlPlaceholder: "https://api.example.com/v1",
+        geminiBaseUrlPlaceholder: "https://generativelanguage.googleapis.com/v1beta",
+        ollamaBaseUrlPlaceholder: "http://127.0.0.1:11434",
+        modelLabel: "モデル",
+        modelPlaceholder: "text-embedding-3-small",
+        geminiModelPlaceholder: "gemini-embedding-001",
+        ollamaModelPlaceholder: "nomic-embed-text",
+        dimensionLabel: "次元数",
+        textMaxCharsLabel: "テキスト切り出し長（文字）",
+        requestsPerMinuteLabel: "QPM（分あたり batch リクエスト）",
+        requestsPerDayLabel: "QPD（日あたり batch リクエスト）",
+        unlimitedPlaceholder: "空欄なら無制限",
+        apiKeyLabel: "API Key",
+        apiKeyPlaceholder: "エンドポイントに応じて任意で入力",
+        apiKeyRetainPlaceholder: "空欄なら保存済みのキーを保持",
+        ollamaApiKeyHint: "ローカルの Ollama API は通常 API key を必要としません。",
+        geminiApiKeyHint: "Gemini AI Studio は Gemini embedding API 呼び出し時に x-goog-api-key を使います。",
+        modelHint: "注意：モデル系列、次元数、テキスト切り出し長を変えると新しいベクトル空間が作成されます。既存のベクトルは再利用されず、新しい index の生成後に意味的なおすすめが回復します。",
+        textMaxCharsHint: "注意：テキスト切り出し長を変えると既存ベクトルと新しい方針が一致しなくなります。保存して現在の Provider にすると新しい active index が作成されるため、ベクトルの再生成または補完を行ってください。",
+        rateLimitHint: "QPM/QPD は batch リクエスト単位で数えます。QPM に達すると次の分まで待機し、QPD に達するとローカル日付の翌日まで停止します。空欄なら制限しません。",
+        activateHint: "保存だけではプロファイルを更新するだけです。「現在の Provider にする」を押した時だけ、embedding 生成、active index、おすすめで使う Provider が切り替わります。",
+        activeTitle: "現在の Provider",
+        activeEmptyTitle: "現在の Provider はありません",
+        activeBody: (name: string, model: string, dimension: number) =>
+          `${name} · ${model} / ${dimension}`,
+        activeEmptyBody: "邸報は基本の並び替えを使い続けます。まず provider プロファイルを保存し、それを現在の Provider にしてください。",
+        profileListLabel: "Provider プロファイル",
+        currentBadge: "現在",
+        profileBadge: "プロファイル",
+        qualityTierLabel: "品質レベル",
+        quality: {
+          basic: "基本",
+          recommended: "推奨",
+          bestQuality: "高品質"
+        },
+        enabledStatus: "有効",
+        disabledStatus: "無効",
+        disabled: "未設定",
+        lastTestSuccess: (value: string) => `接続テスト成功：${value}`,
+        lastTestFailed: (value: string) => `接続テスト失敗：${value}`,
+        lastTestUnknown: "接続テストはまだ実行されていません。",
+        save: "プロファイルを保存",
+        saving: "保存中",
+        activate: "現在の Provider にする",
+        activating: "切り替え中",
+        activeActionCurrent: "すでに現在の Provider です",
+        test: "接続をテスト",
+        testing: "テスト中",
+        delete: "削除",
+        deleting: "削除中",
+        deleteHint: "embedding index を持つ provider は削除できません。使わない場合は、別の互換 Provider に切り替えてください。",
+        indexesTitle: "Embedding indexes",
+        connectionStatusTitle: "接続テスト状態",
+        embeddingJobStatusTitle: "Embedding job 状態",
+        indexesBody: "Index には coverage、キュー状態、直近の失敗が表示されます。接続テストと embedding job の状態は別々に扱います。",
+        usageWindowLabel: "Embedding 使用量の期間",
+        usageWindows: {
+          "24h": "24H",
+          "7d": "7日",
+          "30d": "30日"
+        },
+        usage: (itemCount: number, requestCount: number, estimatedTokens: number) =>
+          `ローカル推定：${itemCount} inputs · ${requestCount} batch リクエスト · ${estimatedTokens} tokens`,
+        noIndexes: "現在の Provider にすると active index が作成されます。",
+        indexStatus: (model: string, status: string, count: number) =>
+          `${model} · ${status} · ${count} 件の embedding`,
+        coverage: (embeddingCount: number, candidateCount: number, ratio: string) =>
+          `${embeddingCount} / ${candidateCount} · ${ratio}`,
+        indexTotal: (count: number) => `Index 合計：${count} 件の embedding`,
+        coverageUnavailable: "Coverage は利用できません",
+        pendingJobs: (count: number) => `${count} 件待機中`,
+        failedJobs: (count: number) => `${count} 件失敗`,
+        lastFailedAt: (value: string) => `最終失敗：${value}`,
+        lastError: (value: string) => `エラー：${value}`,
+        noJobFailures: "embedding job の失敗はありません。",
+        rebuild: "ベクトル index を再構築",
+        rebuilding: "キューに追加済み",
+        backfill: "不足ベクトルを補完",
+        backfilling: "キューに追加済み",
+        notices: {
+          saved: "Embedding provider を保存しました。",
+          activated: "現在の embedding provider を切り替えました。",
+          tested: "接続テストに成功しました。",
+          deleted: "Embedding provider を削除しました。",
+          rebuildQueued: "Embedding index の再構築をキューに追加しました。",
+          backfillQueued: "Embedding backfill をキューに追加しました。"
+        },
+        errors: {
+          nameRequired: "Provider 名を入力してください。",
+          baseUrlRequired: "Base URL を入力してください。",
+          modelRequired: "モデル名を入力してください。",
+          dimension: "次元数は 1 から 20000 までの整数で入力してください。",
+          textMaxChars: "テキスト切り出し長は 1000 から 200000 までの整数で入力してください。",
+          requestsPerMinute: "QPM は空欄、または正の整数で入力してください。",
+          requestsPerDay: "QPD は空欄、または正の整数で入力してください。"
+        }
+      }
+    },
+    actions: {
+      save: "設定を保存",
+      saving: "保存中"
+    },
+    notices: {
+      saved: "設定を保存しました。"
+    },
+    errors: {
+      invalidNumber: "有効な数値を入力してください。",
+      fontSize: "文字サイズは 16 から 24 の範囲で指定してください。",
+      lineHeight: "行間は 1.45 から 2.1 の範囲で指定してください。",
+      paragraphGap: "段落間隔は 0.6 から 1.6 の範囲で指定してください。",
+      readerWidth: "本文幅は 560 から 860 の範囲で指定してください。",
+      retentionDays: "保持日数は 0 から 3650 までの整数で入力してください。0 は永続保持です。",
+      cocoonLevel: "パーソナライズ度は 1 から 10 までの整数で入力してください。"
+    },
+    units: {
+      px: "px",
+      days: "日",
+      level: "レベル"
+    }
+  },
+  opml: {
+    import: "OPML をインポート",
+    importing: "インポート中",
+    export: "OPML をエクスポート",
+    exporting: "エクスポート中",
+    importSummary: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
+      `${feedsCreated} 件のフィードをインポートし、${feedsSkipped} 件をスキップ、${foldersCreated} 件のフォルダーを追加しました。`,
+    importErrors: (count: number) => `${count} 件の項目をインポートできませんでした。`
+  },
+  articles: {
+    allSources: "すべてのソース",
+    title: "最新",
+    views: {
+      latest: "最新",
+      recommended: "おすすめ",
+      favorites: "お気に入り",
+      read_later: "あとで読む"
+    },
+    sort: {
+      label: "並び順",
+      favorited_desc: "最近お気に入りにした順",
+      favorited_asc: "古くお気に入りにした順",
+      ranked: "パーソナライズ",
+      read_later_desc: "最近追加した順",
+      read_later_asc: "古く追加した順",
+      published_desc: "新しい公開順",
+      published_asc: "古い公開順"
+    },
+    loadMore: "さらに読み込む",
+    loadingMore: "読み込み中",
+    emptyNoFeedsTitle: "フィードはまだありません",
+    emptyNoFeedsBody: "RSS / Atom フィードを追加すると、ここに記事が表示されます。",
+    emptyNoArticlesTitle: "記事はまだありません",
+    emptyNoArticlesBody: "フィードを更新するか、すべてのソースに戻ってください。",
+    emptyNoUnreadTitle: "未読記事はありません",
+    emptyNoUnreadBody: "既読または無視済みの記事を見るには、未読のみをオフにしてください。",
+    unreadOnly: "未読のみ",
+    filters: {
+      label: "記事フィルター",
+      timeWindowTitle: "記事の期間を選択",
+      timeWindows: {
+        all: "すべて",
+        "24h": "24H",
+        "7d": "7日",
+        "30d": "30日"
+      },
+      unreadTitle: "未読記事のみ"
+    },
+    itemMeta: (date: string, feedTitle: string) => `${date} · ${feedTitle}`,
+    state: {
+      unseen: "新着",
+      ignored: "無視済み",
+      opened: "開封済み",
+      reading: "読書中",
+      read: "読了",
+      unread: "未読",
+      favorited: "お気に入り",
+      liked: "いいね済み",
+      readLater: "あとで読む"
+    }
+  },
+  readerCommands: {
+    markScopeRead: {
+      unreadWithCount: (count: number) => `未読 ${count}`,
+      toggleUnread: "未読のみ",
+      clear: "消化",
+      clearForWindow: (window: string) =>
+        window === "all" ? "消化" : window === "24h" ? "24H 以前を消化" : `${window} 以前を消化`,
+      clearShort: "✓",
+      clearTitle: "現在の範囲を既読にする",
+      clearTitleForWindow: (window: string) =>
+        window === "all" ? "すべての未読を既読にする" : `${window} より古い未読を既読にする`,
+      confirmTitle: "未読を消化",
+      confirmBody: (count: number) => `現在の範囲にある ${count} 件の未読記事を既読にしますか？`,
+      confirmBodyForWindow: (count: number, window: string) =>
+        window === "all"
+          ? `${count} 件すべての未読記事を既読にしますか？`
+          : `${window} より古い ${count} 件の未読記事を既読にしますか？`,
+      confirmBodyLoading: "対象範囲の未読記事数を確認しています…",
+      confirmBodyUnknown: "この範囲の未読記事を既読にしますか？",
+      confirmHint:
+        "お気に入りやあとで読むは解除されず、おすすめへの肯定的なフィードバックとしても扱われません。",
+      cancel: "キャンセル",
+      confirm: "既読にする",
+      clearing: "処理中",
+      cleared: (count: number) => `現在の範囲で ${count} 件の記事を既読にしました。`,
+      nothingToClear: "現在の範囲に未読記事はありません。",
+      error: "一括既読に失敗しました。もう一度お試しください。"
+    }
+  },
+  algorithmTransparency: {
+    pageTitle: "アルゴリズムの透明性",
+    status: "アルゴリズム情報は最新です",
+    backToSettings: "設定に戻る",
+    noWarnings: "警告なし",
+    sections: {
+      currentStatus: "現在のおすすめ状態",
+      currentClusters: "現在の興味クラスター",
+      maintenance: "アルゴリズムのメンテナンス",
+      mergeCandidates: "重複候補のクラスター",
+      labelLexicon: "ラベル辞書",
+      algorithmExplanation: "アルゴリズム説明",
+      terms: "用語",
+      scoreTable: "行動スコア表",
+      rankingFlow: "ランキングの流れ",
+      channelRules: "チャンネルのルール",
+      dataAndFallback: "ローカルデータとフォールバック"
+    },
+    statusTones: {
+      normal: "正常",
+      warning: "警告",
+      stopped: "停止",
+      disabled: "無効"
+    },
+    statusTable: {
+      module: "モジュール",
+      status: "状態",
+      summary: "概要"
+    },
+    fields: {
+      provider: "Provider",
+      index: "Index",
+      coverage: "Coverage",
+      behaviorCounts: "行動数",
+      clusters: "クラスター",
+      lastUpdates: "最終更新",
+      warnings: "警告",
+      cocoon: "パーソナライズ度",
+      exploration: "探索",
+      formula: "現在の式",
+      automaticMaintenance: "自動メンテナンス",
+      failureStates: "フォールバック / タスク状態"
+    },
+    clusters: {
+      empty: "興味クラスターはまだ形成されていません。いいね、お気に入り、あとで読む、読了によって自動的に生成されます。",
+      generated:
+        "興味クラスターはシステムが事前に用意したものではありません。ラベルはローカルのキーワード、代表記事、フィード名から生成され、手動で名前を変更できます。",
+      positive: "ポジティブ",
+      negative: "ネガティブ",
+      fallbackName: (index: number) => `興味クラスター #${index}`,
+      sourceLabel: "ソース",
+      source: {
+        manual: "ユーザー指定",
+        keywords: "キーワード推定",
+        representative_titles: "代表タイトル推定",
+        feeds: "フィード名推定",
+        fallback: "自動フォールバック"
+      },
+      confidenceLabel: "信頼度",
+      confidence: {
+        high: "高",
+        medium: "中",
+        low: "低"
+      },
+      lowConfidence: "自動推定のため、正確でない場合があります",
+      lowConfidenceAdvice: "自動ラベルの信頼度が低いため、必要に応じて手動で名前を変更してください。",
+      collisionResolved: "重複するクラスター名を避けるため、このラベルは自動的に区別されました。",
+      possibleDuplicate: (label: string, similarity: string) =>
+        `重複の可能性：${similarity} で「${label}」に類似`,
+      autoInference: (label: string) => `自動推定：${label}`,
+      evidence: (count: number) => `根拠記事：${count} 件`,
+      generatedAt: (value: string) => `生成：${value}`,
+      topTerms: "キーワード",
+      representativeArticles: "代表記事",
+      feedTitles: "フィード",
+      rename: "名前を変更",
+      renameLabel: "クラスター表示名",
+      renamePlaceholder: "例：AI コーディングエージェント",
+      saveLabel: "名前を保存",
+      clearManualLabel: "自動ラベルに戻す",
+      cancelRename: "キャンセル",
+      details: (weight: string, sampleCount: number, updatedAt: string) =>
+        `重み ${weight} · サンプル ${sampleCount} · 更新 ${updatedAt}`,
+      diagnostics: (
+        supportArticleCount: number,
+        sourceCount: number,
+        strongSignalRatio: string,
+        topSourceShare: string,
+        averageSimilarity: string
+      ) =>
+        `診断：根拠記事 ${supportArticleCount} · ソース ${sourceCount} · 強い信号 ${strongSignalRatio} · 最大ソース比率 ${topSourceShare} · 平均類似度 ${averageSimilarity}`,
+      risk: {
+        low: "過学習リスク低",
+        medium: "過学習リスク中",
+        high: "過学習リスク高"
+      },
+      matched: (name: string, similarity: string, weight: string, sampleCount: number) =>
+        `あなたの興味クラスター「${name}」に類似しています。類似度 ${similarity}、クラスター重み ${weight}、サンプル ${sampleCount}。`,
+      openAll: "すべての興味クラスターを見る",
+      allTitle: "すべての興味クラスター",
+      allSummary: (count: number) => `${count} 件の興味クラスターを重み順に表示しています。`,
+      back: "透明性ページに戻る"
+    },
+    mergeCandidates: {
+      title: "重複候補のクラスター",
+      body: "診断は active index 内の同じ polarity のクラスターだけを比較します。マージはプロファイルを変更するため、既定では確認が必要です。",
+      empty: "未処理の重複クラスター候補はありません。",
+      left: "左のクラスター",
+      right: "右のクラスター",
+      metrics: "指標",
+      recommendation: "推奨",
+      actions: "操作",
+      merge: "マージ",
+      ignore: "無視",
+      metricSummary: (centroid: string, label: string, evidence: string, score: string) =>
+        `centroid ${centroid} · label ${label} · evidence ${evidence} · score ${score}`,
+      recommendations: {
+        auto_merge: "高信頼",
+        review: "確認",
+        ignore: "無視"
+      }
+    },
+    lexicon: {
+      title: "ラベル辞書",
+      body: "ストップワード、保護語、フィルターは説明用ラベルだけに影響します。ランキングには影響せず、embedding も要求しません。",
+      stopwordsAdd: "カスタムストップワード",
+      protectedTermsAdd: "カスタム保護語",
+      stopwordPlaceholder: "article / affiliation / URL の残り",
+      addStopword: "ストップワードを追加",
+      noStopwords: "カスタムストップワードはまだありません。",
+      saveAndRebuild: "保存してクラスターラベルを再構築"
+    },
+    maintenance: {
+      disclosureHint: "システムが正常に動作している場合、これらを手動で実行する必要はありません。",
+      body:
+        "これらのタスクはローカルのおすすめ状態をメンテナンスします。Provider を呼び出す可能性があるタスクは別途明示されています。迷った場合はランキング再計算または最近の意図の再構築から始めてください。",
+      run: "実行",
+      running: "キューに追加中",
+      remoteUse: "外部利用",
+      lastState: "最新状態",
+      neverRun: "記録なし",
+      skipped: "スキップ",
+      notice: (label: string, existing: boolean) =>
+        existing ? `${label} はすでに未完了ジョブがあります。` : `${label} をキューに追加しました。`,
+      tasks: {
+        ranking_recalculate: {
+          label: "ランキングを再計算",
+          description: "おすすめ一覧とあとで読む一覧のローカルランキングスコアを再計算します。embedding は要求しません。",
+          remoteUse: "provider は呼び出しません"
+        },
+        fingerprint_backfill: {
+          label: "フィンガープリントを補完",
+          description: "重複検出に使うタイトルと要約のフィンガープリントを不足分だけ追加します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        duplicate_rebuild: {
+          label: "重複を再構築",
+          description: "記事フィンガープリントから重複グループを再構築し、同じ話題の連続を減らします。",
+          remoteUse: "provider は呼び出しません"
+        },
+        keyword_rebuild: {
+          label: "キーワードプロファイルを再構築",
+          description: "ローカル行動と記事テキストからキーワードプロファイルを再構築します。記事が整理済みの場合はスナップショットを利用します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        cluster_label_rebuild: {
+          label: "クラスターラベルを再構築",
+          description: "ローカルの根拠記事、プロファイルキーワード、フィード名から興味クラスターの表示ラベルを更新します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        cluster_merge_diagnostics: {
+          label: "クラスター重複診断を再構築",
+          description: "重複している可能性がある興味クラスター候補だけを生成します。プロファイルやランキングは変更しません。",
+          remoteUse: "provider は呼び出しません"
+        },
+        cluster_auto_merge: {
+          label: "高信頼クラスターを自動マージ",
+          description: "有効な場合だけ高信頼候補をマージします。マージはプロファイルを変更し、ランキング再計算を起動します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        recent_intent_rebuild: {
+          label: "最近の意図を再構築",
+          description: "最近の読書行動から短期的な興味を更新します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        ftrl_train: {
+          label: "ローカルランカーを学習",
+          description: "行動サンプルから軽量なローカルランキングモデルを学習します。既定では自動昇格しません。",
+          remoteUse: "provider は呼び出しません"
+        },
+        evaluation: {
+          label: "ランキング評価を実行",
+          description: "ローカルのリプレイ診断を実行し、おすすめチェーンが健全か確認します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        ftrl_promote: {
+          label: "ローカルモデルを昇格",
+          description: "サンプル品質が十分な場合、shadow モデルを制限付きの重みで active ranking に追加します。",
+          remoteUse: "provider は呼び出しません"
+        },
+        ftrl_reset: {
+          label: "ローカルモデルをリセット",
+          description: "FTRL の重みとサンプルを消去します。モデル状態が明らかにおかしい場合だけ使用してください。",
+          remoteUse: "provider は呼び出しません"
+        }
+      }
+    },
+    terms: [
+      {
+        term: "Embedding",
+        description:
+          "Embedding は記事内容のベクトル表現です。邸報はこれを使って記事と興味クラスターの近さを比較します。provider はベクトルを生成するだけで、最終的な並び順は決めません。"
+      },
+      {
+        term: "ユーザープロファイルカード",
+        description:
+          "邸報は記事ごとに静的なカードを書くのではなく、あなたの行動をポジティブ / ネガティブな興味クラスター、ソース嗜好、記事状態へ変換します。ランキング時には候補記事のベクトルをそれらのクラスターと比較します。"
+      },
+      {
+        term: "興味クラスター",
+        description:
+          "興味クラスターは、類似する記事ベクトルからまとめられたトピックの中心です。いいね、お気に入り、あとで読む、読了はポジティブクラスターを強め、興味なしや非表示はネガティブクラスターを作ります。"
+      },
+      {
+        term: "Coverage",
+        description:
+          "Coverage は、ランキング対象の記事のうち embedding 済みの記事がどれだけあるかを示します。低い場合でも新着記事は表示されますが、新鮮度、ソース、状態への依存が大きくなります。"
+      },
+      {
+        term: "基本の並び替え",
+        description:
+          "provider、embedding、十分なプロファイル信号がない場合、邸報は基本の並び替えを使います。主に時刻、ソースの重み、明示的な記事状態を見て、意味的な類似度は使いません。"
+      },
+      {
+        term: "MMR",
+        description:
+          "MMR は似た記事が一覧を埋め尽くさないよう、軽く分散させる仕組みです。パーソナライズ度によって分散の強さが変わります。"
+      }
+    ],
+    algorithmExplanation: [
+      {
+        name: "候補収集",
+        role: "チャンネル、ソース、フォルダー、未読 / 今日フィルター、ページングから候補プールを作ります。"
+      },
+      {
+        name: "可視性フィルター",
+        role: "非表示、興味なし、削除済みの記事は通常一覧から外れます。お気に入りとあとで読むはそれぞれのキューとして残ります。"
+      },
+      {
+        name: "意味的マッチング",
+        role: "active embedding index がある場合、候補記事とポジティブ / ネガティブ興味クラスターを比較します。"
+      },
+      {
+        name: "ソースと新鮮度",
+        role: "手動のソース重み、feed_stats のソース嗜好、時間減衰を組み合わせ、RSS タイムラインを説明可能に保ちます。"
+      },
+      {
+        name: "状態と低評価",
+        role: "お気に入り、いいね、あとで読む、読書進捗はランキングを上げます。興味なしは他の状態を解除し、類似トピックを下げます。"
+      },
+      {
+        name: "重複排除と MMR",
+        role: "近重複、露出、多様性の補正は最後の段階で適用され、同じ話題の連続を減らします。"
+      },
+      {
+        name: "フォールバック",
+        role: "provider、index、coverage、プロファイルデータが不足している場合、読書機能を保ったまま基本の並び替えへ戻ります。"
+      }
+    ],
+    scoreTable: {
+      columns: {
+        behavior: "行動",
+        modelCard: "プロファイルスコア",
+        source: "ソース嗜好",
+        ranking: "短期ランキング",
+        notes: "メモ"
+      },
+      rows: [
+        {
+          behavior: "開かずに通過 / 無視",
+          modelCard: "0",
+          source: "-0.05",
+          ranking: "-0.025, state -0.08",
+          notes: "弱いネガティブ信号です。タイトルに惹かれなかったことを示すだけで、それ自体ではネガティブクラスターを作りません。"
+        },
+        {
+          behavior: "記事を開く",
+          modelCard: "0",
+          source: "+0.02",
+          ranking: "+0.005, state +0.015 to +0.02",
+          notes: "ごく軽いポジティブ信号です。開封は読了とは異なり、主に無視済み記事を開封済みに戻すために使われます。"
+        },
+        {
+          behavior: "25% 読む",
+          modelCard: "+1.2",
+          source: "0",
+          ranking: "+0.01",
+          notes: "非常に軽い興味信号です。邸報は最も高い進捗段階の差分だけを適用します。"
+        },
+        {
+          behavior: "50% 読む",
+          modelCard: "+2.0",
+          source: "0",
+          ranking: "+0.04",
+          notes: "意味のある読書信号として扱い始めます。"
+        },
+        {
+          behavior: "75% 読む",
+          modelCard: "+3.0",
+          source: "0",
+          ranking: "+0.06",
+          notes: "強い読書信号です。"
+        },
+        {
+          behavior: "読了 / 90%",
+          modelCard: "+4.0",
+          source: "+1.0",
+          ranking: "+0.10, read state -0.08",
+          notes: "そのトピックが有用だったことを示しますが、読み終えた記事は再表示されすぎないよう少し下げられます。"
+        },
+        {
+          behavior: "あとで読むに保存",
+          modelCard: "+3.0",
+          source: "+1.0",
+          ranking: "+0.08, state +0.08",
+          notes: "あとで読むは読む予定のキューであり、このページでは引き続きパーソナライズされた並び順を使います。"
+        },
+        {
+          behavior: "お気に入り",
+          modelCard: "+6.0",
+          source: "+2.0",
+          ranking: "+0.12, state +0.04",
+          notes: "お気に入りはライブラリ / ブックマーク信号です。お気に入りチャンネルは既定ではパーソナライズ並び替えを使いません。"
+        },
+        {
+          behavior: "いいね",
+          modelCard: "+8.0",
+          source: "+3.0",
+          ranking: "+0.16, state +0.10",
+          notes: "最も強いポジティブ信号です。似たトピックをもっと見たいことを明示します。"
+        },
+        {
+          behavior: "いいねを解除",
+          modelCard: "-1.0",
+          source: "-0.4",
+          ranking: "-0.04",
+          notes: "弱い補正信号です。既定では新しい強いネガティブクラスターは作りません。"
+        },
+        {
+          behavior: "興味なし",
+          modelCard: "-6.0",
+          source: "-2.5",
+          ranking: "現在の記事を除外、類似トピックは最大 -0.45",
+          notes: "強いネガティブフィードバックです。ネガティブクラスターを作り、類似候補を下げます。"
+        }
+      ]
+    },
+    rankingFlowDiagram: [
+      {
+        phase: "候補",
+        title: "候補を集める",
+        description: "チャンネル、ソース、フォルダー、未読フィルター、カーソルが候補プールを作ります。"
+      },
+      {
+        phase: "フィルター",
+        title: "表示不可の項目を外す",
+        description: "非表示、興味なし、削除済みの記事は通常一覧から外れます。"
+      },
+      {
+        phase: "状態",
+        title: "記事状態を読む",
+        description: "お気に入り、いいね、あとで読む、読書深度、無視、開封が state score に入ります。"
+      },
+      {
+        phase: "ソース",
+        title: "ソース嗜好を計算",
+        description: "手動のソース重みと feed_stats が source score に合成されます。"
+      },
+      {
+        phase: "時間",
+        title: "新鮮度を計算",
+        description: "公開時刻または発見時刻から、約 36 時間の半減期で freshness score を計算します。"
+      },
+      {
+        phase: "プロファイル",
+        title: "プロファイルカードに照合",
+        description: "active embedding index がある場合、ベクトルがポジティブ / ネガティブ興味クラスターに照合されます。"
+      },
+      {
+        phase: "合成",
+        title: "ランキングスコアを合成",
+        description: "興味、ソース、新鮮度、状態、ネガティブ補正が active rank score を作ります。"
+      },
+      {
+        phase: "出力",
+        title: "チャンネル別に返す",
+        description: "最新は時刻、おすすめとあとで読むはパーソナライズ、お気に入りは保存時刻を使います。"
+      }
+    ],
+    channelRules: [
+      "最新：既定では時刻の降順です。未読フィルターは派生した未読状態を絞り込むだけで、並び順の意味は変えません。",
+      "おすすめ：パーソナライズされた並び順です。プロファイルカードまたは embedding がない場合、邸報は基本の並び替えへ戻ります。",
+      "あとで読む：あとで読むの記事だけを表示しますが、読む予定のキューとしてパーソナライズされた並び順を使います。",
+      "お気に入り：ライブラリ / ブックマークモードです。既定ではお気に入りにした時刻の降順で、保存時刻と公開時刻を切り替えられます。パーソナライズは使いません。"
+    ],
+    copy: {
+      localData:
+        "邸報は、生の行動イベント、記事状態、読書進捗、ソース嗜好、興味クラスター、embedding provider 設定、index 状態をローカルに保存します。API key は現在、MVP のローカル SQLite 保存方針を使います。",
+      fallback:
+        "provider が未設定、index coverage が低い、provider リクエストが失敗、記事に embedding がない、または診断が利用できない場合、邸報は基本の並び替えへ戻ります。フォールバックは読書を妨げません。"
+    }
+  },
+  recommendationStatus: {
+    title: "おすすめ状態",
+    loading: "おすすめ状態を読み込んでいます",
+    fallback: "おすすめ状態を取得できません。記事一覧は引き続き読めます。",
+    modes: {
+      baseline: "基本の並び替え",
+      personalized: "パーソナライズおすすめが有効",
+      embedding: "Embedding 生成中",
+      degraded: "Provider に問題、フォールバック中"
+    },
+    metrics: {
+      behaviorCount: (count: number) => `${count} 件の行動`,
+      coverage: (ratio: string) => `Coverage ${ratio}`,
+      clusters: (positive: number, negative: number) => `クラスター +${positive} / -${negative}`,
+      lastUpdate: (ranking: string, profile: string) => `Rank ${ranking} · Profile ${profile}`,
+      unknown: "不明"
+    }
+  },
+  reader: {
+    originalLink: "原文",
+    backToList: "一覧に戻る",
+    selectArticleTitle: "記事を選択",
+    selectArticleBody: "記事の詳細はここに表示されます。",
+    feedOnlyNotice: "現在はフィードの要約のみ利用できます。",
+    contentSource: {
+      success: "本文は Web 記事全文の取得結果です。",
+      feed_only: "本文は RSS / Atom Feed の内容です。多くの Feed はすでに全文を含んでいます。",
+      failed: "Web 記事全文の取得に失敗しました。現在の内容は Feed 由来です。",
+      failedWithError: (error: string) =>
+        `Web 記事全文の取得に失敗しました。現在の内容は Feed 由来です。${error}`,
+      skipped: "Web 記事全文は使用されていません。現在の内容は Feed 由来です。",
+      pending: "本文処理は待機中です。現在は Feed 内容または要約を表示しています。",
+      noContent: "利用できる本文がありません。"
+    },
+    noContent: "この記事にはまだ本文がありません。",
+    meta: (feedTitle: string, date?: string, author?: string | null) =>
+      [feedTitle, date, author].filter(Boolean).join(" · ")
+  },
+  fullContentPreview: {
+    pageTitle: "全文取得プレビュー",
+    status: "プレビューはデータベースへ書き込みません",
+    kicker: "Content preview",
+    back: "フィード管理に戻る",
+    reload: "もう一度プレビュー",
+    loading: "プレビュー中",
+    articleUrl: "記事 URL",
+    resultStatus: "状態",
+    extractedTitle: "取得したタイトル",
+    statuses: {
+      success: "成功",
+      failed: "失敗",
+      skipped: "スキップ"
+    },
+    noPreview: "利用できるプレビューはありません。",
+    noDbWrite: "既存の Feed 内容には影響しません。"
+  },
+  explanation: {
+    title: "おすすめ理由",
+    entryTitle: "おすすめの説明",
+    open: "詳しい理由を見る",
+    teaser: "内部の生スコアではなく、理解しやすい理由だけを表示します。",
+    sortLabel: "現在の並び順メモ",
+    sortTitle: "現在のビューの並び順",
+    loading: "おすすめ理由を生成しています",
+    empty: "明確なおすすめ信号はまだありません。",
+    generatedAt: (date: string) => `${date} に生成`,
+    sorting: {
+      latest: "このビューは現在、公開時刻順に並んでいます。",
+      recommended: "おすすめは、プロファイルカード、ソース嗜好、新鮮度、記事状態を組み合わせます。",
+      favorites: "お気に入りは既定で保存時刻順に並び、パーソナライズランキングは使いません。",
+      read_later: "あとで読むは、役に立ちそうな記事を上げるためにパーソナライズランキングを使います。"
+    },
+    types: {
+      interest: "興味",
+      source: "ソース",
+      freshness: "新鮮度",
+      state: "状態",
+      fallback: "基本",
+      negative: "ネガティブ",
+      penalty: "フィルター"
+    },
+    reasons: {
+      interest: "最近のポジティブな興味に近いため、順位が上がっています。",
+      interestCluster: (summary: string) =>
+        `最近のポジティブな興味に近いため、順位が上がっています。${summary}`,
+      sourcePositive: (label: string) => `ソース ${label} が順位を上げています。`,
+      sourceNegative: (label: string) => `ソース ${label} は現在重みが低めです。`,
+      freshness: "新しい記事のため、新鮮度による加点があります。",
+      statePositive: "お気に入り、あとで読む、読書進捗が順位を上げました。",
+      stateNegative: "無視、読了などの状態が優先度を下げました。",
+      fallback: "基本の並び替えが有効で、まだ強い信号はありません。",
+      negative: "最近のネガティブ行動が順位を下げました。",
+      penalty: "非表示または興味なしの状態は順位を大きく下げます。"
+    }
+  },
+  actions: {
+    favorite: "お気に入り",
+    unfavorite: "お気に入り解除",
+    like: "いいね",
+    unlike: "いいね解除",
+    readLater: "あとで読む",
+    removeReadLater: "あとで読むから外す",
+    markRead: "既読にする",
+    markUnread: "未読に戻す",
+    notInterested: "興味なし",
+    notInterestedActive: "興味なし",
+    saving: "保存中",
+    aria: {
+      favorite: "この記事をお気に入りに追加",
+      unfavorite: "この記事のお気に入りを解除",
+      like: "この記事にいいね",
+      unlike: "この記事のいいねを解除",
+      readLater: "この記事をあとで読むに保存",
+      removeReadLater: "この記事をあとで読むから外す",
+      markRead: "この記事を既読にする",
+      markUnread: "この記事を未読に戻す",
+      notInterested: "似た記事をおすすめしない",
+      notInterestedActive: "興味なしに設定済み",
+      group: "記事操作"
+    },
+    errors: {
+      favorite: "お気に入りの更新に失敗しました。",
+      like: "いいねの更新に失敗しました。",
+      readLater: "あとで読むの更新に失敗しました。",
+      readStatus: "既読状態の更新に失敗しました。",
+      notInterested: "興味なしの操作に失敗しました。",
+      open: "記事を開いた記録に失敗しました。",
+      generic: "操作に失敗しました。もう一度お試しください。"
+    }
+  },
+  notices: {
+    feedAddedAndRefreshed: (feedTitle: string) => `追加して更新しました：${feedTitle}`,
+    feedRefreshed: (feedTitle: string) => `更新しました：${feedTitle}`,
+    allFeedsRefreshQueued: (count: number) =>
+      count > 0
+        ? `${count} 件のフィード更新をキューに追加しました。`
+        : "更新が必要な有効フィードはありません。",
+    opmlImported: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
+      `OPML のインポートが完了しました：${feedsCreated} 件のフィードを追加、${feedsSkipped} 件をスキップ、${foldersCreated} 件のフォルダーを追加しました。`,
+    opmlExported: "OPML をエクスポートしました。"
+  },
+  pwa: {
+    offline:
+      "現在オフラインです。キャッシュされたアプリシェルは開けますが、記事データにはネットワーク接続が必要です。",
+    updateAvailable: "邸報の新しいバージョンがあります。",
+    updateNow: "更新する",
+    dismiss: "あとで"
+  },
+  errors: {
+    api: {
+      requestFailed: "リクエストに失敗しました。もう一度お試しください。",
+      httpError: (status: number) => `リクエストに失敗しました（HTTP ${status}）。`
+    }
+  }
+} as const satisfies Dictionary;
+
 export const dictionaries = {
   "zh-CN": zhCN,
-  "en-US": enUS
+  "en-US": enUS,
+  "ja-JP": jaJP
 } as const satisfies Record<Locale, Dictionary>;
 
 export type I18nValue = {

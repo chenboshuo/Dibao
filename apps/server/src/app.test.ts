@@ -287,6 +287,7 @@ describe("server API vertical slice", () => {
 
     try {
       const invalid = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "short"
       });
       expect(invalid.statusCode, invalid.body).toBe(400);
@@ -297,6 +298,7 @@ describe("server API vertical slice", () => {
       });
 
       const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "correct horse battery"
       });
       expect(setup.statusCode, setup.body).toBe(200);
@@ -312,11 +314,13 @@ describe("server API vertical slice", () => {
           `
             select
               password_hash as passwordHash,
+              username,
               password_algo as passwordAlgo
             from auth_credentials
           `
         )
-        .get() as { passwordHash: string; passwordAlgo: string };
+        .get() as { passwordHash: string; username: string; passwordAlgo: string };
+      expect(credential.username).toBe("Pls");
       expect(credential.passwordAlgo).toBe("scrypt:v1");
       expect(credential.passwordHash).toMatch(/^scrypt:v1:16384:8:1:32:64:/);
       expect(credential.passwordHash).not.toContain("correct horse battery");
@@ -342,6 +346,7 @@ describe("server API vertical slice", () => {
       });
 
       const repeated = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "another password"
       });
       expect(repeated.statusCode, repeated.body).toBe(409);
@@ -379,11 +384,13 @@ describe("server API vertical slice", () => {
       });
 
       const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "correct horse battery"
       });
       const setupCookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
 
       const wrongLogin = await postJson(app, "/api/auth/login", {
+        username: "Pls",
         password: "wrong password"
       });
       expect(wrongLogin.statusCode, wrongLogin.body).toBe(401);
@@ -420,6 +427,7 @@ describe("server API vertical slice", () => {
       });
 
       const login = await postJson(app, "/api/auth/login", {
+        username: "Pls",
         password: "correct horse battery"
       });
       expect(login.statusCode, login.body).toBe(200);
@@ -442,6 +450,53 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("changes the access password for an authenticated session", async () => {
+    const db = createEmptyDatabase();
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+
+      const unauthenticated = await postJson(app, "/api/auth/password", {
+        currentPassword: "correct horse battery",
+        newPassword: "new correct horse battery"
+      });
+      expect(unauthenticated.statusCode, unauthenticated.body).toBe(401);
+
+      const wrongCurrent = await injectJsonWithCookie(app, "POST", "/api/auth/password", cookie, {
+        currentPassword: "wrong password",
+        newPassword: "new correct horse battery"
+      });
+      expect(wrongCurrent.statusCode, wrongCurrent.body).toBe(401);
+
+      const changed = await injectJsonWithCookie(app, "POST", "/api/auth/password", cookie, {
+        currentPassword: "correct horse battery",
+        newPassword: "new correct horse battery"
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      expect(changed.json()).toEqual({ data: { ok: true } });
+
+      const oldLogin = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      expect(oldLogin.statusCode, oldLogin.body).toBe(401);
+
+      const newLogin = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "new correct horse battery"
+      });
+      expect(newLogin.statusCode, newLogin.body).toBe(200);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("rejects expired sessions", async () => {
     const db = createEmptyDatabase();
     let now = 1000;
@@ -454,6 +509,7 @@ describe("server API vertical slice", () => {
 
     try {
       const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "correct horse battery"
       });
       const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
@@ -504,6 +560,7 @@ describe("server API vertical slice", () => {
       });
 
       const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "correct horse battery"
       });
       const status = await app.inject({
@@ -645,6 +702,7 @@ describe("server API vertical slice", () => {
 
     try {
       const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "correct horse battery"
       });
       const status = await app.inject({
@@ -2135,6 +2193,7 @@ describe("server API vertical slice", () => {
       });
 
       const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
         password: "correct horse battery"
       });
       const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
@@ -2205,7 +2264,7 @@ describe("server API vertical slice", () => {
 
       const updated = await injectJsonWithCookie(app, "PATCH", "/api/settings", cookie, {
         ui: {
-          locale: "en-US",
+          locale: "ja-JP",
           defaultHomeView: "latest"
         },
         reader: {
@@ -2231,7 +2290,7 @@ describe("server API vertical slice", () => {
           ok: true,
           settings: {
             ui: {
-              locale: "en-US",
+              locale: "ja-JP",
               defaultHomeView: "latest"
             },
             reader: {
