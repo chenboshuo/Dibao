@@ -13,7 +13,7 @@ It is designed for people who want a local and controllable alternative to algor
 - Feed and folder management.
 - Search UI for local title, summary, and full-text article search.
 - Article actions: favorite, read later, read/unread, not interested, and read progress.
-- Reader Command cleanup for marking the current unread scope as read without recommendation feedback pollution.
+- Reader Command cleanup for marking unread debt as read without recommendation feedback pollution.
 - Background feed refresh, retention cleanup, embedding, ranking, and profile jobs.
 - Settings for language, reader typography, retention, and embedding providers.
 - OpenAI-compatible and Ollama embedding provider support.
@@ -34,7 +34,7 @@ It is designed for people who want a local and controllable alternative to algor
 - Use article actions and reader scroll progress to shape future recommendations.
 - Load more article list pages through cursor pagination.
 - Search the local article library by keyword, filter by feed/folder/state/date, and open results in the existing reader.
-- Clear unread debt in latest, recommended, or submitted search scopes through a confirmed Reader Command.
+- Clear unread debt in latest/recommended by all, older than 24h, older than 7d, or older than 30d; submitted search scopes can also be cleared through a confirmed Reader Command.
 - Desktop feed/list/reader columns scroll independently.
 
 ### Subscriptions

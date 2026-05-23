@@ -72,7 +72,7 @@ Dockerfile 内置 HEALTHCHECK 不依赖 `curl`/`wget`，而是用 Node `fetch()`
 4. Embedding provider 可以稍后配置；未配置时邸报继续使用基础排序。
 5. 进入阅读器后，可以刷新订阅源、打开文章、收藏、稍后读或标记不感兴趣。
 
-阅读器的“清账”会把当前 latest / recommended / search 范围内的未读文章批量标记为已读。它是 Reader Command，不是 Behavior Event，不会作为推荐正反馈，也不会清除收藏或稍后读状态。
+阅读器的“清账”会把 latest / recommended 的未读债务批量标记为已读，可选全部、24 小时前、7 天前或 30 天前；search 清账作用于已提交的搜索结果范围。它是 Reader Command，不是 Behavior Event，不会作为推荐正反馈，也不会清除收藏或稍后读状态。
 
 ## OPML、RSS 和刷新
 

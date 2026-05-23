@@ -4648,6 +4648,68 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("marks only unread debt older than the selected clear window", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const day = 24 * 60 * 60 * 1000;
+    const now = 10 * day;
+    const app = buildServer({ db, logger: false, now: () => now });
+
+    feeds.upsert({
+      id: "feed_reader_command_age",
+      title: "Reader Command Age",
+      feedUrl: "https://example.com/reader-command-age.xml",
+      now: 1000
+    });
+    for (const [id, publishedAt] of [
+      ["article_debt_old", now - 8 * day],
+      ["article_debt_recent", now - day]
+    ] as const) {
+      articles.upsert({
+        id,
+        feedId: "feed_reader_command_age",
+        url: `https://example.com/${id}`,
+        title: id,
+        publishedAt,
+        discoveredAt: publishedAt,
+        dedupeKey: id,
+        now: publishedAt
+      });
+    }
+
+    try {
+      const preview = await postJson(app, "/api/reader/commands/mark-scope-read/preview", {
+        scope: {
+          type: "article_list",
+          view: "latest",
+          clearWindow: "7d"
+        }
+      });
+      const response = await postJson(app, "/api/reader/commands/mark-scope-read", {
+        scope: {
+          type: "article_list",
+          view: "latest",
+          clearWindow: "7d"
+        }
+      });
+
+      expect(preview.statusCode, preview.body).toBe(200);
+      expect(preview.json().data).toEqual({ ok: true, markedReadCount: 1 });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.markedReadCount).toBe(1);
+      expect(getArticleStateRow(db, "article_debt_old")).toMatchObject({
+        readAt: now,
+        readingProgress: 1
+      });
+      expect(getArticleStateRow(db, "article_debt_recent")).toBeUndefined();
+      expect(countTable(db, "reader_command_events")).toBe(1);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("marks submitted search scope read without profile behavior events", async () => {
     const db = createEmptyDatabase();
     const feeds = new SqliteFeedRepository(db);
@@ -4719,6 +4781,7 @@ describe("server API vertical slice", () => {
     try {
       for (const payload of [
         { scope: { type: "article_list", view: "favorites" } },
+        { scope: { type: "article_list", view: "latest", clearWindow: "soon" } },
         { scope: { type: "search", q: "" } },
         { scope: { type: "missing" } }
       ]) {

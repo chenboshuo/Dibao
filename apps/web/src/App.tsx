@@ -1797,12 +1797,7 @@ export function App() {
     }
 
     await markScopeRead(
-      {
-        type: "article_list",
-        view: currentArticleView,
-        ...articleQueryFor(sourceSelection),
-        timeWindow
-      },
+      currentArticleListReaderCommandScope(),
       () =>
         loadArticles(
           sourceSelection,
@@ -1813,6 +1808,24 @@ export function App() {
           timeWindow
         )
     );
+  }
+
+  async function previewCurrentArticleListScopeRead(): Promise<number> {
+    if (currentArticleView !== "latest" && currentArticleView !== "recommended") {
+      return 0;
+    }
+
+    const result = await dibaoApi.previewMarkScopeRead(currentArticleListReaderCommandScope());
+    return result.markedReadCount;
+  }
+
+  function currentArticleListReaderCommandScope(): ReaderCommandScope {
+    return {
+      type: "article_list",
+      view: currentArticleView === "recommended" ? "recommended" : "latest",
+      ...articleQueryFor(sourceSelection),
+      clearWindow: timeWindow
+    };
   }
 
   async function handleMarkCurrentSearchScopeRead() {
@@ -2463,6 +2476,7 @@ export function App() {
               onIgnoreArticle={handleIgnoreArticle}
               onLoadMore={handleLoadMoreArticles}
               onMarkScopeRead={handleMarkCurrentArticleListScopeRead}
+              onPreviewMarkScopeRead={previewCurrentArticleListScopeRead}
               onOpenSources={() => setIsSourceDrawerOpen(true)}
               onArticleAction={handleArticleAction}
               onSelectArticle={handleSelectArticle}
@@ -4594,6 +4608,7 @@ export function ArticleListPanel(props: {
   onIgnoreArticle: (articleId: string) => void;
   onLoadMore: () => void;
   onMarkScopeRead: () => void;
+  onPreviewMarkScopeRead: () => Promise<number>;
   onOpenSources: () => void;
   onExplainArticle: (articleId: string) => void;
   onSelectArticle: (articleId: string) => void;
@@ -4696,8 +4711,10 @@ export function ArticleListPanel(props: {
                 timeWindow={props.timeWindow}
               />
               <UnreadDebtControl
+                clearWindow={props.timeWindow}
                 isClearing={props.isMarkingScopeRead}
                 onConfirmClear={props.onMarkScopeRead}
+                onPreviewClear={props.onPreviewMarkScopeRead}
                 onToggleUnreadOnly={() => props.onUnreadOnlyChange(!props.unreadOnly)}
                 unreadCount={props.unreadCount}
                 unreadOnly={props.unreadOnly}
@@ -4816,14 +4833,36 @@ export function ArticleListPanel(props: {
 }
 
 function UnreadDebtControl(props: {
+  clearWindow: ArticleTimeWindow;
   unreadCount: number;
   unreadOnly: boolean;
   isClearing: boolean;
   onToggleUnreadOnly: () => void;
+  onPreviewClear: () => Promise<number>;
   onConfirmClear: () => void;
 }) {
   const { t } = useI18n();
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const canOpenClear = props.clearWindow !== "all" || props.unreadCount > 0;
+
+  async function openConfirm() {
+    setIsConfirmOpen(true);
+    setPreviewCount(null);
+    setPreviewError(null);
+    setIsPreviewLoading(true);
+
+    try {
+      setPreviewCount(await props.onPreviewClear());
+    } catch {
+      setPreviewError(t.readerCommands.markScopeRead.error);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  }
 
   return (
     <div className={styles.unreadDebtControl}>
@@ -4838,15 +4877,15 @@ function UnreadDebtControl(props: {
       </button>
       <button
         className={styles.unreadDebtClear}
-        disabled={props.unreadCount === 0 || props.isClearing}
-        onClick={() => setIsConfirmOpen(true)}
-        title={t.readerCommands.markScopeRead.clearTitle}
+        disabled={!canOpenClear || props.isClearing}
+        onClick={openConfirm}
+        title={t.readerCommands.markScopeRead.clearTitleForWindow(props.clearWindow)}
         type="button"
       >
         <span className={styles.unreadDebtClearLabel}>
           {props.isClearing
             ? t.readerCommands.markScopeRead.clearing
-            : t.readerCommands.markScopeRead.clear}
+            : t.readerCommands.markScopeRead.clearForWindow(props.clearWindow)}
         </span>
         <span className={styles.unreadDebtClearShort}>
           {t.readerCommands.markScopeRead.clearShort}
@@ -4859,7 +4898,10 @@ function UnreadDebtControl(props: {
           setIsConfirmOpen(false);
           props.onConfirmClear();
         }}
-        unreadCount={props.unreadCount}
+        clearWindow={props.clearWindow}
+        isLoading={isPreviewLoading}
+        error={previewError}
+        unreadCount={previewCount}
       />
     </div>
   );
@@ -4899,7 +4941,10 @@ function SearchUnreadDebtControl(props: {
 
 function MarkScopeReadConfirmDialog(props: {
   isOpen: boolean;
-  unreadCount: number;
+  unreadCount: number | null;
+  clearWindow?: ArticleTimeWindow;
+  isLoading?: boolean;
+  error?: string | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -4920,15 +4965,32 @@ function MarkScopeReadConfirmDialog(props: {
         <h3 id="reader-command-dialog-title">
           {t.readerCommands.markScopeRead.confirmTitle}
         </h3>
-        <p>{t.readerCommands.markScopeRead.confirmBody(props.unreadCount)}</p>
+        <p>
+          {props.isLoading
+            ? t.readerCommands.markScopeRead.confirmBodyLoading
+            : props.unreadCount === null
+              ? t.readerCommands.markScopeRead.confirmBodyUnknown
+              : props.clearWindow
+                ? t.readerCommands.markScopeRead.confirmBodyForWindow(
+                    props.unreadCount,
+                    props.clearWindow
+                  )
+                : t.readerCommands.markScopeRead.confirmBody(props.unreadCount)}
+        </p>
         <p className={styles.readerCommandDialogHint}>
           {t.readerCommands.markScopeRead.confirmHint}
         </p>
+        {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
         <div className={styles.readerCommandDialogActions}>
           <button className={styles.secondaryButton} onClick={props.onCancel} type="button">
             {t.readerCommands.markScopeRead.cancel}
           </button>
-          <button className={styles.primaryButton} onClick={props.onConfirm} type="button">
+          <button
+            className={styles.primaryButton}
+            disabled={props.isLoading || Boolean(props.error) || props.unreadCount === 0}
+            onClick={props.onConfirm}
+            type="button"
+          >
             {t.readerCommands.markScopeRead.confirm}
           </button>
         </div>

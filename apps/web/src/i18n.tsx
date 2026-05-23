@@ -455,10 +455,32 @@ export const zhCN = {
       unreadWithCount: (count: number) => `未读 ${count}`,
       toggleUnread: "只看未读",
       clear: "清账",
+      clearForWindow: (window: string): string =>
+        window === "all"
+          ? "清账"
+          : window === "24h"
+            ? "清 24H 前"
+            : window === "7d"
+              ? "清 7Days 前"
+              : "清 30Days 前",
       clearShort: "✓",
       clearTitle: "标记当前范围为已读",
+      clearTitleForWindow: (window: string): string =>
+        window === "all"
+          ? "标记全部未读为已读"
+          : `标记 ${
+              window === "24h" ? "24H" : window === "7d" ? "7Days" : "30Days"
+            } 前未读为已读`,
       confirmTitle: "清理未读",
       confirmBody: (count: number) => `将当前范围内 ${count} 篇未读文章标记为已读？`,
+      confirmBodyForWindow: (count: number, window: string): string =>
+        window === "all"
+          ? `将全部 ${count} 篇未读文章标记为已读？`
+          : `将 ${
+              window === "24h" ? "24H" : window === "7d" ? "7Days" : "30Days"
+            } 前的 ${count} 篇未读文章标记为已读？`,
+      confirmBodyLoading: "正在计算当前清账范围内的未读文章数量…",
+      confirmBodyUnknown: "将当前清账范围内的未读文章标记为已读？",
       confirmHint: "这不会清除收藏或稍后读，也不会作为推荐正反馈。",
       cancel: "取消",
       confirm: "标记已读",
@@ -1464,10 +1486,20 @@ export const enUS = {
       unreadWithCount: (count: number) => `Unread ${count}`,
       toggleUnread: "Only unread",
       clear: "Clear",
+      clearForWindow: (window: string) =>
+        window === "all" ? "Clear" : window === "24h" ? "Clear >24h" : `Clear >${window}`,
       clearShort: "✓",
       clearTitle: "Mark current scope as read",
+      clearTitleForWindow: (window: string) =>
+        window === "all" ? "Mark all unread as read" : `Mark unread older than ${window} as read`,
       confirmTitle: "Clear unread",
       confirmBody: (count: number) => `Mark ${count} unread articles in the current scope as read?`,
+      confirmBodyForWindow: (count: number, window: string) =>
+        window === "all"
+          ? `Mark all ${count} unread articles as read?`
+          : `Mark ${count} unread articles older than ${window} as read?`,
+      confirmBodyLoading: "Counting unread articles in the clear scope…",
+      confirmBodyUnknown: "Mark unread articles in this clear scope as read?",
       confirmHint:
         "This will not clear favorites or read-later items, and it will not count as positive recommendation feedback.",
       cancel: "Cancel",

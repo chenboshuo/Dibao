@@ -747,7 +747,10 @@ function buildArticleListUnreadCandidates(
     params.push(scope.folderId);
   }
 
-  if (typeof scope.todayStartAt === "number" && typeof scope.todayEndAt === "number") {
+  if (typeof scope.beforeAt === "number") {
+    conditions.push("coalesce(a.published_at, a.discovered_at) < ?");
+    params.push(scope.beforeAt);
+  } else if (typeof scope.todayStartAt === "number" && typeof scope.todayEndAt === "number") {
     conditions.push("coalesce(a.published_at, a.discovered_at) >= ?");
     params.push(scope.todayStartAt);
     conditions.push("coalesce(a.published_at, a.discovered_at) < ?");

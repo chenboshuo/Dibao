@@ -756,7 +756,7 @@ describe("web API client", () => {
         type: "article_list",
         view: "latest",
         feedId: "feed_1",
-        timeWindow: "7d"
+        clearWindow: "7d"
       })
     ).resolves.toEqual({
       ok: true,
@@ -781,7 +781,7 @@ describe("web API client", () => {
             type: "article_list",
             view: "latest",
             feedId: "feed_1",
-            timeWindow: "7d"
+            clearWindow: "7d"
           }
         }
       },
@@ -796,6 +796,59 @@ describe("web API client", () => {
             from: "2026-05-01",
             to: "2026-05-23",
             state: "unread"
+          }
+        }
+      }
+    ]);
+  });
+
+  it("posts reader command preview bodies", async () => {
+    const calls: Array<{ path: string; method?: string; body: unknown }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      calls.push({
+        path: String(input),
+        method: init?.method,
+        body: JSON.parse(String(init?.body))
+      });
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            ok: true,
+            markedReadCount: 7
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(
+      api.previewMarkScopeRead({
+        type: "article_list",
+        view: "recommended",
+        folderId: "folder_1",
+        clearWindow: "24h"
+      })
+    ).resolves.toEqual({
+      ok: true,
+      markedReadCount: 7
+    });
+
+    expect(calls).toEqual([
+      {
+        path: "/api/reader/commands/mark-scope-read/preview",
+        method: "POST",
+        body: {
+          scope: {
+            type: "article_list",
+            view: "recommended",
+            folderId: "folder_1",
+            clearWindow: "24h"
           }
         }
       }

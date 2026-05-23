@@ -3,6 +3,7 @@ import type {
   ArticleRepository,
   ArticleScope,
   MarkScopeReadCommandInput,
+  MarkScopeReadCommandPreview,
   MarkScopeReadCommandResult,
   ReaderCommandEventRepository
 } from "@dibao/db";
@@ -75,6 +76,15 @@ export class ReaderCommandService {
     });
   }
 
+  previewMarkScopeRead(input: MarkScopeReadCommandInput): MarkScopeReadCommandPreview {
+    const now = input.now ?? this.now();
+    const scope = normalizeScope(input.scope, now);
+
+    return {
+      markedReadCount: this.options.articles.countUnreadForScope(scope)
+    };
+  }
+
   private enqueueRankingUpdate(articleIds: string[]): void {
     if (!this.options.rankingJobs || articleIds.length === 0) {
       return;
@@ -113,22 +123,26 @@ function normalizeScope(scope: ArticleScope, now: number): ArticleScope {
     };
   }
 
-  const timeWindow = scope.timeWindow ?? "all";
-  if (timeWindow === "all") {
+  const clearWindow = scope.clearWindow ?? scope.timeWindow ?? "all";
+  if (clearWindow === "all") {
     return {
       ...scope,
-      timeWindow,
+      clearWindow,
+      timeWindow: undefined,
+      beforeAt: undefined,
       todayStartAt: undefined,
       todayEndAt: undefined
     };
   }
 
-  const range = rollingTimeRange(now, timeWindow);
+  const range = rollingTimeRange(now, clearWindow);
   return {
     ...scope,
-    timeWindow,
-    todayStartAt: scope.todayStartAt ?? range.startAt,
-    todayEndAt: scope.todayEndAt ?? range.endAt
+    clearWindow,
+    timeWindow: undefined,
+    beforeAt: scope.beforeAt ?? range.startAt,
+    todayStartAt: undefined,
+    todayEndAt: undefined
   };
 }
 

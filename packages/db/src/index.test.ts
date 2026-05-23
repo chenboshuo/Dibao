@@ -1405,9 +1405,8 @@ describe("db package", () => {
         type: "article_list",
         view: "latest",
         folderId: "folder_scope",
-        timeWindow: "24h",
-        todayStartAt: 8_000,
-        todayEndAt: 11_000
+        clearWindow: "24h",
+        beforeAt: 8_000
       } as const;
       const searchScope = {
         type: "search",
@@ -1420,7 +1419,7 @@ describe("db package", () => {
 
       expect(articles.countUnreadForScope(articleListScope)).toBe(1);
       expect(articles.listUnreadArticleIdsForScope(articleListScope)).toEqual([
-        "article_scope_recent"
+        "article_scope_old"
       ]);
       expect(articles.countUnreadForScope(searchScope)).toBe(1);
       expect(articles.countUnreadForScope({ ...searchScope, state: "read" })).toBe(0);

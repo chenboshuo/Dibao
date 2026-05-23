@@ -162,12 +162,18 @@ export type ReaderCommandMarkScopeReadResponse = {
   markedReadCount: number;
 };
 
+export type ReaderCommandMarkScopeReadPreviewResponse = {
+  ok: true;
+  markedReadCount: number;
+};
+
 export type ReaderCommandScope =
   | {
       type: "article_list";
       view: "latest" | "recommended";
       feedId?: string | null;
       folderId?: string | null;
+      clearWindow?: ArticleTimeWindow;
       timeWindow?: ArticleTimeWindow;
     }
   | {
@@ -1300,6 +1306,20 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       return (
         await request<ReaderCommandMarkScopeReadResponse>(
           "/api/reader/commands/mark-scope-read",
+          {
+            method: "POST",
+            body: JSON.stringify({ scope })
+          }
+        )
+      ).data;
+    },
+
+    async previewMarkScopeRead(
+      scope: ReaderCommandScope
+    ): Promise<ReaderCommandMarkScopeReadPreviewResponse> {
+      return (
+        await request<ReaderCommandMarkScopeReadPreviewResponse>(
+          "/api/reader/commands/mark-scope-read/preview",
           {
             method: "POST",
             body: JSON.stringify({ scope })

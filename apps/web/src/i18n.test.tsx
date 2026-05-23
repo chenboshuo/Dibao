@@ -326,6 +326,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
@@ -384,6 +385,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
@@ -485,6 +487,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
@@ -532,6 +535,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
@@ -572,6 +576,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
@@ -619,6 +624,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}
@@ -659,6 +665,7 @@ describe("web i18n", () => {
           onIgnoreArticle={() => undefined}
           onLoadMore={() => undefined}
           onMarkScopeRead={() => undefined}
+          onPreviewMarkScopeRead={async () => 0}
           onOpenSources={() => undefined}
           onExplainArticle={() => undefined}
           onSelectArticle={() => undefined}

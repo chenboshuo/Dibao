@@ -1375,7 +1375,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
-  async function handleMarkScopeRead(request: FastifyRequest<{ Body: ReaderCommandBody }>, reply: FastifyReply) {
+  async function handleMarkScopeRead(
+    request: FastifyRequest<{ Body: ReaderCommandBody }>,
+    reply: FastifyReply
+  ) {
     const parsed = parseReaderCommandMarkScopeReadBody(request.body);
     if (!parsed.ok) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
@@ -1400,9 +1403,40 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   }
 
+  async function handleMarkScopeReadPreview(
+    request: FastifyRequest<{ Body: ReaderCommandBody }>,
+    reply: FastifyReply
+  ) {
+    const parsed = parseReaderCommandMarkScopeReadBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    try {
+      const result = readerCommandService.previewMarkScopeRead({
+        scope: parsed.scope,
+        now: options.now?.() ?? Date.now()
+      });
+
+      return {
+        data: {
+          ok: true,
+          markedReadCount: result.markedReadCount
+        }
+      };
+    } catch (error) {
+      return sendReaderCommandError(reply, error);
+    }
+  }
+
   app.post<{ Body: ReaderCommandBody }>(
     "/api/reader/commands/mark-scope-read",
     handleMarkScopeRead
+  );
+
+  app.post<{ Body: ReaderCommandBody }>(
+    "/api/reader/commands/mark-scope-read/preview",
+    handleMarkScopeReadPreview
   );
 
   app.post<{ Body: ReaderCommandBody }>(
@@ -3384,12 +3418,27 @@ function parseReaderCommandArticleListScope(
     return source;
   }
 
-  const timeWindow = parseArticleTimeWindowValue(scope.timeWindow);
-  if (timeWindow === null) {
+  const clearWindow = parseArticleTimeWindowValue(scope.clearWindow);
+  if (clearWindow === null) {
+    return {
+      ok: false,
+      message: "clearWindow must be all, 24h, 7d, or 30d",
+      details: { field: "scope.clearWindow" }
+    };
+  }
+  const legacyTimeWindow = parseArticleTimeWindowValue(scope.timeWindow);
+  if (legacyTimeWindow === null) {
     return {
       ok: false,
       message: "timeWindow must be all, 24h, 7d, or 30d",
       details: { field: "scope.timeWindow" }
+    };
+  }
+  if (clearWindow !== undefined && legacyTimeWindow !== undefined && clearWindow !== legacyTimeWindow) {
+    return {
+      ok: false,
+      message: "clearWindow and timeWindow cannot conflict",
+      details: { fields: ["scope.clearWindow", "scope.timeWindow"] }
     };
   }
 
@@ -3398,7 +3447,7 @@ function parseReaderCommandArticleListScope(
     scope: {
       type: "article_list",
       view,
-      timeWindow: timeWindow ?? "all",
+      clearWindow: clearWindow ?? legacyTimeWindow ?? "all",
       ...source.source
     }
   };

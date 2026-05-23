@@ -459,7 +459,7 @@ mark_scope_read
 
 语义：
 
-- `mark_scope_read` 将一个 `article_list` 或 `search` scope 内的未读文章标记为已读。
+- `mark_scope_read` 将一个 `article_list` 或 `search` scope 内的未读文章标记为已读；`article_list.clearWindow` 的 `24h` / `7d` / `30d` 表示清理对应时间点之前的未读债务，而不是最近时间窗。
 - 它只更新 reader state：`article_states.read_at`、`reading_progress=1`、`updated_at`。
 - 它不写入 `behavior_events`，不作为推荐正反馈。
 - 它不被 `profile_event_process` 消费，不更新兴趣簇。

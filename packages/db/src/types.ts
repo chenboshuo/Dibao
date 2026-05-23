@@ -261,13 +261,17 @@ export type ArticleSearchInput = {
 
 export type ReaderCommandType = "mark_scope_read";
 
+export type ArticleClearWindow = "all" | "24h" | "7d" | "30d";
+
 export type ArticleScope =
   | {
       type: "article_list";
       view: "latest" | "recommended";
       feedId?: string;
       folderId?: string;
-      timeWindow?: "all" | "24h" | "7d" | "30d";
+      clearWindow?: ArticleClearWindow;
+      timeWindow?: ArticleClearWindow;
+      beforeAt?: number;
       todayStartAt?: number;
       todayEndAt?: number;
     }
@@ -290,6 +294,10 @@ export type MarkScopeReadCommandResult = {
   commandId: string;
   markedReadCount: number;
   affectedArticleIds?: string[];
+};
+
+export type MarkScopeReadCommandPreview = {
+  markedReadCount: number;
 };
 
 export type ReaderCommandEventRow = {
