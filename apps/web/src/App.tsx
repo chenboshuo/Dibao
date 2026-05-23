@@ -1111,7 +1111,14 @@ export function App() {
             }
           }
         }
-        if (!cancelled && shouldLoadRankExplanation(currentArticleView)) {
+        if (
+          !cancelled &&
+          shouldLoadDetailRankExplanation(
+            appPageRef.current,
+            currentArticleView,
+            submittedSearchForm.sort
+          )
+        ) {
           await refreshArticleExplanation(articleId);
         }
       } catch (error) {
@@ -1146,6 +1153,7 @@ export function App() {
     currentArticleView,
     refreshArticleExplanation,
     selectedArticleId,
+    submittedSearchForm.sort,
     t.actions.errors.open,
     t.errors.api
   ]);
@@ -1863,7 +1871,7 @@ export function App() {
   }
 
   function handleOpenExplanation() {
-    if (!shouldLoadRankExplanation(currentArticleView)) {
+    if (!shouldLoadDetailRankExplanation(appPage, currentArticleView, submittedSearchForm.sort)) {
       return;
     }
 
@@ -2249,6 +2257,7 @@ export function App() {
               onSelectArticle={handleSelectArticle}
               onSubmit={handleSearchSubmit}
               pendingAction={pendingArticleAction}
+              resultUrlForm={submittedSearchForm}
               selectedArticleId={selectedArticleId}
               unreadCount={unreadCount}
             />
@@ -2256,9 +2265,15 @@ export function App() {
             <ArticleDetailPanel
               actionError={articleActionError}
               article={articleDetail}
-              articleView={currentArticleView}
+              articleView={
+                submittedSearchForm.sort === "recommended" ? "recommended" : currentArticleView
+              }
               detailError={detailError}
-              explanation={null}
+              explanation={
+                articleDetail && rankExplanation?.articleId === articleDetail.id
+                  ? rankExplanation
+                  : null
+              }
               explanationError={explanationError}
               isDetailLoading={isDetailLoading}
               isExplanationOpen={isExplanationOpen}
@@ -4651,6 +4666,7 @@ export function SearchResultsPanel(props: {
   onSelectArticle: (articleId: string) => void;
   onSubmit: (form: SearchFormState) => void;
   pendingAction?: PendingArticleAction | null;
+  resultUrlForm: SearchFormState;
   selectedArticleId: string | null;
   unreadCount: number;
 }) {
@@ -4824,7 +4840,7 @@ export function SearchResultsPanel(props: {
             >
               <a
                 className={styles.articleMain}
-                href={urlForSearchPage(props.form, article.id)}
+                href={urlForSearchPage(props.resultUrlForm, article.id)}
                 onClick={(event) => {
                   if (shouldLetBrowserHandleLinkClick(event)) {
                     return;
@@ -6358,6 +6374,16 @@ function articleSortForView(
 
 function shouldLoadRankExplanation(view: ArticleView): boolean {
   return view === "recommended" || view === "read_later";
+}
+
+function shouldLoadDetailRankExplanation(
+  page: AppPage,
+  view: ArticleView,
+  searchSort: ArticleSearchSort
+): boolean {
+  return page.type === "search"
+    ? searchSort === "recommended"
+    : shouldLoadRankExplanation(view);
 }
 
 function canLoadRankExplanation(page: AppPage, view: ArticleView): boolean {
