@@ -13,6 +13,7 @@ import type {
   FeedRepository,
   FeedRow
 } from "@dibao/db";
+import type { FullContentExtractionService } from "./full-content-extraction-service.js";
 import type { ArticleRankingRecalculator } from "./ranking-service.js";
 
 export type FeedFetchResponse = {
@@ -24,7 +25,11 @@ export type FeedFetchResponse = {
 
 export type FeedFetcher = (url: string) => Promise<FeedFetchResponse>;
 
-export type FeedIngestionErrorCode = "VALIDATION_ERROR" | "NOT_FOUND" | "PROVIDER_ERROR";
+export type FeedIngestionErrorCode =
+  | "VALIDATION_ERROR"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "PROVIDER_ERROR";
 
 export class FeedIngestionError extends Error {
   constructor(
@@ -42,9 +47,16 @@ export type FeedRefreshResult = {
   jobId: string;
   feed: FeedRow;
   articleIds: string[];
+  effectiveContentChangedArticleIds: string[];
   articlesSeen: number;
   articlesCreated: number;
   articlesUpdated: number;
+  fullContent: {
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    skipped: number;
+  };
 };
 
 export type FeedRefreshServiceOptions = {
@@ -53,6 +65,8 @@ export type FeedRefreshServiceOptions = {
   articles: ArticleRepository;
   ranking?: ArticleRankingRecalculator;
   fetcher?: FeedFetcher;
+  fullContentExtractor?: Pick<FullContentExtractionService, "extract">;
+  onEffectiveContentChanged?: (articleIds: string[]) => void;
   now?: () => number;
 };
 
@@ -99,7 +113,7 @@ export class FeedRefreshService {
     }
   }
 
-  private async fetchAndParse(feedUrl: string): Promise<ParsedFeed> {
+  async fetchAndParse(feedUrl: string): Promise<ParsedFeed> {
     let response: FeedFetchResponse;
     try {
       response = await this.fetcher(feedUrl);
@@ -126,15 +140,23 @@ export class FeedRefreshService {
     }
   }
 
-  private writeParsedFeed(input: {
+  async writeParsedFeed(input: {
     feedId: string;
     feedUrl: string;
     folderId: string | null;
     parsed: ParsedFeed;
-  }): FeedRefreshResult {
+  }): Promise<FeedRefreshResult> {
     const fetchedAt = this.now();
+    const fullContent = {
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      skipped: 0
+    };
+    const finalChangedIds = new Set<string>();
 
-    const result = this.options.db.transaction((): FeedRefreshResult => {
+    const result = await this.options.db.transaction(() => {
+      const existingFeed = this.options.feeds.findById(input.feedId);
       const feed = this.options.feeds.upsert({
         id: input.feedId,
         folderId: input.folderId,
@@ -143,16 +165,31 @@ export class FeedRefreshService {
         feedUrl: input.feedUrl,
         description: input.parsed.description,
         enabled: true,
+        fullContentMode: existingFeed?.fullContentMode ?? "feed_only",
         now: fetchedAt
       });
 
       let articlesCreated = 0;
       let articlesUpdated = 0;
       const articleIds: string[] = [];
+      const records: Array<{
+        article: ArticleRow;
+        existingContentHash: string | null;
+        item: ParsedFeedItem;
+        feedContentHash: string;
+      }> = [];
 
       for (const item of input.parsed.items) {
-        const articleInput = articleInputForFeedItem(feed, item, fetchedAt);
+        const feedContentHash = effectiveContentHash({
+          title: item.title,
+          summary: item.summary,
+          contentHtml: item.contentHtml,
+          contentText: item.contentText,
+          source: "feed"
+        });
+        const articleInput = articleInputForFeedItem(feed, item, fetchedAt, feedContentHash);
         const existing = this.options.articles.findById(articleInput.id);
+        const existingContentHash = existing?.contentHash ?? null;
         const article = this.options.articles.upsert(articleInput);
         if (isRetentionDeletedArticle(article)) {
           continue;
@@ -165,8 +202,10 @@ export class FeedRefreshService {
           contentText: item.contentText,
           extractionStatus: "feed_only",
           extractedAt: fetchedAt,
+          contentHash: feedContentHash,
           now: fetchedAt
         });
+        records.push({ article, existingContentHash, item, feedContentHash });
 
         if (existing) {
           articlesUpdated += 1;
@@ -185,15 +224,97 @@ export class FeedRefreshService {
         jobId: syncJobId(feed.id, fetchedAt),
         feed: updatedFeed,
         articleIds,
+        records,
         articlesSeen: input.parsed.items.length,
         articlesCreated,
         articlesUpdated
       };
     })();
 
-    this.options.ranking?.recalculateArticles(result.articleIds);
+    for (const record of result.records) {
+      let finalContentHash = record.feedContentHash;
+      if (
+        result.feed.fullContentMode === "fetch_full_content" &&
+        this.options.fullContentExtractor
+      ) {
+        fullContent.attempted += 1;
+        try {
+          const extracted = await this.options.fullContentExtractor.extract(record.item.url);
+          if (extracted.status === "success") {
+            fullContent.succeeded += 1;
+            finalContentHash = effectiveContentHash({
+              title: record.item.title,
+              summary: record.item.summary,
+              contentHtml: extracted.contentHtml,
+              contentText: extracted.contentText,
+              source: "full_content"
+            });
+            this.options.articles.upsertContent({
+              articleId: record.article.id,
+              contentHtml: extracted.contentHtml,
+              contentText: extracted.contentText,
+              extractionStatus: "success",
+              extractionError: null,
+              extractedAt: fetchedAt,
+              contentHash: finalContentHash,
+              now: fetchedAt
+            });
+          } else {
+            if (extracted.status === "failed") {
+              fullContent.failed += 1;
+            } else {
+              fullContent.skipped += 1;
+            }
+            this.options.articles.upsertContent({
+              articleId: record.article.id,
+              contentHtml: record.item.contentHtml,
+              contentText: record.item.contentText,
+              extractionStatus: extracted.status,
+              extractionError: extracted.error,
+              extractedAt: fetchedAt,
+              contentHash: record.feedContentHash,
+              now: fetchedAt
+            });
+          }
+        } catch (error) {
+          fullContent.failed += 1;
+          this.options.articles.upsertContent({
+            articleId: record.article.id,
+            contentHtml: record.item.contentHtml,
+            contentText: record.item.contentText,
+            extractionStatus: "failed",
+            extractionError: errorMessage(error),
+            extractedAt: fetchedAt,
+            contentHash: record.feedContentHash,
+            now: fetchedAt
+          });
+        }
+      }
+      if (record.existingContentHash !== finalContentHash) {
+        finalChangedIds.add(record.article.id);
+      }
+    }
 
-    return result;
+    this.options.feeds.recordFetchSuccess(result.feed.id, fetchedAt);
+    const updatedFeed = this.options.feeds.findById(result.feed.id);
+    if (!updatedFeed) {
+      throw new Error(`Failed to load refreshed feed: ${result.feed.id}`);
+    }
+
+    const effectiveContentChangedArticleIds = [...finalChangedIds];
+    this.options.onEffectiveContentChanged?.(effectiveContentChangedArticleIds);
+    this.options.ranking?.recalculateArticles(effectiveContentChangedArticleIds);
+
+    return {
+      jobId: result.jobId,
+      feed: updatedFeed,
+      articleIds: result.articleIds,
+      effectiveContentChangedArticleIds,
+      articlesSeen: result.articlesSeen,
+      articlesCreated: result.articlesCreated,
+      articlesUpdated: result.articlesUpdated,
+      fullContent
+    };
   }
 }
 
@@ -220,7 +341,18 @@ function normalizeHttpFeedUrl(input: string): string {
   return feedUrl;
 }
 
-function articleInputForFeedItem(feed: FeedRow, item: ParsedFeedItem, now: number) {
+export function articleInputForFeedItem(
+  feed: FeedRow,
+  item: ParsedFeedItem,
+  now: number,
+  contentHash = effectiveContentHash({
+    title: item.title,
+    summary: item.summary,
+    contentHtml: item.contentHtml,
+    contentText: item.contentText,
+    source: "feed"
+  })
+) {
   const canonicalUrl = canonicalizeArticleUrl(item.url);
   const guid = cleanOptional(item.guid);
   const dedupeKey = articleDedupeKey({ canonicalUrl, guid, item });
@@ -236,7 +368,7 @@ function articleInputForFeedItem(feed: FeedRow, item: ParsedFeedItem, now: numbe
     summary: cleanOptional(item.summary),
     publishedAt: item.publishedAt,
     discoveredAt: now,
-    contentHash: contentHashForItem(item),
+    contentHash,
     dedupeKey,
     status: "active" as const,
     now
@@ -281,11 +413,11 @@ function isRetentionDeletedArticle(article: ArticleRow): boolean {
   return article.status === "deleted" || article.deletedAt !== null;
 }
 
-function feedIdForUrl(feedUrl: string): string {
+export function feedIdForUrl(feedUrl: string): string {
   return hashId("feed", feedUrl);
 }
 
-function articleIdForDedupeKey(feedId: string, dedupeKey: string): string {
+export function articleIdForDedupeKey(feedId: string, dedupeKey: string): string {
   return hashId("article", `${feedId}|${dedupeKey}`);
 }
 
@@ -293,8 +425,22 @@ function syncJobId(feedId: string, fetchedAt: number): string {
   return `sync_${hashText(`${feedId}|${fetchedAt}`)}`;
 }
 
-function contentHashForItem(item: ParsedFeedItem): string {
-  return hashText([item.title, item.summary, item.contentHtml, item.contentText].join("\n"));
+export function effectiveContentHash(input: {
+  title: string;
+  summary?: string | null;
+  contentText?: string | null;
+  contentHtml?: string | null;
+  source: "feed" | "full_content";
+}): string {
+  return hashText(
+    [
+      `source:${input.source}`,
+      input.title,
+      input.summary ?? "",
+      input.contentHtml ?? "",
+      input.contentText ?? ""
+    ].join("\n")
+  );
 }
 
 function hashId(prefix: string, value: string): string {

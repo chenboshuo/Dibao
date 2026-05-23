@@ -681,6 +681,7 @@ describe("web API client", () => {
                   feedUrl: "https://example.com/feed.xml",
                   description: null,
                   enabled: false,
+                  fullContentMode: "fetch_full_content",
                   sourceWeight: 0.2,
                   lastFetchedAt: null,
                   lastSuccessAt: null,
@@ -708,8 +709,11 @@ describe("web API client", () => {
       feedUrl: "https://example.com/design.xml",
       folderId: "folder_design",
       enabled: false,
+      fullContentMode: "fetch_full_content",
       sourceWeight: 0.2
     });
+    await api.previewFeedFullContent("feed/design", "https://example.com/article");
+    await api.backfillCurrentFeedFullContent("feed/design");
     await api.deleteFeed("feed/design");
     await api.refreshAllFeeds();
 
@@ -749,8 +753,21 @@ describe("web API client", () => {
           feedUrl: "https://example.com/design.xml",
           folderId: "folder_design",
           enabled: false,
+          fullContentMode: "fetch_full_content",
           sourceWeight: 0.2
         }
+      },
+      {
+        path: "/api/feeds/feed%2Fdesign/full-content/preview",
+        method: "POST",
+        body: {
+          articleUrl: "https://example.com/article"
+        }
+      },
+      {
+        path: "/api/feeds/feed%2Fdesign/full-content/backfill-current",
+        method: "POST",
+        body: null
       },
       {
         path: "/api/feeds/feed%2Fdesign",

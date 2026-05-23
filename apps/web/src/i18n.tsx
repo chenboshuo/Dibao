@@ -263,6 +263,31 @@ export const zhCN = {
       emptyTitle: "选择一个订阅源",
       emptyBody: "选择后可以编辑标题、分组、启用状态和来源权重。"
     },
+    fullContent: {
+      label: "正文来源",
+      modes: {
+        feed_only: "使用 Feed 内容（默认）",
+        fetch_full_content: "抓取网页全文"
+      },
+      feedOnlyHint: "适合大多数全文 RSS，速度快、稳定。",
+      fetchHint: "适合只输出摘要的 RSS。可能失败，不会绕过付费墙。",
+      preview: "预览全文抓取",
+      backfill: "抓取当前 Feed 文章全文",
+      backfilling: "抓取中",
+      backfillConfirm:
+        "将重新读取当前 RSS，并只对当前 RSS 中仍出现的文章尝试抓取网页全文。不会扫描这个订阅源的所有历史文章。",
+      stats: {
+        articlesSeen: "当前 RSS 文章数",
+        attempted: "尝试",
+        succeeded: "成功",
+        failed: "失败",
+        skipped: "跳过",
+        changed: "内容发生变化",
+        limited: "50 篇限制"
+      },
+      limited: "已限制为前 50 篇",
+      notLimited: "未触发"
+    },
     actions: {
       save: "保存",
       saving: "保存中",
@@ -987,9 +1012,36 @@ export const zhCN = {
     selectArticleTitle: "选择一篇文章",
     selectArticleBody: "文章详情会在这里打开。",
     feedOnlyNotice: "当前仅有订阅源摘要。",
+    contentSource: {
+      success: "正文来自网页全文抓取。",
+      feed_only: "正文来自 RSS / Atom Feed。大多数 Feed 已经提供全文。",
+      failed: "网页全文抓取失败，当前显示 Feed 内容。",
+      failedWithError: (error: string) => `网页全文抓取失败，当前显示 Feed 内容。${error}`,
+      skipped: "未使用网页全文抓取，当前显示 Feed 内容。",
+      pending: "正文正在等待处理，当前显示 Feed 内容或摘要。",
+      noContent: "没有可用正文。"
+    },
     noContent: "这篇文章暂无正文内容。",
     meta: (feedTitle: string, date?: string, author?: string | null) =>
       [feedTitle, date, author].filter(Boolean).join(" · ")
+  },
+  fullContentPreview: {
+    pageTitle: "全文抓取预览",
+    status: "预览不会写入数据库",
+    kicker: "Content preview",
+    back: "返回订阅源管理",
+    reload: "重新预览",
+    loading: "正在预览",
+    articleUrl: "文章 URL",
+    resultStatus: "状态",
+    extractedTitle: "抽取标题",
+    statuses: {
+      success: "成功",
+      failed: "失败",
+      skipped: "跳过"
+    },
+    noPreview: "没有可用预览。",
+    noDbWrite: "这不会影响现有 Feed 内容。"
   },
   explanation: {
     title: "为什么推荐",
@@ -1354,6 +1406,32 @@ export const enUS = {
       lastError: "Last error",
       emptyTitle: "Select a feed",
       emptyBody: "Select a feed to edit its title, folder, enabled state, and source weight."
+    },
+    fullContent: {
+      label: "Content source",
+      modes: {
+        feed_only: "Use Feed content (default)",
+        fetch_full_content: "Fetch full web article"
+      },
+      feedOnlyHint: "Best for most full-text RSS feeds. Fast and stable.",
+      fetchHint:
+        "Useful for summary-only RSS feeds. It can fail and will not bypass paywalls.",
+      preview: "Preview full content fetch",
+      backfill: "Fetch current Feed articles",
+      backfilling: "Fetching",
+      backfillConfirm:
+        "Dibao will read the current RSS response again and fetch full web content only for articles still present there. It will not scan all historical articles from this feed.",
+      stats: {
+        articlesSeen: "Current RSS articles",
+        attempted: "Attempted",
+        succeeded: "Succeeded",
+        failed: "Failed",
+        skipped: "Skipped",
+        changed: "Content changed",
+        limited: "50 item limit"
+      },
+      limited: "Limited to first 50",
+      notLimited: "Not triggered"
     },
     actions: {
       save: "Save",
@@ -2068,9 +2146,37 @@ export const enUS = {
     selectArticleTitle: "Select an article",
     selectArticleBody: "Article details will open here.",
     feedOnlyNotice: "Only the feed summary is available.",
+    contentSource: {
+      success: "Body content comes from full web article fetching.",
+      feed_only: "Body content comes from the RSS / Atom Feed. Most Feeds already provide full text.",
+      failed: "Full web article fetching failed; current content is from the Feed.",
+      failedWithError: (error: string) =>
+        `Full web article fetching failed; current content is from the Feed. ${error}`,
+      skipped: "Full web article content was not used; current content is from the Feed.",
+      pending: "Body processing is pending; current content is Feed content or summary.",
+      noContent: "No body content is available."
+    },
     noContent: "This article has no body content yet.",
     meta: (feedTitle: string, date?: string, author?: string | null) =>
       [feedTitle, date, author].filter(Boolean).join(" · ")
+  },
+  fullContentPreview: {
+    pageTitle: "Full Content Preview",
+    status: "Preview does not write to the database",
+    kicker: "Content preview",
+    back: "Back to feed management",
+    reload: "Preview again",
+    loading: "Previewing",
+    articleUrl: "Article URL",
+    resultStatus: "Status",
+    extractedTitle: "Extracted title",
+    statuses: {
+      success: "Success",
+      failed: "Failed",
+      skipped: "Skipped"
+    },
+    noPreview: "No preview is available.",
+    noDbWrite: "This does not affect existing Feed content."
   },
   explanation: {
     title: "Why recommended",

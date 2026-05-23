@@ -26,6 +26,8 @@ import {
   type FeedDiscoveryCandidate,
   type FeedDiscoveryResponse,
   type FeedFolder,
+  type FullContentBackfillResponse,
+  type FullContentPreviewResponse,
   type OpmlImportResponse,
   type RankExplanation,
   type RankExplanationReason,
@@ -117,6 +119,7 @@ export type AppPage =
   | { type: "reader"; view: ArticleView }
   | { type: "search" }
   | { type: "feed-management" }
+  | { type: "full-content-preview"; feedId: string }
   | { type: "settings" }
   | { type: "algorithm-transparency" }
   | { type: "algorithm-clusters" };
@@ -1555,6 +1558,21 @@ export function App() {
     await refreshSourcesAfterManagementMutation();
   }
 
+  function handlePreviewFullContent(feedId: string) {
+    window.open(urlForAppPage({ type: "full-content-preview", feedId }), "_blank", "noopener");
+  }
+
+  async function handleBackfillCurrentFeedFullContent(
+    feedId: string
+  ): Promise<FullContentBackfillResponse> {
+    const result = await dibaoApi.backfillCurrentFeedFullContent(feedId);
+    await refreshSourcesAfterManagementMutation();
+    if (selectedArticleId) {
+      setArticleDetail(await dibaoApi.getArticle(selectedArticleId));
+    }
+    return result;
+  }
+
   function handlePreviewSettings(settings: AppSettings) {
     applySettings(settings);
     setSettingsError(null);
@@ -2153,6 +2171,8 @@ export function App() {
   const pageTitle =
     appPage.type === "feed-management"
       ? t.feedManagement.pageTitle
+      : appPage.type === "full-content-preview"
+        ? t.fullContentPreview.pageTitle
       : appPage.type === "search"
         ? t.search.pageTitle
       : appPage.type === "settings"
@@ -2165,6 +2185,8 @@ export function App() {
       ? isFeedsLoading
         ? t.feedManagement.loading
         : t.feedManagement.status(feeds.length, feedFolders.length)
+      : appPage.type === "full-content-preview"
+        ? t.fullContentPreview.status
       : appPage.type === "search"
         ? articleError ??
           (hasSubmittedSearch
@@ -2392,11 +2414,19 @@ export function App() {
             onImportOpml={handleImportOpml}
             onRefreshFeed={handleRefreshFeed}
             onRefreshAllFeeds={handleRefreshAllFeeds}
+            onPreviewFullContent={handlePreviewFullContent}
+            onBackfillCurrentFeedFullContent={handleBackfillCurrentFeedFullContent}
             onUpdateFeedUrl={setFeedUrl}
             onUpdateFeed={handleUpdateManagedFeed}
             onUpdateFolder={handleUpdateManagedFolder}
             opmlSummary={opmlSummary}
             refreshingFeedId={refreshingFeedId}
+          />
+        ) : appPage.type === "full-content-preview" ? (
+          <FullContentPreviewPage
+            feed={feeds.find((feed) => feed.id === appPage.feedId) ?? null}
+            feedId={appPage.feedId}
+            onBack={() => navigateToAppPage({ type: "feed-management" })}
           />
         ) : appPage.type === "settings" ? (
           <SettingsWorkspace
@@ -3016,6 +3046,104 @@ export function SetupProviderPlaceholderPanel(props: { onContinue: () => void })
       <button className={styles.primaryButton} onClick={props.onContinue} type="button">
         {t.setup.provider.continue}
       </button>
+    </section>
+  );
+}
+
+function FullContentPreviewPage(props: {
+  feed: Feed | null;
+  feedId: string;
+  onBack: () => void;
+}) {
+  const { t } = useI18n();
+  const [result, setResult] = useState<FullContentPreviewResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const loadPreview = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      setResult(await dibaoApi.previewFeedFullContent(props.feedId));
+    } catch (caught) {
+      setError(userMessageForError(caught, t.errors.api));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [props.feedId, t.errors.api]);
+
+  useEffect(() => {
+    void loadPreview();
+  }, [loadPreview]);
+
+  const safeHtml = useMemo(
+    () => (result?.contentHtml ? sanitizeArticleHtml(result.contentHtml, result.articleUrl) : null),
+    [result]
+  );
+
+  return (
+    <section className={styles.settingsWorkspace} aria-labelledby="full-content-preview-title">
+      <div className={styles.settingsHeader}>
+        <div>
+          <p className={styles.kicker}>{t.fullContentPreview.kicker}</p>
+          <h2 id="full-content-preview-title">
+            {props.feed?.title ?? t.fullContentPreview.pageTitle}
+          </h2>
+        </div>
+        <div className={styles.managementActions}>
+          <button className={styles.secondaryButton} onClick={props.onBack} type="button">
+            {t.fullContentPreview.back}
+          </button>
+          <button
+            className={styles.primaryButton}
+            disabled={isLoading}
+            onClick={() => void loadPreview()}
+            type="button"
+          >
+            {isLoading ? t.fullContentPreview.loading : t.fullContentPreview.reload}
+          </button>
+        </div>
+      </div>
+      <section className={styles.settingsSection}>
+        {error ? <p className={styles.errorText}>{error}</p> : null}
+        {isLoading ? <p className={styles.settingsNotice}>{t.fullContentPreview.loading}</p> : null}
+        {result ? (
+          <>
+            <dl className={styles.managementStatusRows}>
+              <div>
+                <dt>{t.fullContentPreview.articleUrl}</dt>
+                <dd>{result.articleUrl}</dd>
+              </div>
+              <div>
+                <dt>{t.fullContentPreview.resultStatus}</dt>
+                <dd>{t.fullContentPreview.statuses[result.status]}</dd>
+              </div>
+              <div>
+                <dt>{t.fullContentPreview.extractedTitle}</dt>
+                <dd>{result.title ?? t.feedManagement.na}</dd>
+              </div>
+            </dl>
+            {result.status === "success" ? (
+              <article className={styles.reader}>
+                {safeHtml ? (
+                  <div
+                    className={styles.readerBody}
+                    dangerouslySetInnerHTML={{ __html: safeHtml }}
+                  />
+                ) : (
+                  <div className={styles.readerBody}>
+                    <p>{result.contentText ?? result.excerpt}</p>
+                  </div>
+                )}
+              </article>
+            ) : (
+              <p className={styles.settingsNotice}>
+                {result.error ?? t.fullContentPreview.noPreview} {t.fullContentPreview.noDbWrite}
+              </p>
+            )}
+          </>
+        ) : null}
+      </section>
     </section>
   );
 }
@@ -5753,6 +5881,7 @@ function ArticleDetailPanel(props: {
         : null,
     [props.article?.contentHtml, props.article?.url]
   );
+  const sourceNotice = props.article ? contentSourceNotice(props.article, t) : null;
   const showReaderActions = useReaderActionVisibility(readerPanelRef, props.article?.id ?? null);
 
   useReaderReadProgress({
@@ -5800,8 +5929,8 @@ function ArticleDetailPanel(props: {
                 props.article.author
               )}
             </p>
-            {props.article.extractionStatus === "feed_only" ? (
-              <span className={styles.inlineNotice}>{t.reader.feedOnlyNotice}</span>
+            {sourceNotice ? (
+              <span className={styles.inlineNotice}>{sourceNotice}</span>
             ) : null}
             <ArticleActionControls
               actionError={props.actionError}
@@ -5910,6 +6039,30 @@ function ArticleRowActions(props: {
       ) : null}
     </div>
   );
+}
+
+function contentSourceNotice(article: ArticleDetail, t: Dictionary): string {
+  if (!article.contentHtml && !article.contentText) {
+    return t.reader.contentSource.noContent;
+  }
+  switch (article.extractionStatus) {
+    case "success":
+      return t.reader.contentSource.success;
+    case "feed_only":
+      return t.reader.contentSource.feed_only;
+    case "failed":
+      return article.extractionError
+        ? t.reader.contentSource.failedWithError(shortError(article.extractionError))
+        : t.reader.contentSource.failed;
+    case "skipped":
+      return t.reader.contentSource.skipped;
+    case "pending":
+      return t.reader.contentSource.pending;
+  }
+}
+
+function shortError(value: string): string {
+  return value.length > 120 ? `${value.slice(0, 120)}...` : value;
 }
 
 export function ArticleActionControls(props: {
@@ -7029,7 +7182,7 @@ function routeFromLocation(defaultView: ArticleView): AppRoute {
   const view = parseUrlView(params.get("view"));
   const page = pathname === "/search"
     ? { type: "search" } satisfies AppPage
-    : parseUrlPage(params.get("page"), view ?? defaultView);
+    : parseUrlPage(params.get("page"), view ?? defaultView, params);
   const articleId =
     page.type === "reader" || page.type === "search" ? params.get("article") : null;
   return {
@@ -7123,6 +7276,9 @@ function urlForAppPage(page: AppPage, state: UrlState = {}): string {
 
   const params = new URLSearchParams();
   params.set("page", page.type);
+  if (page.type === "full-content-preview") {
+    params.set("feedId", page.feedId);
+  }
   return `/?${params.toString()}`;
 }
 
@@ -7179,13 +7335,19 @@ function paramsForReaderView(view: ArticleView, state: UrlState): URLSearchParam
   return params;
 }
 
-function parseUrlPage(value: string | null, view: ArticleView): AppPage {
+function parseUrlPage(
+  value: string | null,
+  view: ArticleView,
+  params: URLSearchParams = new URLSearchParams()
+): AppPage {
   switch (value) {
     case "search":
       return { type: "search" };
     case "feeds":
     case "feed-management":
       return { type: "feed-management" };
+    case "full-content-preview":
+      return { type: "full-content-preview", feedId: params.get("feedId") ?? "" };
     case "settings":
       return { type: "settings" };
     case "algorithm":

@@ -160,6 +160,7 @@ type Feed = {
   feedUrl: string;
   description: string | null;
   enabled: boolean;
+  fullContentMode: "feed_only" | "fetch_full_content";
   sourceWeight: number;
   lastFetchedAt: string | null;
   lastSuccessAt: string | null;
@@ -484,6 +485,7 @@ enabled=true|false
       "feedUrl": "https://www.theverge.com/rss/index.xml",
       "description": null,
       "enabled": true,
+      "fullContentMode": "feed_only",
       "sourceWeight": 0,
       "lastFetchedAt": null,
       "lastSuccessAt": null,
@@ -617,6 +619,7 @@ enabled=true|false
 - 保持兼容：调用方仍可直接传 `feedUrl` 添加订阅源。
 - Web UI 默认先调用 `POST /api/feeds/discover`，用户确认候选后再把 `candidate.feedUrl` 传给本接口。
 - 本接口会实际抓取、解析并写入 feed/articles。
+- 新 feed 默认 `fullContentMode = "feed_only"`，不会请求文章网页 URL。
 - 已存在的 `feedUrl` 会沿用当前 upsert 语义，恢复或更新该 feed，并同步刷新文章；前端应优先通过 discovery 的 `duplicate` 状态避免让用户重复添加。
 
 请求：
@@ -652,11 +655,13 @@ enabled=true|false
   "title": "Example",
   "folderId": null,
   "enabled": true,
+  "fullContentMode": "fetch_full_content",
   "sourceWeight": 0.2
 }
 ```
 
 `sourceWeight` 范围为 `-1..1`。
+`fullContentMode` 可为 `feed_only` 或 `fetch_full_content`。默认和推荐基线是 `feed_only`；只有显式设置为 `fetch_full_content` 后，后续刷新或当前 Feed 回溯才会请求文章网页全文。
 
 响应：
 
@@ -670,6 +675,7 @@ enabled=true|false
     "feedUrl": "https://example.com/feed.xml",
     "description": null,
     "enabled": true,
+    "fullContentMode": "fetch_full_content",
     "sourceWeight": 0.2,
     "lastFetchedAt": null,
     "lastSuccessAt": null,
@@ -677,6 +683,80 @@ enabled=true|false
     "lastError": null,
     "createdAt": "2026-05-14T12:00:00.000Z",
     "updatedAt": "2026-05-14T12:05:00.000Z"
+  }
+}
+```
+
+### POST /api/feeds/:id/full-content/preview
+
+预览订阅源的网页全文抓取结果。
+
+说明：
+
+- 需要认证。
+- 不写数据库，不更新 `article_contents`，不 enqueue jobs。
+- 不传 `articleUrl` 时，重新读取当前 RSS / Atom 响应并取第一篇 item URL 预览。
+- 只抓取 `http` / `https` HTML，不执行 JS，不使用 headless browser，不绕过付费墙，不下载图片。
+- 抓取失败或内容太短时返回 `failed` 或 `skipped`；这不会影响现有 Feed 内容。
+
+请求：
+
+```json
+{}
+```
+
+或：
+
+```json
+{
+  "articleUrl": "https://example.com/post"
+}
+```
+
+响应：
+
+```json
+{
+  "data": {
+    "feedId": "feed_01",
+    "articleUrl": "https://example.com/post",
+    "status": "success",
+    "title": "Article title",
+    "excerpt": "first 500 chars",
+    "contentText": "extracted text",
+    "contentHtml": "<p>extracted safe html</p>",
+    "error": null
+  }
+}
+```
+
+### POST /api/feeds/:id/full-content/backfill-current
+
+对当前 RSS / Atom 响应中仍出现的 items 执行网页全文抓取。
+
+说明：
+
+- 需要认证。
+- 仅当 feed `fullContentMode = "fetch_full_content"` 时可用，否则返回 `409 VALIDATION_ERROR`。
+- 只处理当前 RSS / Atom 响应中的前 50 篇 items；不会扫描该订阅源所有历史文章。
+- 单篇抓取失败不中断整体回溯；失败/跳过文章保留 Feed 内容并记录 `extraction_status` / `extraction_error`。
+- 全文成功会更新文章有效正文和 `articles.content_hash`；hash 变化会 enqueue embedding regeneration，并 enqueue ranking recalculation。
+- 回溯是 content maintenance / corpus update：不写 `behavior_events`，不调用 article action，不作为用户偏好信号。若受影响文章存在历史行为，只能触发推荐维护重算，不伪造新行为。
+
+响应：
+
+```json
+{
+  "data": {
+    "feedId": "feed_01",
+    "articlesSeen": 20,
+    "attempted": 20,
+    "succeeded": 15,
+    "failed": 3,
+    "skipped": 2,
+    "articleIds": ["article_01"],
+    "effectiveContentChangedArticleIds": ["article_01"],
+    "limited": false
   }
 }
 ```

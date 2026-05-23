@@ -24,6 +24,7 @@ export type FeedRow = {
   feedUrl: string;
   description: string | null;
   enabled: boolean;
+  fullContentMode: FeedFullContentMode;
   sourceWeight: number;
   lastFetchedAt: number | null;
   lastSuccessAt: number | null;
@@ -32,6 +33,8 @@ export type FeedRow = {
   createdAt: number;
   updatedAt: number;
 };
+
+export type FeedFullContentMode = "feed_only" | "fetch_full_content";
 
 export type FeedFolderRow = {
   id: string;
@@ -119,6 +122,7 @@ export type UpsertFeedInput = {
   feedUrl: string;
   description?: string | null;
   enabled?: boolean;
+  fullContentMode?: FeedFullContentMode;
   sourceWeight?: number;
   now?: number;
 };
@@ -129,6 +133,7 @@ export type UpdateFeedInput = {
   folderId?: string | null;
   feedUrl?: string;
   enabled?: boolean;
+  fullContentMode?: FeedFullContentMode;
   sourceWeight?: number;
   now?: number;
 };
@@ -742,7 +747,12 @@ export type UpsertArticleContentInput = {
   extractionStatus?: "pending" | "feed_only" | "success" | "failed" | "skipped";
   extractionError?: string | null;
   extractedAt?: number | null;
+  contentHash?: string | null;
   now?: number;
+};
+
+export type UpsertArticleContentResult = {
+  contentHashChanged: boolean;
 };
 
 export type ArticleSearchResult = ArticleListResult;

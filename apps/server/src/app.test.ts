@@ -3146,6 +3146,7 @@ describe("server API vertical slice", () => {
             feedUrl: "https://example.com/feed.xml",
             description: null,
             enabled: true,
+            fullContentMode: "feed_only",
             sourceWeight: 0,
             lastFetchedAt: null,
             lastSuccessAt: null,
@@ -3540,6 +3541,80 @@ describe("server API vertical slice", () => {
           extractionStatus: "feed_only"
         }
       });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("previews and backfills current feed full content without behavior events", async () => {
+    const db = createEmptyDatabase();
+    const fullText =
+      "Expanded article body for full content extraction. ".repeat(8) +
+      "searchable-full-content-marker";
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => Date.parse("2026-05-14T08:00:00.000Z"),
+      feedFetcher: fixtureFetcher({ "https://example.com/feed.xml": fixtureRss }),
+      fullContentFetcher: async (input) => {
+        const url = String(input);
+        if (url.endsWith("/second")) {
+          return new Response("broken", { status: 500, headers: { "content-type": "text/html" } });
+        }
+        return new Response(
+          `<html><body><nav>nav</nav><article><p>${fullText}</p></article></body></html>`,
+          { headers: { "content-type": "text/html" } }
+        );
+      }
+    });
+
+    try {
+      const add = await postJson(app, "/api/feeds", {
+        feedUrl: "https://example.com/feed.xml"
+      });
+      const feedId = add.json().data.feed.id;
+
+      const preview = await postJson(app, `/api/feeds/${feedId}/full-content/preview`, {});
+      expect(preview.statusCode, preview.body).toBe(200);
+      expect(preview.json()).toMatchObject({
+        data: {
+          feedId,
+          articleUrl: "https://example.com/first",
+          status: "success"
+        }
+      });
+      expect(countTable(db, "behavior_events")).toBe(0);
+
+      const blocked = await postJson(app, `/api/feeds/${feedId}/full-content/backfill-current`, {});
+      expect(blocked.statusCode).toBe(409);
+
+      const patch = await injectJson(app, "PATCH", `/api/feeds/${feedId}`, {
+        fullContentMode: "fetch_full_content"
+      });
+      expect(patch.statusCode, patch.body).toBe(200);
+      expect(patch.json().data.fullContentMode).toBe("fetch_full_content");
+
+      const backfill = await postJson(
+        app,
+        `/api/feeds/${feedId}/full-content/backfill-current`,
+        {}
+      );
+      expect(backfill.statusCode, backfill.body).toBe(200);
+      expect(backfill.json()).toMatchObject({
+        data: {
+          feedId,
+          articlesSeen: 2,
+          attempted: 2,
+          succeeded: 1,
+          failed: 1,
+          skipped: 0,
+          limited: false
+        }
+      });
+      expect(backfill.json().data.effectiveContentChangedArticleIds).toHaveLength(1);
+      expect(countTable(db, "behavior_events")).toBe(0);
+      expect(countTable(db, "jobs")).toBeGreaterThan(0);
     } finally {
       await app.close();
       db.close();

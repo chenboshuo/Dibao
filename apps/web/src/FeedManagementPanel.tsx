@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent 
 import {
   userMessageForError,
   type Feed,
+  type FullContentBackfillResponse,
   type FeedDiagnosticItem,
   type FeedDiagnosticsResponse,
   type FeedDiscoveryCandidate,
@@ -21,7 +22,8 @@ type PendingManagementAction =
   | "updateFolder"
   | "deleteFolder"
   | "updateFeed"
-  | "deleteFeed";
+  | "deleteFeed"
+  | "backfillFullContent";
 
 type FeedDiagnosticsByFeedId = Record<string, FeedDiagnosticItem["diagnostic"]>;
 type FeedDiagnosticFilter = "all" | "unhealthy" | "disabled" | "neverFetched";
@@ -31,6 +33,7 @@ type FeedDraft = {
   feedUrl: string;
   folderId: string;
   enabled: boolean;
+  fullContentMode: Feed["fullContentMode"];
   sourceWeight: string;
 };
 
@@ -59,6 +62,8 @@ export type FeedManagementWorkspaceProps = {
   onImportOpml: (event: ChangeEvent<HTMLInputElement>) => void;
   onRefreshFeed: (feed: Feed) => void;
   onRefreshAllFeeds: () => void;
+  onPreviewFullContent: (feedId: string) => void;
+  onBackfillCurrentFeedFullContent: (feedId: string) => Promise<FullContentBackfillResponse>;
   onUpdateFeed: (feedId: string, input: UpdateFeedInput) => Promise<void>;
   onUpdateFeedUrl: (value: string) => void;
   onUpdateFolder: (folderId: string, input: UpdateFeedFolderInput) => Promise<void>;
@@ -92,6 +97,7 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
   const [pendingAction, setPendingAction] = useState<PendingManagementAction | null>(null);
   const [diagnosticFilter, setDiagnosticFilter] = useState<FeedDiagnosticFilter>("all");
   const [error, setError] = useState<string | null>(null);
+  const [backfillResult, setBackfillResult] = useState<FullContentBackfillResponse | null>(null);
   const visibleFeeds = useMemo(
     () =>
       props.feeds.filter((feed) =>
@@ -117,6 +123,7 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
   useEffect(() => {
     setFeedDraft(selectedFeed ? draftForFeed(selectedFeed) : emptyFeedDraft());
     setConfirmDeleteFeedId(null);
+    setBackfillResult(null);
   }, [selectedFeed]);
 
   async function runManagementAction(action: PendingManagementAction, fn: () => Promise<void>) {
@@ -214,8 +221,23 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
         folderId:
           feedDraft.folderId === UNGROUPED_FOLDER_VALUE ? null : feedDraft.folderId,
         enabled: feedDraft.enabled,
+        fullContentMode: feedDraft.fullContentMode,
         sourceWeight
       });
+    });
+  }
+
+  async function handleBackfillCurrentFeedFullContent() {
+    if (!selectedFeed) {
+      return;
+    }
+    const confirmed = window.confirm(t.feedManagement.fullContent.backfillConfirm);
+    if (!confirmed) {
+      return;
+    }
+    await runManagementAction("backfillFullContent", async () => {
+      const result = await props.onBackfillCurrentFeedFullContent(selectedFeed.id);
+      setBackfillResult(result);
     });
   }
 
@@ -639,6 +661,32 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                     <span>{t.feedManagement.editor.enabledLabel}</span>
                   </label>
 
+                  <label htmlFor="managed-feed-full-content-mode">
+                    {t.feedManagement.fullContent.label}
+                  </label>
+                  <select
+                    id="managed-feed-full-content-mode"
+                    onChange={(event) =>
+                      setFeedDraft((current) => ({
+                        ...current,
+                        fullContentMode: event.target.value as Feed["fullContentMode"]
+                      }))
+                    }
+                    value={feedDraft.fullContentMode}
+                  >
+                    <option value="feed_only">
+                      {t.feedManagement.fullContent.modes.feed_only}
+                    </option>
+                    <option value="fetch_full_content">
+                      {t.feedManagement.fullContent.modes.fetch_full_content}
+                    </option>
+                  </select>
+                  <p className={styles.managementHint}>
+                    {feedDraft.fullContentMode === "fetch_full_content"
+                      ? t.feedManagement.fullContent.fetchHint
+                      : t.feedManagement.fullContent.feedOnlyHint}
+                  </p>
+
                   <label htmlFor="managed-feed-source-weight">
                     {t.feedManagement.editor.sourceWeightLabel}
                   </label>
@@ -719,6 +767,25 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                       </button>
                     ) : null}
                     <button
+                      className={styles.secondaryButton}
+                      onClick={() => props.onPreviewFullContent(selectedFeed.id)}
+                      type="button"
+                    >
+                      {t.feedManagement.fullContent.preview}
+                    </button>
+                    {selectedFeed.fullContentMode === "fetch_full_content" ? (
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={pendingAction === "backfillFullContent"}
+                        onClick={() => void handleBackfillCurrentFeedFullContent()}
+                        type="button"
+                      >
+                        {pendingAction === "backfillFullContent"
+                          ? t.feedManagement.fullContent.backfilling
+                          : t.feedManagement.fullContent.backfill}
+                      </button>
+                    ) : null}
+                    <button
                       className={styles.dangerButton}
                       disabled={pendingAction === "deleteFeed"}
                       onClick={() => void handleDeleteFeed(selectedFeed)}
@@ -733,6 +800,42 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
                     <p className={styles.managementHint}>
                       {t.feedManagement.feeds.deleteHint}
                     </p>
+                  ) : null}
+                  {backfillResult ? (
+                    <dl className={styles.managementStatusRows} aria-live="polite">
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.articlesSeen}</dt>
+                        <dd>{backfillResult.articlesSeen}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.attempted}</dt>
+                        <dd>{backfillResult.attempted}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.succeeded}</dt>
+                        <dd>{backfillResult.succeeded}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.failed}</dt>
+                        <dd>{backfillResult.failed}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.skipped}</dt>
+                        <dd>{backfillResult.skipped}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.changed}</dt>
+                        <dd>{backfillResult.effectiveContentChangedArticleIds.length}</dd>
+                      </div>
+                      <div>
+                        <dt>{t.feedManagement.fullContent.stats.limited}</dt>
+                        <dd>
+                          {backfillResult.limited
+                            ? t.feedManagement.fullContent.limited
+                            : t.feedManagement.fullContent.notLimited}
+                        </dd>
+                      </div>
+                    </dl>
                   ) : null}
                 </form>
               </>
@@ -755,6 +858,7 @@ function draftForFeed(feed: Feed): FeedDraft {
     feedUrl: feed.feedUrl,
     folderId: feed.folderId ?? UNGROUPED_FOLDER_VALUE,
     enabled: feed.enabled,
+    fullContentMode: feed.fullContentMode,
     sourceWeight: String(feed.sourceWeight)
   };
 }
@@ -871,6 +975,7 @@ function emptyFeedDraft(): FeedDraft {
     feedUrl: "",
     folderId: UNGROUPED_FOLDER_VALUE,
     enabled: true,
+    fullContentMode: "feed_only",
     sourceWeight: "0"
   };
 }

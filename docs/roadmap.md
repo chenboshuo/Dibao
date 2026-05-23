@@ -91,6 +91,7 @@ Last updated: 2026-05-23
 | C-26 | Done | P0 | infra/docs/test | MVP release hardening | Dockerfile、Compose 自托管路径、匿名 health check、无外网 E2E smoke 和 README 用户文档已完成。 |
 | C-27 | Done | P1 | frontend/backend/test/docs | Reader Command bulk read cleanup | `POST /api/reader/commands/mark-scope-read` 可按 latest/recommended 的全部、24h 前、7d 前、30d 前未读债务或 search 当前结果批量标记未读为已读；写入 `reader_command_events`，不写入 `behavior_events`，不进入兴趣画像学习；Web 合并未读 toggle、计数和清账确认控件。 |
 | C-28 | Done | P1 | backend/frontend/test/docs | Feed discovery and diagnostics | `POST /api/feeds/discover` 可从网站首页或直接 feed URL 预检候选；Web 添加前展示 title、URL、最近文章和重复状态；`GET /api/feeds/diagnostics` 和订阅源管理页展示健康状态、异常筛选和失败重试。 |
+| C-29 | Done | P1 | backend/frontend/algorithm/test/docs | Feed full content control | Feed 默认继续使用 RSS / Atom 内容；订阅源可显式开启网页全文抓取、预览不写库、当前 RSS 回溯只处理当前响应前 50 篇。成功更新有效正文和 `content_hash` 并触发 embedding/ranking；失败保留 Feed 内容；回溯不写 `behavior_events`，不作为用户偏好信号。 |
 
 ## MVP Remaining Work
 

@@ -1,5 +1,6 @@
 import type {
   DibaoDatabase,
+  FeedFullContentMode,
   FeedListInput,
   FeedRow,
   UpdateFeedInput,
@@ -14,6 +15,7 @@ type FeedDbRow = {
   feedUrl: string;
   description: string | null;
   enabled: 0 | 1;
+  fullContentMode: FeedFullContentMode;
   sourceWeight: number;
   lastFetchedAt: number | null;
   lastSuccessAt: number | null;
@@ -175,6 +177,7 @@ export class SqliteFeedRepository implements FeedRepository {
             folder_id = ?,
             feed_url = ?,
             enabled = ?,
+            full_content_mode = ?,
             source_weight = ?,
             updated_at = ?
           where id = ? and deleted_at is null
@@ -185,6 +188,7 @@ export class SqliteFeedRepository implements FeedRepository {
         input.folderId === undefined ? existing.folderId : input.folderId,
         input.feedUrl ?? existing.feedUrl,
         input.enabled === undefined ? (existing.enabled ? 1 : 0) : input.enabled ? 1 : 0,
+        input.fullContentMode ?? existing.fullContentMode,
         input.sourceWeight ?? existing.sourceWeight,
         now,
         input.id
@@ -206,17 +210,19 @@ export class SqliteFeedRepository implements FeedRepository {
             feed_url,
             description,
             enabled,
+            full_content_mode,
             source_weight,
             created_at,
             updated_at
           )
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict(feed_url) do update set
             folder_id = excluded.folder_id,
             title = excluded.title,
             site_url = excluded.site_url,
             description = excluded.description,
             enabled = excluded.enabled,
+            full_content_mode = excluded.full_content_mode,
             source_weight = excluded.source_weight,
             updated_at = excluded.updated_at,
             deleted_at = null
@@ -230,6 +236,7 @@ export class SqliteFeedRepository implements FeedRepository {
         input.feedUrl,
         input.description ?? null,
         input.enabled === false ? 0 : 1,
+        input.fullContentMode ?? "feed_only",
         input.sourceWeight ?? 0,
         now,
         now
@@ -255,6 +262,7 @@ export class SqliteFeedRepository implements FeedRepository {
       feedUrl: row.feedUrl,
       description: row.description,
       enabled: row.enabled === 1,
+      fullContentMode: row.fullContentMode,
       sourceWeight: row.sourceWeight,
       lastFetchedAt: row.lastFetchedAt,
       lastSuccessAt: row.lastSuccessAt,
@@ -332,6 +340,7 @@ function baseFeedSelect(): string {
       feed_url as feedUrl,
       description,
       enabled,
+      full_content_mode as fullContentMode,
       source_weight as sourceWeight,
       last_fetched_at as lastFetchedAt,
       last_success_at as lastSuccessAt,

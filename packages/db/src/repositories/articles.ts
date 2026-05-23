@@ -14,6 +14,7 @@ import type {
   ArticleSearchResult,
   DibaoDatabase,
   UpsertArticleContentInput,
+  UpsertArticleContentResult,
   UpsertArticleInput
 } from "../types.js";
 import { BASE_RANK_CONTEXT } from "./ranking.js";
@@ -89,7 +90,7 @@ export interface ArticleRepository {
   markArticleIdsRead(articleIds: string[], now: number): number;
   search(input: ArticleSearchInput): ArticleSearchResult;
   upsert(input: UpsertArticleInput): ArticleRow;
-  upsertContent(input: UpsertArticleContentInput): void;
+  upsertContent(input: UpsertArticleContentInput): UpsertArticleContentResult;
 }
 
 export class SqliteArticleRepository implements ArticleRepository {
@@ -641,41 +642,65 @@ export class SqliteArticleRepository implements ArticleRepository {
     return row;
   }
 
-  upsertContent(input: UpsertArticleContentInput): void {
+  upsertContent(input: UpsertArticleContentInput): UpsertArticleContentResult {
     const now = input.now ?? Date.now();
-    this.db
-      .prepare(
-        `
-          insert into article_contents (
-            article_id,
-            content_html,
-            content_text,
-            extraction_status,
-            extraction_error,
-            extracted_at,
-            updated_at
-          )
-          values (?, ?, ?, ?, ?, ?, ?)
-          on conflict(article_id) do update set
-            content_html = excluded.content_html,
-            content_text = excluded.content_text,
-            extraction_status = excluded.extraction_status,
-            extraction_error = excluded.extraction_error,
-            extracted_at = excluded.extracted_at,
-            updated_at = excluded.updated_at
-        `
-      )
-      .run(
-        input.articleId,
-        input.contentHtml ?? null,
-        input.contentText ?? null,
-        input.extractionStatus ?? "pending",
-        input.extractionError ?? null,
-        input.extractedAt ?? null,
-        now
-      );
+    const result = this.db.transaction((): UpsertArticleContentResult => {
+      const current = this.db
+        .prepare("select content_hash as contentHash from articles where id = ?")
+        .get(input.articleId) as { contentHash: string | null } | undefined;
+      const nextHash = input.contentHash ?? null;
+      const shouldUpdateHash = input.contentHash !== undefined;
+      const contentHashChanged = shouldUpdateHash && (current?.contentHash ?? null) !== nextHash;
 
-    this.syncFts(input.articleId);
+      this.db
+        .prepare(
+          `
+            insert into article_contents (
+              article_id,
+              content_html,
+              content_text,
+              extraction_status,
+              extraction_error,
+              extracted_at,
+              updated_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict(article_id) do update set
+              content_html = excluded.content_html,
+              content_text = excluded.content_text,
+              extraction_status = excluded.extraction_status,
+              extraction_error = excluded.extraction_error,
+              extracted_at = excluded.extracted_at,
+              updated_at = excluded.updated_at
+          `
+        )
+        .run(
+          input.articleId,
+          input.contentHtml ?? null,
+          input.contentText ?? null,
+          input.extractionStatus ?? "pending",
+          input.extractionError ?? null,
+          input.extractedAt ?? null,
+          now
+        );
+
+      if (shouldUpdateHash && contentHashChanged) {
+        this.db
+          .prepare(
+            `
+              update articles
+              set content_hash = ?, updated_at = ?
+              where id = ?
+            `
+          )
+          .run(nextHash, now, input.articleId);
+      }
+
+      this.syncFts(input.articleId);
+      return { contentHashChanged };
+    })();
+
+    return result;
   }
 
   private syncFts(articleId: string): void {

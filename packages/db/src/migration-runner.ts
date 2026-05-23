@@ -42,6 +42,9 @@ const embeddingProviderLimitsPath = fileURLToPath(
 const readerCommandEventsPath = fileURLToPath(
   new URL("../migrations/014_reader_command_events.sql", import.meta.url)
 );
+const feedFullContentModePath = fileURLToPath(
+  new URL("../migrations/015_feed_full_content_mode.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -109,6 +112,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "014",
       name: "reader_command_events",
       sql: readFileSync(readerCommandEventsPath, "utf8")
+    },
+    {
+      version: "015",
+      name: "feed_full_content_mode",
+      sql: readFileSync(feedFullContentModePath, "utf8")
     }
   ];
 }

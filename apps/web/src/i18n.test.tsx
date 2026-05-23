@@ -291,6 +291,7 @@ describe("web i18n", () => {
               feedUrl: "https://example.com/feed.xml",
               description: null,
               enabled: true,
+              fullContentMode: "feed_only",
               sourceWeight: 0,
               lastFetchedAt: null,
               lastSuccessAt: null,
@@ -844,6 +845,7 @@ describe("web i18n", () => {
               feedUrl: "https://example.com/feed.xml",
               description: null,
               enabled: true,
+              fullContentMode: "feed_only",
               sourceWeight: 0.2,
               lastFetchedAt: "2026-05-14T08:00:00.000Z",
               lastSuccessAt: "2026-05-14T08:10:00.000Z",
@@ -869,6 +871,20 @@ describe("web i18n", () => {
           onImportOpml={() => undefined}
           onRefreshFeed={() => undefined}
           onRefreshAllFeeds={() => undefined}
+          onPreviewFullContent={() => undefined}
+          onBackfillCurrentFeedFullContent={() =>
+            Promise.resolve({
+              feedId: "feed_design",
+              articlesSeen: 0,
+              attempted: 0,
+              succeeded: 0,
+              failed: 0,
+              skipped: 0,
+              articleIds: [],
+              effectiveContentChangedArticleIds: [],
+              limited: false
+            })
+          }
           onUpdateFeed={() => Promise.resolve()}
           onUpdateFeedUrl={() => undefined}
           onUpdateFolder={() => Promise.resolve()}

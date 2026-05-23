@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type {
   FeedFolderRepository,
   FeedFolderRow,
+  FeedFullContentMode,
   FeedRepository,
   FeedRow
 } from "@dibao/db";
@@ -97,6 +98,10 @@ export class FeedManagementService {
     const folderId = input.folderId === undefined ? undefined : parseFolderId(input.folderId);
     const feedUrl = input.feedUrl === undefined ? undefined : parseFeedUrl(input.feedUrl);
     const enabled = input.enabled === undefined ? undefined : parseBoolean(input.enabled, "enabled");
+    const fullContentMode =
+      input.fullContentMode === undefined
+        ? undefined
+        : parseFullContentMode(input.fullContentMode);
     const sourceWeight =
       input.sourceWeight === undefined ? undefined : parseSourceWeight(input.sourceWeight);
 
@@ -108,6 +113,7 @@ export class FeedManagementService {
       ...(folderId !== undefined ? { folderId } : {}),
       ...(feedUrl !== undefined ? { feedUrl } : {}),
       ...(enabled !== undefined ? { enabled } : {}),
+      ...(fullContentMode !== undefined ? { fullContentMode } : {}),
       ...(sourceWeight !== undefined ? { sourceWeight } : {}),
       now: this.now()
     });
@@ -217,6 +223,15 @@ function parseBoolean(value: unknown, field: string): boolean {
     throw validationError(`${field} must be a boolean`, { field });
   }
 
+  return value;
+}
+
+function parseFullContentMode(value: unknown): FeedFullContentMode {
+  if (value !== "feed_only" && value !== "fetch_full_content") {
+    throw validationError("fullContentMode must be feed_only or fetch_full_content", {
+      field: "fullContentMode"
+    });
+  }
   return value;
 }
 

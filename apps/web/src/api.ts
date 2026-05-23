@@ -10,6 +10,7 @@ export type Feed = {
   feedUrl: string;
   description: string | null;
   enabled: boolean;
+  fullContentMode: FeedFullContentMode;
   sourceWeight: number;
   lastFetchedAt: string | null;
   lastSuccessAt: string | null;
@@ -18,6 +19,8 @@ export type Feed = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type FeedFullContentMode = "feed_only" | "fetch_full_content";
 
 export type FeedDiscoveryCandidateStatus = "valid" | "duplicate" | "invalid";
 
@@ -95,7 +98,31 @@ export type UpdateFeedInput = {
   folderId?: string | null;
   feedUrl?: string;
   enabled?: boolean;
+  fullContentMode?: FeedFullContentMode;
   sourceWeight?: number;
+};
+
+export type FullContentPreviewResponse = {
+  feedId: string;
+  articleUrl: string;
+  status: "success" | "failed" | "skipped";
+  title: string | null;
+  excerpt: string | null;
+  contentText: string | null;
+  contentHtml: string | null;
+  error: string | null;
+};
+
+export type FullContentBackfillResponse = {
+  feedId: string;
+  articlesSeen: number;
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  articleIds: string[];
+  effectiveContentChangedArticleIds: string[];
+  limited: boolean;
 };
 
 export type UpdateFeedFolderInput = {
@@ -1220,6 +1247,32 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
           method: "PATCH",
           body: JSON.stringify(input)
         })
+      ).data;
+    },
+
+    async previewFeedFullContent(
+      feedId: string,
+      articleUrl?: string
+    ): Promise<FullContentPreviewResponse> {
+      return (
+        await request<FullContentPreviewResponse>(
+          `/api/feeds/${encodeURIComponent(feedId)}/full-content/preview`,
+          {
+            method: "POST",
+            body: JSON.stringify(articleUrl ? { articleUrl } : {})
+          }
+        )
+      ).data;
+    },
+
+    async backfillCurrentFeedFullContent(feedId: string): Promise<FullContentBackfillResponse> {
+      return (
+        await request<FullContentBackfillResponse>(
+          `/api/feeds/${encodeURIComponent(feedId)}/full-content/backfill-current`,
+          {
+            method: "POST"
+          }
+        )
       ).data;
     },
 

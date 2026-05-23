@@ -11,6 +11,7 @@ It is designed for people who want a local and controllable alternative to algor
 - First-run setup with password-based auth.
 - OPML import/export.
 - Feed and folder management.
+- Per-feed full content control with preview and current-RSS-only backfill.
 - Search UI for local title, summary, and full-text article search.
 - Article actions: favorite, read later, read/unread, not interested, and read progress.
 - Reader Command cleanup for marking unread debt as read without recommendation feedback pollution.
@@ -46,6 +47,7 @@ It is designed for people who want a local and controllable alternative to algor
 - Create, rename, and delete folders.
 - Edit feed title, folder, enabled state, and source weight.
 - View feed health diagnostics, filter to unhealthy/disabled/never-successful feeds, and retry failing feeds.
+- Keep Feed content as the default body source, or explicitly enable web full-content fetching per feed. Preview does not write the database; backfill only touches items in the current RSS response and is limited to 50 items.
 - Soft-delete feeds without physically deleting historical article rows.
 
 ### Recommendation
@@ -54,9 +56,11 @@ It is designed for people who want a local and controllable alternative to algor
 - OpenAI-compatible and Ollama embedding providers can be configured and tested.
 - New articles can be embedded through background jobs.
 - Active embedding indexes can be backfilled for missing/stale vectors.
+- Full-content success updates the article effective `content_hash`, making stale embeddings eligible for regeneration and subsequent ranking recalculation.
 - sqlite-vec indexes can be rebuilt from the SQLite authority table without calling the provider.
 - User behavior updates positive and negative interest clusters.
 - Reader Command `mark_scope_read` is audited separately from behavior events and does not train the interest profile.
+- Full-content backfill is corpus maintenance, not user behavior: it does not write `behavior_events`, does not mark articles read/favorited/read-later, and does not directly train the user profile.
 - Recommended ranking combines interest match, source preference, freshness, state, and penalties.
 - Search v0 supports relevance, latest, and recommendation-aware ordering inside matched results.
 - The system falls back gracefully when provider, embedding, or profile data is unavailable.
@@ -109,6 +113,7 @@ The E2E and Docker smoke suites use local RSS and embedding fixtures and do not 
 - Reader Command cleanup has no complex undo history.
 - Feed discovery depends on declared `<link rel="alternate">` metadata or a small set of common feed paths; it does not do complex webpage scraping.
 - Feed discovery does not perform full-text fetching and does not automatically repair already-invalid feed URLs.
+- Full-content fetching does not execute JavaScript, use a headless browser, bypass paywalls, download images, or guarantee success for every website. Failure keeps the existing Feed content readable.
 - Recommendation quality is still early and benefits from explicit user behavior and complete embedding coverage.
 
 ## Upgrade Notes

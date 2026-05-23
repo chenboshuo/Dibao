@@ -100,6 +100,12 @@ import {
   type FeedFetcher
 } from "./feed-refresh-service.js";
 import {
+  FeedFullContentService,
+  type FullContentBackfillResult,
+  type FullContentPreviewResponse
+} from "./feed-full-content-service.js";
+import { FullContentExtractionService } from "./full-content-extraction-service.js";
+import {
   InterestClusterLabelService,
   InterestClusterLabelServiceError,
   INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE
@@ -201,6 +207,10 @@ type PasswordBody = {
 
 type FeedParams = {
   id: string;
+};
+
+type FullContentPreviewBody = {
+  articleUrl?: unknown;
 };
 
 type ArticleQuery = {
@@ -308,6 +318,7 @@ type BuildServerOptions = {
   jobRunnerIntervalMs?: number;
   jobRetryDelayMs?: number;
   embeddingFetcher?: typeof fetch;
+  fullContentFetcher?: typeof fetch;
   webDistDir?: string | false;
 };
 
@@ -327,6 +338,9 @@ export function buildServer(options: BuildServerOptions = {}) {
   const rankings = new SqliteRankingRepository(db);
   const profiles = new SqliteProfileRepository(db);
   const vectorStore = new SqliteVecVectorStore(db);
+  const fullContentExtractor = new FullContentExtractionService({
+    fetcher: options.fullContentFetcher
+  });
   const embeddingAdapters = {
     openai_compatible: new OpenAiCompatibleEmbeddingAdapter({
       fetcher: options.embeddingFetcher
@@ -454,7 +468,14 @@ export function buildServer(options: BuildServerOptions = {}) {
     articles,
     ranking: rankingService,
     fetcher: options.feedFetcher,
+    fullContentExtractor,
+    onEffectiveContentChanged: handleEffectiveContentChanged,
     now: options.now
+  });
+  const feedFullContentService = new FeedFullContentService({
+    feeds,
+    refreshService: feedRefreshService,
+    extractor: fullContentExtractor
   });
   const feedDiscoveryService = new FeedDiscoveryService({
     feeds,
@@ -467,7 +488,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const feedRefreshCoordinator = new FeedRefreshCoordinator({
     refreshService: feedRefreshService,
     afterRefresh: (result) => {
-      enqueueEmbeddingArticles(result.articleIds);
+      handleEffectiveContentChanged(result.effectiveContentChangedArticleIds);
       const maintenanceSettings = settingsService.getSettings().recommendationMaintenance;
       if (
         result.articleIds.length > 0 &&
@@ -694,6 +715,53 @@ export function buildServer(options: BuildServerOptions = {}) {
     } catch (error) {
       app.log.error(error);
     }
+  }
+
+  function handleEffectiveContentChanged(articleIds: string[]): void {
+    const uniqueArticleIds = [...new Set(articleIds)].filter((articleId) => articleId.trim());
+    if (uniqueArticleIds.length === 0) {
+      return;
+    }
+
+    enqueueEmbeddingArticles(uniqueArticleIds);
+    try {
+      rankingJobService.enqueueArticles(uniqueArticleIds);
+      if (hasBehaviorEvidence(uniqueArticleIds)) {
+        const maintenanceSettings = settingsService.getSettings().recommendationMaintenance;
+        if (maintenanceSettings.maintenanceEnabled) {
+          recommendationMaintenanceService.enqueueRecalculate();
+          if (maintenanceSettings.keywordAutoRebuildEnabled) {
+            recommendationMaintenanceService.enqueueKeywordRebuild();
+          }
+          if (maintenanceSettings.recentIntentAutoRebuildEnabled) {
+            recommendationMaintenanceService.enqueueRecentIntentRebuild();
+          }
+        }
+      }
+      drainBackgroundJobs();
+    } catch (error) {
+      app.log.error(error);
+    }
+  }
+
+  function hasBehaviorEvidence(articleIds: string[]): boolean {
+    for (const chunk of chunkStrings(articleIds, 400)) {
+      const placeholders = chunk.map(() => "?").join(", ");
+      const row = db
+        .prepare(
+          `
+            select 1 as found
+            from behavior_events
+            where article_id in (${placeholders})
+            limit 1
+          `
+        )
+        .get(...chunk) as { found: number } | undefined;
+      if (row) {
+        return true;
+      }
+    }
+    return false;
   }
 
   app.addContentTypeParser(
@@ -1314,6 +1382,45 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendFeedManagementError(reply, error);
     }
   });
+
+  app.post<{ Params: FeedParams; Body: FullContentPreviewBody | undefined }>(
+    "/api/feeds/:id/full-content/preview",
+    async (request, reply) => {
+      const parsed = parseFullContentPreviewBody(request.body);
+      if (!parsed.ok) {
+        return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+      }
+      try {
+        return {
+          data: mapFullContentPreview(
+            await feedFullContentService.previewFeedFullContent({
+              feedId: request.params.id,
+              articleUrl: parsed.articleUrl
+            })
+          )
+        };
+      } catch (error) {
+        return sendFeedIngestionError(reply, error);
+      }
+    }
+  );
+
+  app.post<{ Params: FeedParams }>(
+    "/api/feeds/:id/full-content/backfill-current",
+    async (request, reply) => {
+      try {
+        const result = await feedFullContentService.backfillCurrentFeedFullContent(
+          request.params.id
+        );
+        drainBackgroundJobs();
+        return {
+          data: mapFullContentBackfill(result)
+        };
+      } catch (error) {
+        return sendFeedIngestionError(reply, error);
+      }
+    }
+  );
 
   app.delete<{ Params: FeedParams }>("/api/feeds/:id", async (request, reply) => {
     try {
@@ -4184,6 +4291,14 @@ function mapFeed(feed: FeedRow) {
   };
 }
 
+function mapFullContentPreview(result: FullContentPreviewResponse) {
+  return result;
+}
+
+function mapFullContentBackfill(result: FullContentBackfillResult) {
+  return result;
+}
+
 function mapFeedDiscoveryResult(result: FeedDiscoveryResult) {
   return {
     ...result,
@@ -4292,6 +4407,37 @@ function timestampToIso(value: number | null): string | null {
 
 function timestampToIsoValue(value: number): string {
   return new Date(value).toISOString();
+}
+
+function parseFullContentPreviewBody(body: FullContentPreviewBody | undefined):
+  | { ok: true; articleUrl?: string }
+  | { ok: false; message: string; details?: unknown } {
+  if (body === undefined || body === null) {
+    return { ok: true };
+  }
+  if (typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+  if (body.articleUrl === undefined) {
+    return { ok: true };
+  }
+  if (typeof body.articleUrl !== "string") {
+    return {
+      ok: false,
+      message: "articleUrl must be a string",
+      details: { field: "articleUrl" }
+    };
+  }
+  const articleUrl = body.articleUrl.trim();
+  return articleUrl ? { ok: true, articleUrl } : { ok: true };
+}
+
+function chunkStrings(values: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function sendApiError(

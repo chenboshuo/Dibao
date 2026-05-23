@@ -20,6 +20,7 @@ packages/db/migrations/011_remove_corpus_topic_snapshots.sql
 packages/db/migrations/012_gemini_embedding_provider.sql
 packages/db/migrations/013_embedding_provider_limits.sql
 packages/db/migrations/014_reader_command_events.sql
+packages/db/migrations/015_feed_full_content_mode.sql
 ```
 
 实现时可以根据具体库和 sqlite-vec 版本调整语法，但不得改变这里定义的数据边界和所有权原则。
@@ -236,6 +237,7 @@ site_url TEXT
 feed_url TEXT NOT NULL UNIQUE
 description TEXT
 enabled INTEGER NOT NULL DEFAULT 1
+full_content_mode TEXT NOT NULL DEFAULT 'feed_only'
 etag TEXT
 last_modified TEXT
 last_fetched_at INTEGER
@@ -268,6 +270,7 @@ idx_feeds_deleted_at(deleted_at)
 
 - `source_weight` 是用户或系统沉淀出的来源权重。
 - `feed_url` 规范化后唯一。
+- `full_content_mode` 可为 `feed_only` 或 `fetch_full_content`。旧 feed 迁移后均为 `feed_only`。默认刷新只使用 RSS / Atom item 内容，不请求文章网页 URL；只有订阅源显式开启 `fetch_full_content` 后才抓取网页全文。
 
 ## 文章
 
@@ -319,6 +322,7 @@ unique_articles_feed_url(feed_id, canonical_url)
 
 - `dedupe_key` 用于跨源近似去重的第一层规则。
 - `canonical_url` 为空时不得触发唯一约束冲突，具体实现可用 partial unique index。
+- `content_hash` 表示文章当前“有效正文” hash，不只是 RSS item 原始内容 hash。Feed 内容作为有效正文时 hash source 为 `feed`；网页全文抓取成功后 hash source 为 `full_content`。抓取失败/跳过时仍保留 Feed 内容 hash，错误信息不参与 hash。
 
 ### article_contents
 
@@ -348,6 +352,9 @@ skipped
 
 - 抽取失败时仍可保存 feed 中的摘要或正文片段。
 - 旧文章清理时可删除 `content_html` 和 `content_text`。
+- `extraction_status = feed_only` 是默认正常路径，不表示失败；`success` 表示正文来自网页全文抓取；`failed` / `skipped` 时当前仍显示 Feed 内容。
+- 写入有效正文时同步 FTS。若 `articles.content_hash` 变化，embedding 候选会变为 stale，系统应 enqueue `embedding_generate`；embedding 写入后会触发 ranking recalculation。
+- 全文抓取和当前 Feed 回溯属于 content maintenance / corpus update，不属于 Behavior Event、Reader Command 或 User Preference Signal；不得写入 `behavior_events`，不得调用 article action，不得伪造收藏/喜欢/已读/稍后读。
 
 ### article_states
 

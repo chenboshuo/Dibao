@@ -197,9 +197,11 @@ describe("db package", () => {
         "011",
         "012",
         "013",
-        "014"
+        "014",
+        "015"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
+      expect(hasColumn(db, "feeds", "full_content_mode")).toBe(true);
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
       expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
       expect(hasColumn(db, "feed_stats", "clear_signal_count")).toBe(true);
@@ -595,7 +597,8 @@ describe("db package", () => {
         "011",
         "012",
         "013",
-        "014"
+        "014",
+        "015"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -721,6 +724,58 @@ describe("db package", () => {
       expect(feeds.listActiveDue(44 * hour).map((feed) => feed.id)).toEqual([
         "feed_hourly",
         "feed_slow"
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists feed full content mode and updates article hashes with effective content", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      const articles = new SqliteArticleRepository(db);
+
+      feeds.upsert({
+        id: "feed_full_content",
+        title: "Full Content Feed",
+        feedUrl: "https://example.com/full.xml",
+        now: 1000
+      });
+      expect(feeds.findById("feed_full_content")?.fullContentMode).toBe("feed_only");
+      expect(
+        feeds.update({
+          id: "feed_full_content",
+          fullContentMode: "fetch_full_content",
+          now: 2000
+        })?.fullContentMode
+      ).toBe("fetch_full_content");
+
+      articles.upsert({
+        id: "article_effective_content",
+        feedId: "feed_full_content",
+        url: "https://example.com/article",
+        title: "Original title",
+        summary: "Feed summary",
+        contentHash: "feed-hash",
+        dedupeKey: "article_effective_content",
+        now: 3000
+      });
+      const result = articles.upsertContent({
+        articleId: "article_effective_content",
+        contentText: "Expanded full text with searchablehashmarker",
+        extractionStatus: "success",
+        contentHash: "full-content-hash",
+        extractedAt: 4000,
+        now: 4000
+      });
+
+      expect(result.contentHashChanged).toBe(true);
+      expect(articles.findById("article_effective_content")?.contentHash).toBe(
+        "full-content-hash"
+      );
+      expect(articles.search({ query: "searchablehashmarker" }).items.map((item) => item.id)).toEqual([
+        "article_effective_content"
       ]);
     } finally {
       db.close();
