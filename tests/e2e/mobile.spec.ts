@@ -6,6 +6,19 @@ test.beforeEach(async ({ page }) => {
   await blockExternalBrowserRequests(page);
 });
 
+test("mobile browser exposes PWA metadata", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    "href",
+    "/site.webmanifest"
+  );
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute(
+    "content",
+    "#f7f4ed"
+  );
+});
+
 test("mobile MVP reader smoke has visible controls and no horizontal overflow", async ({ page }) => {
   await login(page);
 

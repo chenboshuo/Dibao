@@ -6,7 +6,8 @@
 
 - 单用户、自托管、本地 SQLite 数据库。
 - 支持首次设置密码、OPML 导入/导出、手动添加 RSS、后台刷新、文章动作、基础排序、OpenAI-compatible 和 Ollama embedding provider。
-- 不提供多用户、官方托管、OAuth、云同步、PWA、全文搜索 UI 或移动端 App 打包。
+- 支持浏览器安装到主屏幕 / Dock，以及网络临时不可用时打开已缓存应用壳。
+- 不提供多用户、官方托管、OAuth、云同步、离线全文阅读或移动端 App 打包。
 
 ## Docker Compose 快速启动
 
@@ -38,6 +39,30 @@ curl http://localhost:8080/api/system/health
 ```
 
 Dockerfile 内置 HEALTHCHECK 不依赖 `curl`/`wget`，而是用 Node `fetch()` 检查 `/api/system/health`。
+
+## PWA 安装与离线边界
+
+邸报包含基础 PWA foundation：`/site.webmanifest`、`/sw.js`、应用壳缓存、离线提示和新版本刷新提示。它的目标是方便把邸报安装到主屏幕 / Dock，并在网络短暂不可用时仍能打开应用外壳。
+
+安装入口：
+
+- Android Chrome / Edge：浏览器菜单 > 安装应用 / 添加到主屏幕。
+- iOS Safari：分享 > 添加到主屏幕。
+- Desktop Chrome / Edge：地址栏安装按钮，或浏览器菜单 > 安装。
+
+部署要求：
+
+- `localhost` / `127.0.0.1` 属于浏览器允许的安全上下文，通常可直接注册 service worker 并安装。
+- 局域网 IP 或公网域名通常需要 HTTPS，浏览器才会允许 PWA 安装与 service worker。
+- 如果放在 HTTPS 反向代理后，建议同时设置 `DIBAO_COOKIE_SECURE=true`。
+
+当前边界：
+
+- 支持安装和离线 app shell。
+- 不支持离线文章库或离线全文阅读。
+- 不缓存 `/api/*` 私人数据；登录状态仍由 httpOnly cookie 和 server 决定。
+- 离线时文章刷新、搜索、设置保存、推荐诊断等功能需要网络连接。
+- 当前 maskable icon 复用 `logo-512.png`，后续可补专门适配裁剪安全区的 maskable 图标。
 
 ## 首次设置
 

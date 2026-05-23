@@ -114,6 +114,80 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("serves PWA manifest and service worker static assets with installability headers", async () => {
+    const db = createEmptyDatabase();
+    const webDistDir = createTempDir();
+    writeFileSync(
+      join(webDistDir, "index.html"),
+      "<!doctype html><html><body><div id=\"root\">Dibao shell</div></body></html>"
+    );
+    writeFileSync(
+      join(webDistDir, "site.webmanifest"),
+      JSON.stringify({
+        name: "邸报 Dibao",
+        short_name: "邸报",
+        start_url: "/?source=pwa",
+        scope: "/",
+        display: "standalone",
+        icons: [
+          { src: "/logo-192.png", sizes: "192x192", type: "image/png" },
+          { src: "/logo-512.png", sizes: "512x512", type: "image/png" }
+        ]
+      })
+    );
+    writeFileSync(join(webDistDir, "sw.js"), "self.addEventListener('fetch', () => {});");
+    const app = buildServer({ db, logger: false, webDistDir });
+
+    try {
+      const manifest = await app.inject({
+        method: "GET",
+        url: "/site.webmanifest"
+      });
+      const serviceWorker = await app.inject({
+        method: "GET",
+        url: "/sw.js"
+      });
+      const searchRoute = await app.inject({
+        method: "GET",
+        url: "/search"
+      });
+      const recommendedRoute = await app.inject({
+        method: "GET",
+        url: "/?view=recommended"
+      });
+      const health = await app.inject({
+        method: "GET",
+        url: "/api/system/health"
+      });
+
+      expect(manifest.statusCode, manifest.body).toBe(200);
+      expect(manifest.headers["content-type"]).toContain("application/manifest+json");
+      const manifestJson = manifest.json() as {
+        icons: Array<{ sizes: string }>;
+        scope: string;
+        start_url: string;
+      };
+      expect(manifestJson.start_url).toBe("/?source=pwa");
+      expect(manifestJson.scope).toBe("/");
+      expect(manifestJson.icons.some((icon) => icon.sizes === "192x192")).toBe(true);
+      expect(manifestJson.icons.some((icon) => icon.sizes === "512x512")).toBe(true);
+
+      expect(serviceWorker.statusCode, serviceWorker.body).toBe(200);
+      expect(serviceWorker.headers["content-type"]).toMatch(/javascript/);
+      expect(serviceWorker.body).toContain("fetch");
+
+      expect(searchRoute.statusCode, searchRoute.body).toBe(200);
+      expect(searchRoute.body).toContain("Dibao shell");
+      expect(recommendedRoute.statusCode, recommendedRoute.body).toBe(200);
+      expect(recommendedRoute.body).toContain("Dibao shell");
+      expect(health.statusCode, health.body).toBe(200);
+      expect(health.headers["content-type"]).toContain("application/json");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("serves web static files before login while keeping API routes protected", async () => {
     const db = createEmptyDatabase();
     const webDistDir = createTempDir();

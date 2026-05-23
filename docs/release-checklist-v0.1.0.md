@@ -47,6 +47,7 @@ Expected result:
 - Git worktree is clean except for intentional release artifacts before the RC commit.
 - All npm validation commands pass.
 - E2E passes on desktop and mobile Chromium projects.
+- `/site.webmanifest` returns 200 with `application/manifest+json`, `/sw.js` returns 200, desktop Chromium registers the service worker, and offline reload shows the app shell or offline banner.
 - Docker image builds.
 - Compose config is valid.
 - Docker recommendation smoke completes provider setup, backfill, diagnostics, and recommended list checks.
@@ -71,6 +72,7 @@ Expected result:
 | Profile/ranking | Done | Behavior events update profile clusters; recommended ranking uses active context with baseline and pending fallbacks. |
 | Diagnostics | Done | Recommendation status, embedding index coverage, and safe jobs list APIs expose useful state without secrets or raw payloads. |
 | Explanation | Done | Recommendation explanation displays baseline and interest-related reasons. |
+| PWA foundation | Done | Manifest, service worker, app shell caching, update prompt, and offline banner are in place; `/api/*` responses are not cached. |
 | Docker self-host path | Done | Dockerfile, Compose config, static Web serving, health check, and recommendation smoke are in place. |
 | E2E smoke | Done | Local no-network desktop/mobile Playwright smoke passes. |
 | User docs | Done | README and release docs cover deployment, setup, provider configuration, backfill/rebuild concepts, data persistence, backup, upgrade, FAQ, and dev commands. |
@@ -81,7 +83,7 @@ Expected result:
 - Self-hosted local SQLite only. No cloud sync.
 - MVP supports OpenAI-compatible and Ollama embedding endpoints. Custom HTTP and embedded local models are future adapters.
 - Provider API keys are stored in local SQLite using the current MVP local-storage strategy, not a full secret-management system.
-- Search UI, PWA installability, native mobile packaging, full mobile polish, diversity reranking, duplicate penalties, and full model migration UX are post-MVP work.
+- PWA foundation supports installability and offline app shell only. No offline full article reading, push notification, background sync, native mobile packaging, full mobile polish, diversity reranking, duplicate penalties, or full model migration UX yet.
 - Recommendation quality is usable for trial but should keep improving through more behavior signals, diversity, duplicate handling, and better profile rebuild tooling.
 - Performance benchmark is a manual release gate; it records local evidence but does not enforce hard pass/fail latency thresholds yet.
 

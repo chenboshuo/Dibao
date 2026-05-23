@@ -19,6 +19,7 @@ It is designed for people who want a local and controllable alternative to algor
 - sqlite-vec vector storage, rebuild, and active-index backfill.
 - Profile Algorithm v0 and Ranking v1 fusion.
 - Recommendation diagnostics, safe jobs list, and explanation UI.
+- PWA installability foundation with manifest, service worker, update prompt, and offline app shell.
 - Desktop and mobile E2E smoke coverage.
 
 ## What's Included
@@ -61,6 +62,7 @@ It is designed for people who want a local and controllable alternative to algor
 - `compose.yaml` with persistent `/data/dibao.sqlite` volume.
 - Anonymous health check endpoint at `/api/system/health`.
 - Server can serve the built Web app and API from one Fastify process.
+- Static PWA assets are served with installability-friendly content types, including `/site.webmanifest` and `/sw.js`.
 - Docker recommendation smoke covers setup, provider, backfill, diagnostics, and recommended articles.
 - Performance script generates a 20k-article local benchmark and updates `docs/recommendation-performance.md`.
 - README documents deployment, setup, backup, restore, upgrade, provider configuration, and troubleshooting.
@@ -89,7 +91,7 @@ The E2E and Docker smoke suites use local RSS and embedding fixtures and do not 
 - No official hosted service.
 - No multi-device cloud sync.
 - No OAuth or password recovery.
-- No PWA installability yet.
+- No offline full article reading or IndexedDB article cache.
 - No native iOS / Android / desktop app packaging yet.
 - No full mobile layout hardening beyond MVP smoke coverage.
 - No custom HTTP or embedded-local provider adapter yet.

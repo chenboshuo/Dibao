@@ -17,6 +17,11 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
 
   try {
     await page.goto("/");
+    await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+      "href",
+      "/site.webmanifest"
+    );
+    await waitForActiveServiceWorker(page);
 
     await expect(page.getByRole("heading", { name: "欢迎使用邸报" })).toBeVisible();
     await page.getByRole("button", { name: "开始设置" }).click();
@@ -172,7 +177,16 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByLabel("RSS / Atom URL")).toBeVisible();
     await expect(page.getByRole("button", { name: "刷新全部" })).toBeVisible();
     await expect(page.getByText("Feed URL")).toBeVisible();
+
+    await page.context().setOffline(true);
+    await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+    await expect(page.getByText("当前离线。已缓存的应用壳仍可打开")).toBeVisible();
+    await page.goto("/");
+    await expect(page.locator("#root main")).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("ERR_INTERNET_DISCONNECTED");
+    await page.context().setOffline(false);
   } finally {
+    await page.context().setOffline(false).catch(() => undefined);
     await fixture.close();
   }
 });
@@ -274,4 +288,25 @@ async function blockExternalBrowserRequests(page: import("@playwright/test").Pag
 
     await route.continue();
   });
+}
+
+async function waitForActiveServiceWorker(page: import("@playwright/test").Page): Promise<void> {
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        if (!("serviceWorker" in navigator)) {
+          return "unsupported";
+        }
+
+        const registration = await navigator.serviceWorker.ready;
+        return registration.active?.state ?? "missing";
+      })
+    )
+    .toBe("activated");
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => navigator.serviceWorker.controller?.scriptURL.endsWith("/sw.js") ?? false)
+    )
+    .toBe(true);
 }

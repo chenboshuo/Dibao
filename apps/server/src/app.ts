@@ -1595,6 +1595,8 @@ function contentTypeForStaticFile(filePath: string): string {
       return "text/plain; charset=utf-8";
     case ".wasm":
       return "application/wasm";
+    case ".webmanifest":
+      return "application/manifest+json; charset=utf-8";
     case ".webp":
       return "image/webp";
     case ".xml":

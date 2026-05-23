@@ -94,6 +94,10 @@ type Notice =
   | { type: "embeddingIndexBackfillQueued" }
   | { type: "recommendationMaintenanceQueued"; label: string; existing: boolean };
 
+type PwaUpdateAvailableEvent = CustomEvent<{
+  applyUpdate: () => void;
+}>;
+
 export type SourceSelection =
   | { type: "all" }
   | { type: "folder"; folderId: string }
@@ -311,6 +315,10 @@ export function App() {
     null
   );
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [isOffline, setIsOffline] = useState(
+    () => typeof navigator !== "undefined" && navigator.onLine === false
+  );
+  const [pwaUpdateApply, setPwaUpdateApply] = useState<(() => void) | null>(null);
   const openedArticleIds = useRef(new Set<string>());
   const ignoredArticleIds = useRef(new Set<string>());
   const articleStateById = useRef(new Map<string, ArticleState>());
@@ -593,6 +601,33 @@ export function App() {
       cancelled = true;
     };
   }, [resetReaderState, t.errors.api]);
+
+  useEffect(() => {
+    function updateOnlineStatus() {
+      setIsOffline(navigator.onLine === false);
+    }
+
+    window.addEventListener("online", updateOnlineStatus);
+    window.addEventListener("offline", updateOnlineStatus);
+    updateOnlineStatus();
+
+    return () => {
+      window.removeEventListener("online", updateOnlineStatus);
+      window.removeEventListener("offline", updateOnlineStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    function handlePwaUpdateAvailable(event: Event) {
+      setPwaUpdateApply(() => (event as PwaUpdateAvailableEvent).detail.applyUpdate);
+    }
+
+    window.addEventListener("dibao:pwa-update-available", handlePwaUpdateAvailable);
+
+    return () => {
+      window.removeEventListener("dibao:pwa-update-available", handlePwaUpdateAvailable);
+    };
+  }, []);
 
   useEffect(() => {
     if (appStage.type !== "setup-status-loading") {
@@ -1946,6 +1981,13 @@ export function App() {
   }
 
   const noticeText = notice ? noticeTextFor(notice, t) : null;
+  const pwaStatusBanner = (
+    <PwaStatusBanner
+      isOffline={isOffline}
+      onApplyUpdate={pwaUpdateApply}
+      onDismissUpdate={() => setPwaUpdateApply(null)}
+    />
+  );
   const pageTitle =
     appPage.type === "feed-management"
       ? t.feedManagement.pageTitle
@@ -1989,6 +2031,7 @@ export function App() {
   if (appStage.type === "auth-loading" || appStage.type === "setup-status-loading") {
     return (
       <main className={styles.authShell}>
+        {pwaStatusBanner}
         <AuthGatePanel isSubmitting={false} mode="loading" />
       </main>
     );
@@ -1997,6 +2040,7 @@ export function App() {
   if (appStage.type === "welcome") {
     return (
       <main className={styles.authShell}>
+        {pwaStatusBanner}
         <SetupWelcomePanel onStart={() => setAppStage({ type: "setup-password" })} />
       </main>
     );
@@ -2005,6 +2049,7 @@ export function App() {
   if (appStage.type === "setup-password" || appStage.type === "login") {
     return (
       <main className={styles.authShell}>
+        {pwaStatusBanner}
         <AuthGatePanel
           error={authError}
           isSubmitting={isAuthSubmitting}
@@ -2018,6 +2063,7 @@ export function App() {
   if (appStage.type === "setup-sources") {
     return (
       <main className={styles.authShell}>
+        {pwaStatusBanner}
         <SetupSourcesPanel
           error={setupSourceError}
           feedUrl={feedUrl}
@@ -2035,6 +2081,7 @@ export function App() {
   if (appStage.type === "setup-provider-placeholder") {
     return (
       <main className={styles.authShell}>
+        {pwaStatusBanner}
         <SetupProviderPlaceholderPanel onContinue={handleSetupProviderContinue} />
       </main>
     );
@@ -2042,6 +2089,7 @@ export function App() {
 
   return (
     <main className={styles.shell}>
+      {pwaStatusBanner}
       <aside className={styles.sidebar} aria-label={t.navigation.ariaLabel}>
         <div className={styles.brand}>
           <img alt="" className={styles.brandMark} src="/logo-64.png" />
@@ -2411,6 +2459,49 @@ export function App() {
         )}
       </section>
     </main>
+  );
+}
+
+function PwaStatusBanner(props: {
+  isOffline: boolean;
+  onApplyUpdate: (() => void) | null;
+  onDismissUpdate: () => void;
+}) {
+  const { t } = useI18n();
+
+  if (!props.isOffline && !props.onApplyUpdate) {
+    return null;
+  }
+
+  return (
+    <div className={styles.pwaStatusStack} aria-live="polite">
+      {props.isOffline ? (
+        <div className={styles.pwaStatusBanner} role="status">
+          <span>{t.pwa.offline}</span>
+        </div>
+      ) : null}
+      {props.onApplyUpdate ? (
+        <div className={styles.pwaStatusBanner} role="status">
+          <span>{t.pwa.updateAvailable}</span>
+          <div className={styles.pwaStatusActions}>
+            <button
+              className={styles.pwaStatusButton}
+              onClick={props.onApplyUpdate}
+              type="button"
+            >
+              {t.pwa.updateNow}
+            </button>
+            <button
+              className={styles.pwaStatusButtonSecondary}
+              onClick={props.onDismissUpdate}
+              type="button"
+            >
+              {t.pwa.dismiss}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

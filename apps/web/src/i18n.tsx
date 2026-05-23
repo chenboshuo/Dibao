@@ -972,6 +972,12 @@ export const zhCN = {
       `OPML 导入完成：新增 ${feedsCreated} 个订阅源，跳过 ${feedsSkipped} 个，新增 ${foldersCreated} 个分组。`,
     opmlExported: "OPML 已导出。"
   },
+  pwa: {
+    offline: "当前离线。已缓存的应用壳仍可打开，但文章数据需要网络连接。",
+    updateAvailable: "邸报有新版本可用。",
+    updateNow: "刷新更新",
+    dismiss: "稍后"
+  },
   errors: {
     api: {
       requestFailed: "请求失败，请稍后重试。",
@@ -1959,6 +1965,13 @@ export const enUS = {
     opmlImported: (feedsCreated: number, feedsSkipped: number, foldersCreated: number) =>
       `OPML imported: added ${feedsCreated} ${feedsCreated === 1 ? "feed" : "feeds"}, skipped ${feedsSkipped}, added ${foldersCreated} ${foldersCreated === 1 ? "folder" : "folders"}.`,
     opmlExported: "OPML exported."
+  },
+  pwa: {
+    offline:
+      "You are offline. The cached app shell can still open, but article data requires a network connection.",
+    updateAvailable: "A new Dibao version is available.",
+    updateNow: "Refresh to update",
+    dismiss: "Later"
   },
   errors: {
     api: {
