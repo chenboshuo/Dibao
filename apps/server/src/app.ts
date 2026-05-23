@@ -316,6 +316,8 @@ type BuildServerOptions = {
   logger?: boolean;
   cookieSecure?: boolean;
   authRequired?: boolean;
+  authMaxFailedLoginAttempts?: number;
+  authLoginLockoutMs?: number;
   backgroundJobs?: boolean;
   feedRefreshIntervalMs?: number;
   retentionCleanupIntervalMs?: number;
@@ -344,8 +346,15 @@ export function buildServer(options: BuildServerOptions = {}) {
   const rankings = new SqliteRankingRepository(db);
   const profiles = new SqliteProfileRepository(db);
   const vectorStore = new SqliteVecVectorStore(db);
+  const app = Fastify({
+    logger: options.logger ?? true
+  });
+  const onFetchWarning = (warning: unknown) => {
+    app.log.warn({ event: "outbound_fetch_private_target", warning });
+  };
   const fullContentExtractor = new FullContentExtractionService({
-    fetcher: options.fullContentFetcher
+    fetcher: options.fullContentFetcher,
+    onFetchWarning
   });
   const embeddingAdapters = {
     openai_compatible: new OpenAiCompatibleEmbeddingAdapter({
@@ -474,6 +483,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     articles,
     fetcher: options.feedFetcher,
     fullContentExtractor,
+    onFetchWarning,
     now: options.now
   });
   const feedFullContentService = new FeedFullContentService({
@@ -483,7 +493,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
   const feedDiscoveryService = new FeedDiscoveryService({
     feeds,
-    fetcher: options.feedFetcher
+    fetcher: options.feedFetcher,
+    onFetchWarning
   });
   const feedHealthService = new FeedHealthService({
     feeds,
@@ -583,7 +594,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     credentials,
     sessions,
     settings,
-    now: options.now
+    now: options.now,
+    maxFailedLoginAttempts: options.authMaxFailedLoginAttempts,
+    loginLockoutMs: options.authLoginLockoutMs
   });
   const articleRetentionService = new ArticleRetentionService({
     settings,
@@ -609,9 +622,6 @@ export function buildServer(options: BuildServerOptions = {}) {
   const authRequired = options.authRequired ?? true;
   const backgroundJobs = options.backgroundJobs ?? false;
 
-  const app = Fastify({
-    logger: options.logger ?? true
-  });
   const jobRunner = new JobRunner({
     jobs,
     handlers: {

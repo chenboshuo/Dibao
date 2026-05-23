@@ -31,6 +31,11 @@ docker compose up --build -d
 | `DIBAO_COOKIE_SECURE` | `false` | HTTP/LAN 自托管可保持 `false`；HTTPS 反向代理后建议设为 `true`。 |
 | `DIBAO_WEB_DIST_DIR` | `apps/web/dist` | 可选，覆盖 Web 静态资源目录。 |
 | `DIBAO_BACKGROUND_JOBS` | `true` | 可设为 `false` 关闭后台 job runner，主要用于测试。 |
+| `DIBAO_FETCH_TIMEOUT_MS` | `15000` | RSS、发现、全文抓取的单次请求超时。 |
+| `DIBAO_FETCH_FEED_MAX_BYTES` | `5242880` | RSS/发现响应最大读取字节数。 |
+| `DIBAO_FETCH_FULL_CONTENT_MAX_BYTES` | `3145728` | 全文抓取响应最大读取字节数。 |
+| `DIBAO_AUTH_MAX_FAILED_ATTEMPTS` | `5` | 同一用户名/IP 组合允许的连续登录失败次数；设为 `0` 可关闭限速。 |
+| `DIBAO_AUTH_LOCKOUT_MS` | `900000` | 登录失败达到阈值后的冷却时间；设为 `0` 可关闭限速。 |
 
 健康检查使用匿名接口：
 
@@ -117,7 +122,9 @@ Backfill 和 rebuild 是两个不同操作：
 - Backfill 会为 active embedding index 中缺失或内容 hash 变旧的文章重新加入 `embedding_generate` 队列，可能调用 provider。
 - Rebuild 只从本地 `article_embeddings` authority table 重建 sqlite-vec index，不重新请求 provider。
 
-安全说明：当前 MVP 会把 provider 配置和 API key 存在本地 SQLite 中。请只在你信任的机器或受控自托管环境运行；如果通过公网访问，建议放在 HTTPS 反向代理之后，并设置 `DIBAO_COOKIE_SECURE=true`。
+安全说明：当前 MVP 会把 provider 配置和 API key 存在本地 SQLite 中。默认 Compose 以 LAN 可访问方式暴露 `8080`，请只在你信任的机器或受控自托管环境运行；如果通过公网访问，建议放在 HTTPS 反向代理之后，并设置 `DIBAO_COOKIE_SECURE=true`。登录接口默认带有失败限速，但它不能替代网络访问控制。
+
+RSS 发现、RSS 刷新和全文抓取会限制请求超时与响应体大小。系统会记录 localhost、私网 IP、link-local、`.local` 等抓取目标的 warning，但不会默认阻断，以兼容内网订阅源。
 
 ## 数据持久化
 

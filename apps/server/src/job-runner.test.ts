@@ -1412,14 +1412,11 @@ function tempDatabasePath(): string {
 }
 
 function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
-  return async (url) => ({
-    ok: fixtures[url] !== undefined,
-    status: fixtures[url] === undefined ? 502 : 200,
-    statusText: fixtures[url] === undefined ? "Bad Gateway" : "OK",
-    async text() {
-      return fixtures[url] ?? "";
-    }
-  });
+  return async (url) =>
+    new Response(fixtures[url] ?? "", {
+      status: fixtures[url] === undefined ? 502 : 200,
+      statusText: fixtures[url] === undefined ? "Bad Gateway" : "OK"
+    });
 }
 
 function minimalJob(id: string): JobRow {

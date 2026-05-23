@@ -1493,17 +1493,16 @@ describe("db package", () => {
       expect(articles.countUnreadForScope({ ...searchScope, state: "read" })).toBe(0);
 
       const behaviorCountBefore = countTable(db, "behavior_events");
-      const affectedArticleIds = articles.listUnreadArticleIdsForScope(searchScope);
       const markedReadCount = commandEvents.transaction(() => {
-        const count = articles.markArticleIdsRead(affectedArticleIds, 12_000);
+        const result = articles.markScopeRead(searchScope, 12_000);
         commandEvents.record({
           id: "cmd_scope_read",
           commandType: "mark_scope_read",
           scope: searchScope,
-          result: { markedReadCount: count, affectedArticleIds },
+          result,
           createdAt: 12_000
         });
-        return count;
+        return result.markedReadCount;
       });
 
       expect(markedReadCount).toBe(1);

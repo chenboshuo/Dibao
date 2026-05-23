@@ -297,10 +297,18 @@ export type MarkScopeReadCommandInput = {
   now?: number;
 };
 
+export type MarkScopeReadAuditResult = {
+  markedReadCount: number;
+  sampleArticleIds: string[];
+  limitedAudit: boolean;
+};
+
 export type MarkScopeReadCommandResult = {
   commandId: string;
   markedReadCount: number;
   affectedArticleIds?: string[];
+  sampleArticleIds?: string[];
+  limitedAudit?: boolean;
 };
 
 export type MarkScopeReadCommandPreview = {
@@ -319,7 +327,7 @@ export type RecordReaderCommandEventInput = {
   id: string;
   commandType: ReaderCommandType;
   scope: ArticleScope;
-  result: Omit<MarkScopeReadCommandResult, "commandId">;
+  result: MarkScopeReadAuditResult;
   createdAt: number;
 };
 

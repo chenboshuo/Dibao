@@ -5,6 +5,11 @@ import {
   type ParsedFeed
 } from "@dibao/rss";
 import type { FeedRepository } from "@dibao/db";
+import {
+  controlledFetchText,
+  feedFetchMaxBytes,
+  type FetchPrivacyWarning
+} from "./controlled-fetch.js";
 import type { FeedFetcher, FeedFetchResponse } from "./feed-refresh-service.js";
 
 export type FeedDiscoveryInput = {
@@ -41,6 +46,7 @@ export type FeedDiscoveryResult = {
 export type FeedDiscoveryServiceOptions = {
   feeds: Pick<FeedRepository, "findByFeedUrl">;
   fetcher?: FeedFetcher;
+  onFetchWarning?: (warning: FetchPrivacyWarning) => void;
 };
 
 export type FeedDiscoveryErrorCode = "VALIDATION_ERROR" | "PROVIDER_ERROR";
@@ -196,15 +202,24 @@ export class FeedDiscoveryService {
   }
 
   private async fetchText(url: string, failureMessage: string): Promise<{ body: string }> {
-    let response: FeedFetchResponse;
+    let result: { response: FeedFetchResponse; body: string };
     try {
-      response = await this.fetcher(url);
+      result = await controlledFetchText(url, {
+        fetcher: this.fetcher,
+        headers: {
+          accept:
+            "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8"
+        },
+        maxBytes: feedFetchMaxBytes(),
+        onWarning: this.options.onFetchWarning
+      });
     } catch (error) {
       throw new FeedDiscoveryError("PROVIDER_ERROR", 502, failureMessage, {
         cause: errorMessage(error)
       });
     }
 
+    const response = result.response;
     if (!response.ok) {
       throw new FeedDiscoveryError("PROVIDER_ERROR", 502, failureMessage, {
         status: response.status,
@@ -212,17 +227,11 @@ export class FeedDiscoveryService {
       });
     }
 
-    return { body: await response.text() };
+    return { body: result.body };
   }
 }
 
-const defaultFeedFetcher: FeedFetcher = async (url) =>
-  fetch(url, {
-    headers: {
-      accept:
-        "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8"
-    }
-  });
+const defaultFeedFetcher: FeedFetcher = async (url, init) => fetch(url, init);
 
 function normalizeHttpUrl(input: string, field: string): string {
   let normalized: string;

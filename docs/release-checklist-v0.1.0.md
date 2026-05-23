@@ -50,6 +50,7 @@ Expected result:
 - `/site.webmanifest` returns 200 with `application/manifest+json`, `/sw.js` returns 200, desktop Chromium registers the service worker, and offline reload shows the app shell or offline banner.
 - Docker image builds.
 - Compose config is valid.
+- `.github/workflows/publish-docker-image.yml` is tracked on the release branch before creating the release tag.
 - Docker recommendation smoke completes provider setup, backfill, diagnostics, and recommended list checks.
 - Performance report is regenerated or confirmed in `docs/recommendation-performance.md`.
 - Real Ollama probe passes with the user's local provider, currently `bge-m3` with dimension `1024`.

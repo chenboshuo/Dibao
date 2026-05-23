@@ -25,10 +25,7 @@ export class ReaderCommandServiceError extends Error {
 }
 
 export type ReaderCommandServiceOptions = {
-  articles: Pick<
-    ArticleRepository,
-    "countUnreadForScope" | "listUnreadArticleIdsForScope" | "markArticleIdsRead"
-  >;
+  articles: Pick<ArticleRepository, "countUnreadForScope" | "markScopeRead">;
   commandEvents: ReaderCommandEventRepository;
   rankingJobs?: Pick<RankingRecalculateJobService, "enqueueAll" | "enqueueArticles">;
   now?: () => number;
@@ -50,13 +47,12 @@ export class ReaderCommandService {
     const commandId = this.commandIdFactory();
 
     return this.options.commandEvents.transaction(() => {
-      const expectedCount = this.options.articles.countUnreadForScope(scope);
-      const affectedArticleIds = this.options.articles.listUnreadArticleIdsForScope(scope);
-      const markedReadCount = this.options.articles.markArticleIdsRead(affectedArticleIds, now);
+      const audit = this.options.articles.markScopeRead(scope, now);
       const result = {
         commandId,
-        markedReadCount: Math.min(markedReadCount, expectedCount),
-        affectedArticleIds
+        markedReadCount: audit.markedReadCount,
+        sampleArticleIds: audit.sampleArticleIds,
+        limitedAudit: audit.limitedAudit
       } satisfies MarkScopeReadCommandResult;
 
       this.options.commandEvents.record({
@@ -65,12 +61,13 @@ export class ReaderCommandService {
         scope,
         result: {
           markedReadCount: result.markedReadCount,
-          affectedArticleIds
+          sampleArticleIds: audit.sampleArticleIds,
+          limitedAudit: audit.limitedAudit
         },
         createdAt: now
       });
 
-      this.enqueueRankingUpdate(affectedArticleIds);
+      this.enqueueRankingUpdate(result.markedReadCount, audit.sampleArticleIds);
 
       return result;
     });
@@ -85,13 +82,13 @@ export class ReaderCommandService {
     };
   }
 
-  private enqueueRankingUpdate(articleIds: string[]): void {
-    if (!this.options.rankingJobs || articleIds.length === 0) {
+  private enqueueRankingUpdate(markedReadCount: number, sampleArticleIds: string[]): void {
+    if (!this.options.rankingJobs || markedReadCount === 0) {
       return;
     }
 
-    if (articleIds.length <= RANKING_RECALCULATE_ARTICLE_LIMIT) {
-      this.options.rankingJobs.enqueueArticles(articleIds);
+    if (markedReadCount <= RANKING_RECALCULATE_ARTICLE_LIMIT) {
+      this.options.rankingJobs.enqueueArticles(sampleArticleIds);
       return;
     }
 

@@ -450,6 +450,64 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("rate limits repeated failed logins and clears the counter after success", async () => {
+    const db = createEmptyDatabase();
+    let now = 1_000;
+    const app = buildRealServer({
+      db,
+      logger: false,
+      cookieSecure: false,
+      now: () => now,
+      authMaxFailedLoginAttempts: 2,
+      authLoginLockoutMs: 60_000
+    });
+
+    try {
+      await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      const first = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "wrong password"
+      });
+      const second = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "wrong password"
+      });
+      const limited = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      expect(first.statusCode, first.body).toBe(401);
+      expect(second.statusCode, second.body).toBe(401);
+      expect(limited.statusCode, limited.body).toBe(429);
+      expect(limited.json()).toMatchObject({
+        error: {
+          code: "RATE_LIMITED"
+        }
+      });
+
+      now += 60_001;
+      const success = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      expect(success.statusCode, success.body).toBe(200);
+
+      const afterSuccessWrong = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "wrong password"
+      });
+      expect(afterSuccessWrong.statusCode, afterSuccessWrong.body).toBe(401);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("changes the access password for an authenticated session", async () => {
     const db = createEmptyDatabase();
     const app = buildRealServer({ db, logger: false, cookieSecure: false });
@@ -5113,11 +5171,89 @@ describe("server API vertical slice", () => {
         db.prepare("select command_type as commandType from reader_command_events").get()
       ).toEqual({ commandType: "mark_scope_read" });
       expect(
+        JSON.parse(
+          (
+            db
+              .prepare("select result_json as resultJson from reader_command_events")
+              .get() as { resultJson: string }
+          ).resultJson
+        )
+      ).toEqual({
+        markedReadCount: 1,
+        sampleArticleIds: ["article_recommended"],
+        limitedAudit: false
+      });
+      expect(
         db.prepare("select type from jobs where type = 'ranking_recalculate'").get()
       ).toEqual({ type: "ranking_recalculate" });
       expect(getArticleStateRow(db, "article_recent")).toMatchObject({
         favoritedAt: 3500
       });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("marks large scopes read with sampled audit and full ranking recalculation", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 9000 });
+
+    feeds.upsert({
+      id: "feed_reader_command_large",
+      title: "Reader Command Large",
+      feedUrl: "https://example.com/reader-command-large.xml",
+      now: 1000
+    });
+    for (let index = 0; index < 510; index += 1) {
+      const id = `article_command_large_${String(index).padStart(3, "0")}`;
+      articles.upsert({
+        id,
+        feedId: "feed_reader_command_large",
+        url: `https://example.com/${id}`,
+        title: id,
+        publishedAt: 2000 + index,
+        discoveredAt: 2000 + index,
+        dedupeKey: id,
+        now: 2000 + index
+      });
+    }
+
+    try {
+      const response = await postJson(app, "/api/reader/commands/mark-scope-read", {
+        scope: {
+          type: "article_list",
+          view: "latest",
+          clearWindow: "all"
+        }
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toMatchObject({
+        ok: true,
+        markedReadCount: 510
+      });
+      const result = JSON.parse(
+        (
+          db
+            .prepare("select result_json as resultJson from reader_command_events")
+            .get() as { resultJson: string }
+        ).resultJson
+      ) as { markedReadCount: number; sampleArticleIds: string[]; limitedAudit: boolean };
+      expect(result.markedReadCount).toBe(510);
+      expect(result.sampleArticleIds).toHaveLength(200);
+      expect(result.limitedAudit).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("article_command_large_509");
+      expect(
+        db
+          .prepare(
+            "select count(*) as count from jobs where type = 'ranking_recalculate' and payload_json is null"
+          )
+          .get()
+      ).toEqual({ count: 1 });
+      expect(countTable(db, "behavior_events")).toBe(0);
     } finally {
       await app.close();
       db.close();
@@ -6719,14 +6855,11 @@ function createTempDir(): string {
 }
 
 function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
-  return async (url) => ({
-    ok: fixtures[url] !== undefined,
-    status: fixtures[url] === undefined ? 404 : 200,
-    statusText: fixtures[url] === undefined ? "Not Found" : "OK",
-    async text() {
-      return fixtures[url] ?? "";
-    }
-  });
+  return async (url) =>
+    new Response(fixtures[url] ?? "", {
+      status: fixtures[url] === undefined ? 404 : 200,
+      statusText: fixtures[url] === undefined ? "Not Found" : "OK"
+    });
 }
 
 function embeddingFetcherFixture(
@@ -6835,14 +6968,10 @@ function sequenceFetcher(url: string, responses: string[]): FeedFetcher {
         : undefined;
     requestCount += 1;
 
-    return {
-      ok: xml !== undefined,
+    return new Response(xml ?? "", {
       status: xml === undefined ? 404 : 200,
-      statusText: xml === undefined ? "Not Found" : "OK",
-      async text() {
-        return xml ?? "";
-      }
-    };
+      statusText: xml === undefined ? "Not Found" : "OK"
+    });
   };
 }
 

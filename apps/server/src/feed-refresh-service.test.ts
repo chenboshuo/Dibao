@@ -130,11 +130,7 @@ function fixtureDb(): DibaoDatabase {
 }
 
 function feedFetcher(xml: string) {
-  return async (): Promise<FeedFetchResponse> => ({
-    ok: true,
-    status: 200,
-    text: async () => xml
-  });
+  return async (): Promise<FeedFetchResponse> => new Response(xml);
 }
 
 function fixtureRss(): string {

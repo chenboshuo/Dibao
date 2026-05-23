@@ -64,6 +64,9 @@ It is designed for people who want a local and controllable alternative to algor
 - Full-content refresh/backfill side effects are centralized in the server coordinator: content services return changed article IDs, then embedding, ranking, and recommendation maintenance are enqueued once.
 - Recommended ranking combines interest match, source preference, freshness, state, and penalties.
 - Search v0 supports relevance, latest, and recommendation-aware ordering inside matched results.
+- Outbound RSS and full-content fetching now has request timeouts and response size limits. Local/private targets are logged as warnings but remain allowed for self-hosted LAN feeds.
+- Login now rate-limits repeated failed attempts for the same username/IP combination.
+- Bulk mark-read commands store sampled audit evidence instead of every affected article id, keeping large cleanup actions responsive.
 - The system falls back gracefully when provider, embedding, or profile data is unavailable.
 - Diagnostics show mode, coverage, behavior counts, clusters, rank context, pending/failed jobs, and warnings without exposing API keys or vectors.
 

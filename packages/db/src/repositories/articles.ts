@@ -13,6 +13,7 @@ import type {
   ArticleSearchInput,
   ArticleSearchResult,
   DibaoDatabase,
+  MarkScopeReadAuditResult,
   UpsertArticleContentInput,
   UpsertArticleContentResult,
   UpsertArticleInput
@@ -75,6 +76,7 @@ export interface ArticleRepository {
   findById(id: string): ArticleRow | null;
   findDetailById(id: string, input?: { rankContext?: string }): ArticleDetailRow | null;
   listUnreadArticleIdsForScope(scope: ArticleScope, limit?: number): string[];
+  markScopeRead(scope: ArticleScope, now: number, auditSampleLimit?: number): MarkScopeReadAuditResult;
   listEmbeddingCandidates(input: {
     embeddingIndexId: string;
     articleIds?: string[];
@@ -133,6 +135,64 @@ export class SqliteArticleRepository implements ArticleRepository {
       .all(...params) as Array<{ articleId: string }>;
 
     return rows.map((row) => row.articleId);
+  }
+
+  markScopeRead(
+    scope: ArticleScope,
+    now: number,
+    auditSampleLimit = 200
+  ): MarkScopeReadAuditResult {
+    const candidates = buildArticleScopeUnreadCandidates(scope);
+    const sampleLimit = Math.max(Math.trunc(auditSampleLimit), 0);
+
+    return this.db.transaction(() => {
+      const sampleArticleIds =
+        sampleLimit > 0 ? this.listUnreadArticleIdsForScope(scope, sampleLimit + 1) : [];
+      this.db
+        .prepare(
+          `
+            ${candidates.sql}
+            insert or ignore into article_states (
+              article_id,
+              read_at,
+              favorited_at,
+              liked_at,
+              read_later_at,
+              hidden_at,
+              not_interested_at,
+              reading_progress,
+              last_opened_at,
+              updated_at
+            )
+            select article_id, null, null, null, null, null, null, 0, null, ?
+            from candidates
+          `
+        )
+        .run(...candidates.params, now);
+
+      const markedReadCount = this.db
+        .prepare(
+          `
+            ${candidates.sql}
+            update article_states
+            set
+              read_at = ?,
+              reading_progress = 1,
+              updated_at = ?
+            where article_id in (
+              select article_id
+              from candidates
+            )
+          `
+        )
+        .run(...candidates.params, now, now).changes;
+
+      return {
+        markedReadCount,
+        sampleArticleIds: sampleArticleIds.slice(0, sampleLimit),
+        limitedAudit: sampleArticleIds.length > sampleLimit || markedReadCount > sampleLimit
+      };
+    })();
   }
 
   markArticleIdsRead(articleIds: string[], now: number): number {

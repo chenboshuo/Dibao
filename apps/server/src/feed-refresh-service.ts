@@ -13,16 +13,18 @@ import type {
   FeedRepository,
   FeedRow
 } from "@dibao/db";
+import {
+  controlledFetchText,
+  feedFetchMaxBytes,
+  type ControlledFetcher,
+  type ControlledFetchResponse,
+  type FetchPrivacyWarning
+} from "./controlled-fetch.js";
 import type { FullContentExtractionService } from "./full-content-extraction-service.js";
 
-export type FeedFetchResponse = {
-  ok: boolean;
-  status: number;
-  statusText?: string;
-  text(): Promise<string>;
-};
+export type FeedFetchResponse = ControlledFetchResponse;
 
-export type FeedFetcher = (url: string) => Promise<FeedFetchResponse>;
+export type FeedFetcher = ControlledFetcher;
 
 export type FeedIngestionErrorCode =
   | "VALIDATION_ERROR"
@@ -64,6 +66,7 @@ export type FeedRefreshServiceOptions = {
   articles: ArticleRepository;
   fetcher?: FeedFetcher;
   fullContentExtractor?: Pick<FullContentExtractionService, "extract">;
+  onFetchWarning?: (warning: FetchPrivacyWarning) => void;
   now?: () => number;
 };
 
@@ -111,15 +114,23 @@ export class FeedRefreshService {
   }
 
   async fetchAndParse(feedUrl: string): Promise<ParsedFeed> {
-    let response: FeedFetchResponse;
+    let result: { response: FeedFetchResponse; body: string };
     try {
-      response = await this.fetcher(feedUrl);
+      result = await controlledFetchText(feedUrl, {
+        fetcher: this.fetcher,
+        headers: {
+          accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
+        },
+        maxBytes: feedFetchMaxBytes(),
+        onWarning: this.options.onFetchWarning
+      });
     } catch (error) {
       throw new FeedIngestionError("PROVIDER_ERROR", 502, "Feed fetch failed", {
         cause: errorMessage(error)
       });
     }
 
+    const response = result.response;
     if (!response.ok) {
       throw new FeedIngestionError("PROVIDER_ERROR", 502, "Feed fetch failed", {
         status: response.status,
@@ -127,9 +138,8 @@ export class FeedRefreshService {
       });
     }
 
-    const xml = await response.text();
     try {
-      return parseFeedXml(xml, feedUrl);
+      return parseFeedXml(result.body, feedUrl);
     } catch (error) {
       throw new FeedIngestionError("PROVIDER_ERROR", 502, "Feed parse failed", {
         cause: error instanceof FeedParseError ? error.message : errorMessage(error)
@@ -313,12 +323,7 @@ export class FeedRefreshService {
   }
 }
 
-const defaultFeedFetcher: FeedFetcher = async (url) =>
-  fetch(url, {
-    headers: {
-      accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
-    }
-  });
+const defaultFeedFetcher: FeedFetcher = async (url, init) => fetch(url, init);
 
 function normalizeHttpFeedUrl(input: string): string {
   let feedUrl: string;
