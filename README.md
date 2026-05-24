@@ -136,14 +136,14 @@ ollama pull bge-m3
 
 | Provider | 适合谁 | 邸报里怎么填 |
 | --- | --- | --- |
-| 硅基流动 SiliconFlow | 国内访问更方便，支持 OpenAI-compatible API，适合中文 / 多语言 RSS。 | 类型：`OpenAI-compatible`<br>Base URL：`https://api.siliconflow.cn/v1`<br>Model：`Qwen/Qwen3-Embedding-0.6B`<br>Dimension：`1024`<br>API Key：硅基流动控制台创建 |
-| Gemini | 有 Google AI Studio / Gemini API key，想用 Google 免费层或低成本文本 embedding。 | 类型：`OpenAI-compatible`<br>Base URL：`https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model：`gemini-embedding-001`<br>Dimension：`768`<br>API Key：Google AI Studio 创建 |
+| 硅基流动 SiliconFlow | 国内访问更方便，支持 OpenAI-compatible API。优先推荐 `BAAI/bge-m3`：免费，没有日额度上限，按 RPM / TPM 限速；当前 L0 级别为 2,000 RPM、500,000 TPM。 | 类型：`OpenAI-compatible`<br>Base URL：`https://api.siliconflow.cn/v1`<br>Model：`BAAI/bge-m3`<br>Dimension：`1024`<br>API Key：硅基流动控制台创建 |
+| Gemini | 有 Google AI Studio / Gemini API key，想用 Google 免费层。Gemini embedding 也是免费的，免费层适合日常个人 RSS；按每天约 1,000 次请求规划更稳妥。 | 类型：`OpenAI-compatible`<br>Base URL：`https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model：`gemini-embedding-001`<br>Dimension：`768`<br>API Key：Google AI Studio 创建 |
 
 配置入口：`设置` -> `推荐 provider` -> 选择 `OpenAI-compatible` -> 填入 Base URL、Model、Dimension、API Key -> `测试连接`。
 
 注意：
 
-- 免费额度、免费层、模型价格和可用地区会变化，请以 [Ollama bge-m3](https://ollama.com/library/bge-m3)、[硅基流动模型与文档](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings) 和 [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) 当前页面为准。
+- 免费额度、免费层、模型价格、限速和可用地区会变化，请以 [Ollama bge-m3](https://ollama.com/library/bge-m3)、[硅基流动模型与文档](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings) 和 [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) 当前页面为准。
 - 更换模型或维度后，需要重新生成 embedding。邸报会保留旧阅读数据，但不同模型的向量不能直接混用。
 - Provider 不可用时，邸报仍可阅读 RSS，只是推荐会退回基础排序。
 
@@ -201,7 +201,7 @@ docker compose ps
 
 **Provider 测试失败怎么办？**
 
-检查 Base URL、模型名、维度、API Key 是否匹配。硅基流动建议先用 `Qwen/Qwen3-Embedding-0.6B` 和 `1024` 维；Gemini 建议先用 `gemini-embedding-001` 和 `768` 维。
+检查 Base URL、模型名、维度、API Key 是否匹配。硅基流动建议先用免费的 `BAAI/bge-m3` 和 `1024` 维；Gemini 建议先用 `gemini-embedding-001` 和 `768` 维。
 
 **局域网 HTTP 登录后没有保持会话？**
 
@@ -294,9 +294,12 @@ npm run smoke:docker-recommendation
 - RSS / Atom フィード追加、更新、健康診断。
 - Recommended、Latest、Favorites、Read Later、Search。
 - 保存、あとで読む、既読、興味なし、未読整理。
-- ローカル Mac / Windows では Ollama + `bge-m3`、小さな VPS では SiliconFlow / Gemini などの OpenAI-compatible provider による embedding 推薦。
+- ローカル Mac / Windows では Ollama + `bge-m3` によるローカル embedding。
+- 小さな VPS では Gemini の無料枠、または SiliconFlow / 硅基流动の `BAAI/bge-m3` を推奨。`BAAI/bge-m3` は無料で、日次上限ではなく RPM / TPM のレート制限で利用できます。
 - Docker volume に SQLite データを保存。
 - PWA としてホーム画面 / Dock に追加。
+
+日本国内向けの無料 embedding provider も確認しましたが、README に安定して推奨できる「日本発・無料・OpenAI-compatible・embedding 対応」の選択肢は見つかりませんでした。日本語 RSS でも、まずはローカル Ollama、Gemini、または SiliconFlow の国際向け API を使う構成が現実的です。
 
 Docker Compose：
 
@@ -440,8 +443,8 @@ External low-cost providers:
 
 | Provider | Settings |
 | --- | --- |
-| SiliconFlow | Type: `OpenAI-compatible`<br>Base URL: `https://api.siliconflow.cn/v1`<br>Model: `Qwen/Qwen3-Embedding-0.6B`<br>Dimension: `1024` |
-| Gemini | Type: `OpenAI-compatible`<br>Base URL: `https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model: `gemini-embedding-001`<br>Dimension: `768` |
+| SiliconFlow | Recommended model: `BAAI/bge-m3`. It is free, has no daily quota, and is rate-limited by RPM / TPM. Current L0 limits are 2,000 RPM and 500,000 TPM.<br>Type: `OpenAI-compatible`<br>Base URL: `https://api.siliconflow.cn/v1`<br>Model: `BAAI/bge-m3`<br>Dimension: `1024` |
+| Gemini | Gemini embedding is also free and works well for a small personal RSS setup. Plan around the free tier's roughly 1,000 requests per day.<br>Type: `OpenAI-compatible`<br>Base URL: `https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model: `gemini-embedding-001`<br>Dimension: `768` |
 
 Free tiers, pricing, and regional availability can change. Check [Ollama bge-m3](https://ollama.com/library/bge-m3), the current [SiliconFlow embeddings docs](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings), and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) before depending on a provider for heavy use.
 
