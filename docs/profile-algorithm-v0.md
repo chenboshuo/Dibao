@@ -131,6 +131,16 @@ stats_only:
 - 如果某一主题连续多次出现 quick bounce，可在后续版本中升级为弱负向主题信号；MVP 先不做。
 - 用户显式动作优先于自动推断行为。
 
+## 冷启动提示阈值
+
+推荐页的画像积累提示由 `/api/recommendation/status` 的 `PROFILE_WARMUP` warning 驱动。解除提示需要同时满足：
+
+- 有效画像信号数 `>= 8`。
+- 有效画像信号覆盖文章数 `>= 5`。
+- active index 下正向兴趣簇数 `>= 2`。
+
+有效画像信号只包括会支撑画像的行为：`like`、`favorite`、`read_later`、`hide`、`not_interested`、`unlike`、`read_complete`，以及 `progress >= 0.5` 的 `read_progress`。`open`、`impression`、低阅读进度、`quick_bounce` 和行政性 read state 更新不计入该阈值。
+
 ## 行为派生规则
 
 ### Read Progress

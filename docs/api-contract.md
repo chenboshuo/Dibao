@@ -2250,6 +2250,8 @@ limit=1..100
 - active provider/index 存在，coverage 已完成且无 provider/index/job 异常：`personalized`。
 - profile/behavior 信号仍少时，`mode` 仍可为 `personalized`，并通过 `PROFILE_WARMUP` warning 表示画像仍处于冷启动。
 
+`PROFILE_WARMUP` 表示当前实例的画像信号还在积累中。判定只统计会支撑画像的有效行为：`like`、`favorite`、`read_later`、`hide`、`not_interested`、`unlike`、`read_complete`，以及 `progress >= 0.5` 的 `read_progress`。`open`、`impression`、`progress < 0.5`、`quick_bounce`、`mark_read` / `mark_unread`、取消收藏/取消稍后读、以及批量清理产生的 read state 变化不解除 warmup。当前阈值为：有效画像信号至少 8 个、覆盖至少 5 篇文章、且 active index 下正向兴趣簇至少 2 个；任一不足都会返回 `PROFILE_WARMUP`。
+
 `warnings[].code` 至少可能包含：
 
 ```text

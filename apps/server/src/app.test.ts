@@ -908,15 +908,169 @@ describe("server API vertical slice", () => {
           },
           lastProfileUpdate: null,
           lastRankingUpdate: null,
-          warnings: [
+          warnings: expect.arrayContaining([
             {
               code: "NO_PROVIDER",
               message:
                 "No active embedding provider and index are configured; recommendations are using baseline ranking."
+            },
+            {
+              code: "PROFILE_WARMUP",
+              message: "The recommendation profile still has limited behavior and interest signals."
             }
-          ]
+          ])
         }
       });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("keeps profile warmup active for open-only behavior", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    createActiveEmbeddingDiagnosticsFixture(db, { providerTestStatus: "success" });
+    feeds.upsert({
+      id: "feed_warmup_open",
+      title: "Warmup Open Feed",
+      feedUrl: "https://example.com/warmup-open.xml",
+      now: 1000
+    });
+    for (let index = 0; index < 3; index += 1) {
+      const articleId = `article_warmup_open_${index}`;
+      articles.upsert({
+        id: articleId,
+        feedId: "feed_warmup_open",
+        url: `https://example.com/warmup-open/${index}`,
+        title: `Warmup open ${index}`,
+        summary: "Open-only behavior should not complete profile warmup.",
+        discoveredAt: 2000 + index,
+        dedupeKey: articleId,
+        now: 2000 + index
+      });
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            created_at
+          )
+          values (?, ?, 'open', 0.2, ?)
+        `
+      ).run(`event_warmup_open_${index}`, articleId, 3000 + index);
+    }
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            code: "PROFILE_WARMUP",
+            message: "The recommendation profile still has limited behavior and interest signals."
+          }
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("clears profile warmup after enough profile signals and positive clusters", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const profiles = new SqliteProfileRepository(db);
+    const { index: activeIndex } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    feeds.upsert({
+      id: "feed_warmup_ready",
+      title: "Warmup Ready Feed",
+      feedUrl: "https://example.com/warmup-ready.xml",
+      now: 1000
+    });
+    const signalEvents = [
+      ["article_warmup_ready_0", "favorite"],
+      ["article_warmup_ready_0", "like"],
+      ["article_warmup_ready_1", "read_later"],
+      ["article_warmup_ready_1", "read_progress"],
+      ["article_warmup_ready_2", "favorite"],
+      ["article_warmup_ready_3", "like"],
+      ["article_warmup_ready_4", "read_later"],
+      ["article_warmup_ready_4", "read_progress"]
+    ] as const;
+    for (let index = 0; index < 5; index += 1) {
+      const articleId = `article_warmup_ready_${index}`;
+      articles.upsert({
+        id: articleId,
+        feedId: "feed_warmup_ready",
+        url: `https://example.com/warmup-ready/${index}`,
+        title: `Warmup ready ${index}`,
+        summary: "Enough profile behavior should clear warmup.",
+        discoveredAt: 2000 + index,
+        dedupeKey: articleId,
+        now: 2000 + index
+      });
+    }
+    signalEvents.forEach(([articleId, eventType], eventIndex) => {
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            metadata_json,
+            created_at
+          )
+          values (?, ?, ?, 1, ?, ?)
+        `
+      ).run(
+        `event_warmup_ready_${eventIndex}`,
+        articleId,
+        eventType,
+        eventType === "read_progress" ? JSON.stringify({ progress: 0.75 }) : null,
+        3000 + eventIndex
+      );
+    });
+    for (const clusterId of ["cluster_warmup_ready_a", "cluster_warmup_ready_b"]) {
+      profiles.upsertCluster({
+        id: clusterId,
+        embeddingIndexId: activeIndex.id,
+        polarity: "positive",
+        centroidVectorBlob: toVectorBlob([1, 0, 0]),
+        weight: 8,
+        sampleCount: 4,
+        now: 4000
+      });
+    }
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.warnings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "PROFILE_WARMUP"
+          })
+        ])
+      );
     } finally {
       await app.close();
       db.close();

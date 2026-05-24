@@ -696,6 +696,11 @@ export type BehaviorEventCountRow = {
   count: number;
 };
 
+export type ProfileSignalCountRow = {
+  signalCount: number;
+  articleCount: number;
+};
+
 export type ClusterCountRow = {
   positive: number;
   negative: number;

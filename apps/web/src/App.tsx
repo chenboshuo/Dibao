@@ -3757,6 +3757,56 @@ export function SettingsWorkspace(props: {
           <p className={styles.managementHint}>{t.settings.sections.retention.mappingHint}</p>
         </section>
 
+        <section className={classNames(styles.settingsSection, "settings-card", "about-settings-card")} aria-labelledby="settings-about-title">
+          <div>
+            <h3 id="settings-about-title">{t.settings.sections.about.title}</h3>
+            <p>{t.settings.sections.about.body}</p>
+          </div>
+          <dl className={styles.aboutList}>
+            <div>
+              <dt>{t.settings.sections.about.version}</dt>
+              <dd>{t.common.version(dibaoVersion)}</dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.author}</dt>
+              <dd>{t.settings.sections.about.authorName}</dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.xAccount}</dt>
+              <dd>
+                <a href="https://x.com/JeffreyCalm" rel="noreferrer" target="_blank">
+                  @JeffreyCalm
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.blog}</dt>
+              <dd>
+                <a href="https://1q43.blog" rel="noreferrer" target="_blank">
+                  1q43.blog
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.homepage}</dt>
+              <dd>
+                <a href="https://dibao.app" rel="noreferrer" target="_blank">
+                  dibao.app
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.github}</dt>
+              <dd>
+                <a href="https://github.com/Pls-1q43/dibao" rel="noreferrer" target="_blank">
+                  Pls-1q43/dibao
+                </a>
+              </dd>
+            </div>
+          </dl>
+          <p className={styles.managementHint}>{t.settings.sections.about.versionSyncHint}</p>
+        </section>
+
         <section className={classNames(styles.settingsSection, "settings-card", "provider-settings-card")} aria-labelledby="settings-provider-title">
           <div>
             <h3 id="settings-provider-title">{t.settings.sections.provider.title}</h3>
@@ -5917,6 +5967,7 @@ function RecommendationStatusBar(props: {
         ? t.recommendationStatus.loading
         : t.recommendationStatus.fallback;
   const metrics = props.status ? recommendationStatusMetrics(props.status, t, formatDate) : [];
+  const showWarmupNotice = props.status ? hasProfileWarmupWarning(props.status) : false;
 
   return (
     <section className={styles.recommendationStatusBar} aria-live="polite">
@@ -5924,6 +5975,11 @@ function RecommendationStatusBar(props: {
         <span className={styles.recommendationStatusLabel}>{t.recommendationStatus.title}</span>
         <strong>{statusText}</strong>
       </div>
+      {showWarmupNotice ? (
+        <p className={styles.recommendationStatusNotice}>
+          {t.recommendationStatus.warmupNotice}
+        </p>
+      ) : null}
       {metrics.length > 0 ? (
         <dl className={styles.recommendationStatusMetrics}>
           {metrics.map((metric) => (
@@ -5935,6 +5991,10 @@ function RecommendationStatusBar(props: {
       ) : null}
     </section>
   );
+}
+
+function hasProfileWarmupWarning(status: RecommendationStatus): boolean {
+  return status.warnings.some((warning) => warning.code === "PROFILE_WARMUP");
 }
 
 function useArticleListIgnoreTelemetry(props: {

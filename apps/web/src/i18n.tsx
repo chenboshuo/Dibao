@@ -374,6 +374,19 @@ export const zhCN = {
         disabled: "已关闭",
         mappingHint: "API 字段 retention.retentionDays 会保存到 storage key retention.articleDays。"
       },
+      about: {
+        title: "关于",
+        body: "版本、作者与项目链接。",
+        version: "当前版本",
+        author: "作者",
+        authorName: "评论尸",
+        xAccount: "X 账号",
+        blog: "作者博客",
+        homepage: "项目主页",
+        github: "项目 GitHub",
+        versionSyncHint:
+          "当前版本号来自 @dibao/shared 的 dibaoVersion；发布前会由测试校验它与 package.json version 一致。"
+      },
       provider: {
         title: "智能能力",
         body: "配置 OpenAI-compatible、Gemini AI Studio 或 Ollama embedding provider。未配置或停用时，系统继续使用基础排序。",
@@ -1023,6 +1036,8 @@ export const zhCN = {
     title: "推荐状态",
     loading: "正在读取推荐状态",
     fallback: "推荐状态暂不可用，当前列表仍可阅读。",
+    warmupNotice:
+      "当前用户行为正在积累中，推荐可能不准确，建议在“最新”视图中当做普通 RSS 阅读器正常使用。",
     modes: {
       baseline: "基础排序中",
       personalized: "个性化推荐中",
@@ -1549,6 +1564,19 @@ export const enUS = {
         enabled: "On",
         disabled: "Off",
         mappingHint: "API field retention.retentionDays is stored as storage key retention.articleDays."
+      },
+      about: {
+        title: "About",
+        body: "Version, author, and project links.",
+        version: "Current version",
+        author: "Author",
+        authorName: "Pls",
+        xAccount: "X account",
+        blog: "Author blog",
+        homepage: "Project homepage",
+        github: "Project GitHub",
+        versionSyncHint:
+          "The displayed version comes from @dibao/shared dibaoVersion; release tests verify it matches package.json version."
       },
       provider: {
         title: "Intelligence",
@@ -2188,6 +2216,8 @@ export const enUS = {
     title: "Personalization status",
     loading: "Loading personalization status",
     fallback: "Personalization status is unavailable; the list is still readable.",
+    warmupNotice:
+      "Your reading behavior is still accumulating, so recommendations may be inaccurate. Use Latest as a regular RSS reader for now.",
     modes: {
       baseline: "Baseline ranking",
       personalized: "Personalized ranking is on",
@@ -2708,6 +2738,19 @@ export const jaJP = {
         enabled: "オン",
         disabled: "オフ",
         mappingHint: "API フィールド retention.retentionDays は storage key retention.articleDays に保存されます。"
+      },
+      about: {
+        title: "このアプリについて",
+        body: "バージョン、作者、プロジェクトリンクです。",
+        version: "現在のバージョン",
+        author: "作者",
+        authorName: "Pls",
+        xAccount: "X アカウント",
+        blog: "作者ブログ",
+        homepage: "プロジェクトサイト",
+        github: "プロジェクト GitHub",
+        versionSyncHint:
+          "表示バージョンは @dibao/shared の dibaoVersion から取得します。リリース時のテストで package.json version との一致を検証します。"
       },
       provider: {
         title: "インテリジェンス",
@@ -3347,6 +3390,8 @@ export const jaJP = {
     title: "おすすめ状態",
     loading: "おすすめ状態を読み込んでいます",
     fallback: "おすすめ状態を取得できません。記事一覧は引き続き読めます。",
+    warmupNotice:
+      "現在はユーザー行動を蓄積している段階です。おすすめはまだ正確でない可能性があるため、しばらくは「最新」ビューを通常の RSS リーダーとしてお使いください。",
     modes: {
       baseline: "基本の並び替え",
       personalized: "パーソナライズおすすめが有効",

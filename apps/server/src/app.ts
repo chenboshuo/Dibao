@@ -46,7 +46,8 @@ import {
   type InterestClusterRow,
   type JobRow,
   type JobStatus,
-  type JobType
+  type JobType,
+  type ProfileSignalCountRow
 } from "@dibao/db";
 import { cosineSimilarity, profileAlgorithmDefaults } from "@dibao/ranking";
 import { dibaoVersion, type ApiError } from "@dibao/shared";
@@ -2027,7 +2028,8 @@ function getRecommendationStatus(options: {
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
   const lastRankingUpdate = options.rankings.getLastRankingUpdate({ activeRankContext });
-  const profileLearning = isProfileLearning(behaviorCounts, clusters);
+  const profileSignals = options.profiles.countProfileSignals();
+  const profileLearning = isProfileLearning(profileSignals, clusters);
   const warnings = recommendationWarnings({
     activeProvider,
     activeIndex,
@@ -2750,6 +2752,10 @@ type RecommendationCoverage = {
 
 type RecommendationMode = "baseline" | "personalized" | "embedding" | "degraded";
 
+const PROFILE_WARMUP_MIN_SIGNAL_COUNT = 8;
+const PROFILE_WARMUP_MIN_SIGNAL_ARTICLE_COUNT = 5;
+const PROFILE_WARMUP_MIN_POSITIVE_CLUSTERS = 2;
+
 function activeDiagnosticIndexFor(
   providerId: string,
   indexes: EmbeddingIndexListRow[]
@@ -2842,24 +2848,24 @@ function recommendationWarnings(input: {
       code: "NO_PROVIDER",
       message: "No active embedding provider and index are configured; recommendations are using baseline ranking."
     });
-    return warnings;
-  }
-
-  if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
+  } else if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
     warnings.push({
       code: "EMBEDDING_PENDING",
       message: "Embedding generation is still running or incomplete for the active index."
     });
   }
 
-  if (hasBlockingEmbeddingFailures(input.coverage) || input.activeIndex.status === "failed") {
+  if (
+    input.activeIndex &&
+    (hasBlockingEmbeddingFailures(input.coverage) || input.activeIndex.status === "failed")
+  ) {
     warnings.push({
       code: "EMBEDDING_JOB_FAILED",
       message: "Embedding generation has failed jobs for the active index."
     });
   }
 
-  if (input.activeProvider.lastTestStatus === "failed") {
+  if (input.activeProvider?.lastTestStatus === "failed") {
     warnings.push({
       code: "PROVIDER_TEST_FAILED",
       message: "The active embedding provider's latest connection test failed."
@@ -2877,11 +2883,14 @@ function recommendationWarnings(input: {
 }
 
 function isProfileLearning(
-  behaviorCounts: Record<string, number>,
+  profileSignals: ProfileSignalCountRow,
   clusters: { positive: number; negative: number }
 ): boolean {
-  const behaviorTotal = Object.values(behaviorCounts).reduce((sum, count) => sum + count, 0);
-  return behaviorTotal < 3 || clusters.positive + clusters.negative === 0;
+  return (
+    profileSignals.signalCount < PROFILE_WARMUP_MIN_SIGNAL_COUNT ||
+    profileSignals.articleCount < PROFILE_WARMUP_MIN_SIGNAL_ARTICLE_COUNT ||
+    clusters.positive < PROFILE_WARMUP_MIN_POSITIVE_CLUSTERS
+  );
 }
 
 function rankingSettingsChanged(

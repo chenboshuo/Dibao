@@ -426,7 +426,12 @@ describe("web i18n", () => {
             },
             lastProfileUpdate: "2026-05-14T08:09:00.000Z",
             lastRankingUpdate: "2026-05-14T08:11:00.000Z",
-            warnings: []
+            warnings: [
+              {
+                code: "PROFILE_WARMUP",
+                message: "The recommendation profile still has limited behavior and interest signals."
+              }
+            ]
           }}
           recommendationStatusError={null}
           readerCommandError={null}
@@ -447,6 +452,9 @@ describe("web i18n", () => {
     expect(html).toContain("行为 3");
     expect(html).toContain("Coverage 50%");
     expect(html).toContain("兴趣簇 +1 / -0");
+    expect(html).toContain(
+      "当前用户行为正在积累中，推荐可能不准确，建议在“最新”视图中当做普通 RSS 阅读器正常使用。"
+    );
   });
 
   it("renders article summaries as plain text in the list", () => {
@@ -965,6 +973,13 @@ describe("web i18n", () => {
     expect(html).toContain("阅读宽度");
     expect(html).toContain("保留天数");
     expect(html).toContain("retention.retentionDays");
+    expect(html).toContain("关于");
+    expect(html).toContain("v0.1.0");
+    expect(html).toContain("评论尸");
+    expect(html).toContain("https://x.com/JeffreyCalm");
+    expect(html).toContain("https://1q43.blog");
+    expect(html).toContain("https://dibao.app");
+    expect(html).toContain("https://github.com/Pls-1q43/dibao");
     expect(html).toContain("智能能力");
     expect(html).toContain("当前未启用 Provider");
     expect(html).toContain("保存配置档");
