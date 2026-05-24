@@ -106,9 +106,33 @@ docker compose up --build -d
 
 ### 推荐 Provider
 
-邸报没有强制绑定任何 AI 服务。你可以先跳过 provider，只用基础排序；也可以接入免费额度或免费层的 embedding provider，让推荐更像“按你的兴趣整理过的 RSS”。
+邸报没有强制绑定任何 AI 服务。你可以先跳过 provider，只用基础排序；也可以接入本地模型、免费额度或免费层的 embedding provider，让推荐更像“按你的兴趣整理过的 RSS”。
 
-推荐先试这两个：
+怎么选，先看邸报部署在哪里：
+
+| 你的部署方式 | 推荐选择 | 原因与参数 |
+| --- | --- | --- |
+| 本地 MacBook、Mac mini、Windows 台式机 / 笔记本 | **Ollama 本地模型** | 本地电脑通常比小 VPS 更适合跑 embedding：不花 API 钱，阅读数据不出本机，首次索引慢一点也可以接受。推荐模型：`bge-m3`；Dimension：`1024`。 |
+| 家用 NAS 或低功耗小主机 | **优先外部 provider** | 如果 CPU 较弱、内存紧张，embedding 会拖慢设备。建议直接用硅基流动或 Gemini；如果设备接近桌面级 CPU 且内存充足，再考虑 Ollama。 |
+| VPS >= `4 vCPU / 8GB RAM` | **可以用 Ollama CPU** | 可接受后台慢慢生成 embedding 的话，用 `bge-m3`；如果文章很多或机器还跑别的服务，仍建议外部 provider。 |
+| VPS < `4 vCPU / 8GB RAM` | **硅基流动或 Gemini** | 1-2 vCPU、1-4GB RAM 的 VPS 更适合把 embedding 交给 API，避免首次 backfill 和后续刷新挤占服务器资源。 |
+
+本地 Ollama 推荐配置：
+
+```bash
+ollama pull bge-m3
+```
+
+| 字段 | 填写 |
+| --- | --- |
+| 类型 | `Ollama` |
+| Base URL | Docker Desktop 上通常填 `http://host.docker.internal:11434`；非 Docker 同机运行可填 `http://127.0.0.1:11434` |
+| Model | `bge-m3` |
+| Dimension | `1024` |
+
+`bge-m3` 是目前更适合邸报默认推荐的本地模型：模型不算大，Ollama 上约 567M 参数，兼顾中文、日文、英文等多语言 RSS；没有必要一开始就上更大的 embedding 模型。只想更轻、更快时，可以把模型换成 `nomic-embed-text`，Dimension 填 `768`。
+
+外部免费 / 低成本 provider 推荐：
 
 | Provider | 适合谁 | 邸报里怎么填 |
 | --- | --- | --- |
@@ -119,7 +143,7 @@ docker compose up --build -d
 
 注意：
 
-- 免费额度、免费层和可用地区会变化，请以 [硅基流动模型与文档](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings) 和 [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) 当前页面为准。
+- 免费额度、免费层、模型价格和可用地区会变化，请以 [Ollama bge-m3](https://ollama.com/library/bge-m3)、[硅基流动模型与文档](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings) 和 [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) 当前页面为准。
 - 更换模型或维度后，需要重新生成 embedding。邸报会保留旧阅读数据，但不同模型的向量不能直接混用。
 - Provider 不可用时，邸报仍可阅读 RSS，只是推荐会退回基础排序。
 
@@ -270,7 +294,7 @@ npm run smoke:docker-recommendation
 - RSS / Atom フィード追加、更新、健康診断。
 - Recommended、Latest、Favorites、Read Later、Search。
 - 保存、あとで読む、既読、興味なし、未読整理。
-- SiliconFlow、Gemini、Ollama、OpenAI-compatible provider による embedding 推薦。
+- ローカル Mac / Windows では Ollama + `bge-m3`、小さな VPS では SiliconFlow / Gemini などの OpenAI-compatible provider による embedding 推薦。
 - Docker volume に SQLite データを保存。
 - PWA としてホーム画面 / Dock に追加。
 
@@ -388,14 +412,38 @@ docker compose up --build -d
 
 ### Recommended Providers
 
-Dibao works without an AI provider, but embeddings make recommendations more personal. Good first choices:
+Dibao works without an AI provider, but embeddings make recommendations more personal. Choose based on where you run Dibao:
+
+| Deployment | Recommendation |
+| --- | --- |
+| Local MacBook, Mac mini, or Windows desktop/laptop | Use local Ollama first. It keeps reading data on the machine and avoids API cost. Recommended model: `bge-m3`; dimension: `1024`. |
+| Home NAS or low-power mini PC | Prefer SiliconFlow or Gemini unless the CPU is close to desktop-class and memory is comfortable. |
+| VPS with at least `4 vCPU / 8GB RAM` | Ollama CPU can work for background embedding. Use `bge-m3`, and expect initial indexing to take time. |
+| VPS below `4 vCPU / 8GB RAM` | Use SiliconFlow or Gemini. Small VPS instances should not spend their limited CPU/RAM on embedding backfill. |
+
+Local Ollama settings:
+
+```bash
+ollama pull bge-m3
+```
+
+| Field | Value |
+| --- | --- |
+| Type | `Ollama` |
+| Base URL | `http://host.docker.internal:11434` when Dibao runs in Docker Desktop and Ollama runs on the host; `http://127.0.0.1:11434` when both run directly on the same machine |
+| Model | `bge-m3` |
+| Dimension | `1024` |
+
+`bge-m3` is the default local recommendation because it is not oversized, works well for multilingual RSS, and is available directly from Ollama. If you want a lighter and faster local option, use `nomic-embed-text` with dimension `768`.
+
+External low-cost providers:
 
 | Provider | Settings |
 | --- | --- |
 | SiliconFlow | Type: `OpenAI-compatible`<br>Base URL: `https://api.siliconflow.cn/v1`<br>Model: `Qwen/Qwen3-Embedding-0.6B`<br>Dimension: `1024` |
 | Gemini | Type: `OpenAI-compatible`<br>Base URL: `https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model: `gemini-embedding-001`<br>Dimension: `768` |
 
-Free tiers and regional availability can change. Check the current [SiliconFlow embeddings docs](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings) and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) before depending on either provider for heavy use.
+Free tiers, pricing, and regional availability can change. Check [Ollama bge-m3](https://ollama.com/library/bge-m3), the current [SiliconFlow embeddings docs](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings), and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) before depending on a provider for heavy use.
 
 ### Backup And Upgrade
 
