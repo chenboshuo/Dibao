@@ -5,6 +5,7 @@ import type { ProfileService, ProfileUpdateResult } from "./profile-service.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
 export const PROFILE_EVENT_PROCESS_JOB_TYPE = "profile_event_process" as const;
+export const HIGH_VOLUME_PROFILE_RANKING_DELAY_MS = 5 * 60_000;
 
 export type ProfileEventProcessJobPayload = {
   eventId: string;
@@ -54,7 +55,11 @@ export class ProfileEventProcessJobService {
 
     const profileResult = this.options.profile.processEvent(payload.eventId);
     if (shouldRecalculateAll(profileResult, payload.actionType)) {
-      this.options.rankingJobs.enqueueAll();
+      this.options.rankingJobs.enqueueAll({
+        delayMs: isHighVolumeArticleOnlyAction(payload.actionType)
+          ? HIGH_VOLUME_PROFILE_RANKING_DELAY_MS
+          : 0
+      });
     }
   }
 

@@ -41,6 +41,7 @@ import {
 import { ProfileService } from "./profile-service.js";
 import {
   RankingRecalculateJobService,
+  RANKING_RECALCULATE_CHUNK_DELAY_MS,
   RANKING_RECALCULATE_JOB_TYPE
 } from "./ranking-job-service.js";
 import { RecommendationRankingService } from "./ranking-service.js";
@@ -1283,6 +1284,7 @@ describe("job runner foundation", () => {
     try {
       const jobs = new SqliteJobRepository(db);
       const calls: Array<{ cursor: string | null; limit: number }> = [];
+      let now = 1000;
       const rankingJobs = new RankingRecalculateJobService({
         jobs,
         ranking: {
@@ -1312,7 +1314,7 @@ describe("job runner foundation", () => {
           }
         },
         jobIdFactory: () => `job_rank_${calls.length}_${randomFixtureId()}`,
-        now: () => 1000
+        now: () => now
       });
       rankingJobs.enqueueAll();
       const runner = new JobRunner({
@@ -1321,10 +1323,14 @@ describe("job runner foundation", () => {
           [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
             rankingJobs.handleRankingRecalculateJob(job)
         },
-        now: () => 1000
+        now: () => now
       });
 
-      await expect(runner.drainDue()).resolves.toBe(3);
+      await expect(runner.drainDue()).resolves.toBe(1);
+      now += RANKING_RECALCULATE_CHUNK_DELAY_MS;
+      await expect(runner.drainDue()).resolves.toBe(1);
+      now += RANKING_RECALCULATE_CHUNK_DELAY_MS;
+      await expect(runner.drainDue()).resolves.toBe(1);
       expect(calls).toEqual([
         { cursor: null, limit: 500 },
         { cursor: "cursor_1", limit: 500 },

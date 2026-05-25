@@ -6,11 +6,16 @@ import type { ArticleRankingRecalculator } from "./ranking-service.js";
 export const RANKING_RECALCULATE_JOB_TYPE = "ranking_recalculate" as const;
 export const RANKING_RECALCULATE_ARTICLE_LIMIT = 500;
 export const RANKING_RECALCULATE_CHUNK_SIZE = 500;
+export const RANKING_RECALCULATE_CHUNK_DELAY_MS = 10_000;
 
 export type RankingRecalculateJobPayload = {
   articleIds?: string[];
   cursor?: string | null;
   limit?: number;
+};
+
+export type RankingRecalculateEnqueueOptions = {
+  delayMs?: number;
 };
 
 export type RankingRecalculateJobServiceOptions = {
@@ -29,7 +34,7 @@ export class RankingRecalculateJobService {
     this.jobIdFactory = options.jobIdFactory ?? randomJobId;
   }
 
-  enqueueAll(): JobRow {
+  enqueueAll(options: RankingRecalculateEnqueueOptions = {}): JobRow {
     const existing = this.options.jobs
       .listOpenByType(RANKING_RECALCULATE_JOB_TYPE)
       .find((job) => {
@@ -46,7 +51,7 @@ export class RankingRecalculateJobService {
       type: RANKING_RECALCULATE_JOB_TYPE,
       payloadJson: null,
       maxAttempts: 2,
-      runAfter: now,
+      runAfter: now + Math.max(0, options.delayMs ?? 0),
       now
     });
   }
@@ -106,7 +111,7 @@ export class RankingRecalculateJobService {
             limit: payload.limit ?? RANKING_RECALCULATE_CHUNK_SIZE
           } satisfies RankingRecalculateJobPayload),
           maxAttempts: 2,
-          runAfter: now,
+          runAfter: now + RANKING_RECALCULATE_CHUNK_DELAY_MS,
           now
         });
       }
