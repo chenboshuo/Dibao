@@ -37,6 +37,7 @@ import {
   type ArticleSearchSort,
   type ArticleSearchState,
   type DibaoDatabase,
+  type EmbeddingIndexRow,
   type EmbeddingIndexListRow,
   type EmbeddingProviderRow,
   type FeedFolderRow,
@@ -2001,10 +2002,15 @@ function getRecommendationStatus(options: {
 }) {
   const includeClusterItems = options.includeClusterItems ?? true;
   const activeProvider = options.embeddings.findActiveProvider();
-  const indexes = options.embeddings.listIndexes();
-  const activeIndex = activeProvider ? activeDiagnosticIndexFor(activeProvider.id, indexes) : null;
+  const activeIndex = activeProvider
+    ? includeClusterItems
+      ? activeDiagnosticIndexFor(activeProvider.id, options.embeddings.listIndexes())
+      : options.embeddings.findActiveIndexForProvider(activeProvider.id)
+    : null;
   const activeRankContext = options.rankingService.getActiveRankContext();
-  const coverage = coverageFor(activeIndex);
+  const coverage = includeClusterItems
+    ? coverageFor(activeIndex as EmbeddingIndexListRow | null)
+    : lightweightCoverageFor(options.db, activeIndex);
   const behaviorCounts = Object.fromEntries(
     options.profiles.countBehaviorEvents().map((row) => [row.eventType, row.count])
   );
@@ -2811,7 +2817,7 @@ function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverag
 
 function recommendationMode(input: {
   activeProvider: EmbeddingProviderRow | null;
-  activeIndex: EmbeddingIndexListRow | null;
+  activeIndex: EmbeddingIndexRow | null;
   coverage: RecommendationCoverage;
 }): RecommendationMode {
   if (!input.activeProvider || !input.activeIndex) {
@@ -2847,7 +2853,7 @@ function hasBlockingEmbeddingFailures(coverage: RecommendationCoverage): boolean
 
 function recommendationWarnings(input: {
   activeProvider: EmbeddingProviderRow | null;
-  activeIndex: EmbeddingIndexListRow | null;
+  activeIndex: EmbeddingIndexRow | null;
   coverage: RecommendationCoverage;
   profileLearning: boolean;
 }): Array<{ code: string; message: string }> {
@@ -3158,13 +3164,132 @@ function mapRecommendationProvider(provider: EmbeddingProviderRow) {
   };
 }
 
-function mapRecommendationIndex(index: EmbeddingIndexListRow) {
+function mapRecommendationIndex(index: EmbeddingIndexRow) {
   return {
     id: index.id,
     status: index.status,
     model: index.model,
     dimension: index.dimension
   };
+}
+
+function lightweightCoverageFor(
+  db: DibaoDatabase,
+  index: EmbeddingIndexRow | null
+): RecommendationCoverage {
+  if (!index) {
+    return coverageFor(null);
+  }
+
+  const row = db
+    .prepare(
+      `
+        with eligible_article_rows as (
+          select
+            a.id as articleId,
+            coalesce(a.content_hash, a.id || ':' || a.updated_at) as contentHash
+          from articles a
+          join feeds f on f.id = a.feed_id
+          left join article_contents ac on ac.article_id = a.id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and (
+              trim(coalesce(a.title, '')) != ''
+              or trim(coalesce(a.summary, '')) != ''
+              or trim(substr(coalesce(ac.content_text, ''), 1, 256)) != ''
+            )
+        )
+        select
+          count(*) as candidateCount,
+          sum(case when ae.article_id is null then 1 else 0 end) as missingEmbeddingCount,
+          sum(case when ae.article_id is not null and ae.content_hash != ear.contentHash then 1 else 0 end) as staleEmbeddingCount,
+          sum(case when ae.article_id is not null and ae.content_hash = ear.contentHash then 1 else 0 end) as coveredArticleCount,
+          (
+            select count(*)
+            from article_embeddings ae_count
+            where ae_count.embedding_index_id = ?
+          ) as embeddingCount,
+          (
+            select count(*)
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status in ('queued', 'running')
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+          ) as pendingJobs,
+          (
+            select count(*)
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status = 'failed'
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+          ) as failedJobs,
+          (
+            select coalesce(j.finished_at, j.updated_at)
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status = 'failed'
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+            order by coalesce(j.finished_at, j.updated_at) desc, j.id desc
+            limit 1
+          ) as lastFailedAt,
+          (
+            select j.error
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status = 'failed'
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+            order by coalesce(j.finished_at, j.updated_at) desc, j.id desc
+            limit 1
+          ) as lastError
+        from eligible_article_rows ear
+        left join article_embeddings ae
+          on ae.article_id = ear.articleId
+         and ae.embedding_index_id = ?
+      `
+    )
+    .get(index.id, index.id, index.id, index.id, index.id, index.id) as
+    | {
+        candidateCount: number;
+        missingEmbeddingCount: number | null;
+        staleEmbeddingCount: number | null;
+        coveredArticleCount: number | null;
+        embeddingCount: number;
+        pendingJobs: number;
+        failedJobs: number;
+        lastFailedAt: number | null;
+        lastError: string | null;
+      }
+    | undefined;
+
+  const candidateCount = row?.candidateCount ?? 0;
+  const coveredArticleCount = row?.coveredArticleCount ?? 0;
+  return {
+    candidateCount,
+    eligibleArticleCount: candidateCount,
+    missingEmbeddingCount: row?.missingEmbeddingCount ?? 0,
+    staleEmbeddingCount: row?.staleEmbeddingCount ?? 0,
+    coveredArticleCount,
+    embeddingCount: row?.embeddingCount ?? 0,
+    coverageRatio: coverageRatioForCounts(coveredArticleCount, candidateCount),
+    pendingJobs: row?.pendingJobs ?? 0,
+    failedJobs: row?.failedJobs ?? 0,
+    lastFailedAt: row?.lastFailedAt ?? null,
+    lastError: row?.lastError ?? null
+  };
+}
+
+function coverageRatioForCounts(coveredArticleCount: number, candidateCount: number): number {
+  return candidateCount === 0 ? 0 : Math.min(1, coveredArticleCount / candidateCount);
 }
 
 function mapCoverage(coverage: RecommendationCoverage) {

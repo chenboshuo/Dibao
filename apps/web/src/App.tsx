@@ -1045,7 +1045,12 @@ export function App() {
       return;
     }
 
-    void Promise.all([loadFeedFolders(), loadFeeds(), loadFeedDiagnostics()]);
+    if (appPage.type === "feed-management") {
+      void Promise.all([loadFeedFolders(), loadFeeds(), loadFeedDiagnostics()]);
+      return;
+    }
+
+    void Promise.all([loadFeedFolders(), loadFeeds()]);
   }, [appPage.type, appStage.type, loadFeedDiagnostics, loadFeedFolders, loadFeeds]);
 
   useEffect(() => {
