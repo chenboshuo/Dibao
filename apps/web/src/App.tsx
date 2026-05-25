@@ -349,6 +349,7 @@ export function App() {
   const ignoredArticleIds = useRef(new Set<string>());
   const ignoredArticleQueue = useRef<string[]>([]);
   const isSendingIgnoredArticle = useRef(false);
+  const selectedArticleIdRef = useRef<string | null>(selectedArticleId);
   const articleStateById = useRef(new Map<string, ArticleState>());
   const locallyUpdatedArticleIds = useRef(new Set<string>());
   const articleRequestVersion = useRef(0);
@@ -715,6 +716,13 @@ export function App() {
   useEffect(() => {
     appPageRef.current = appPage;
   }, [appPage]);
+
+  useEffect(() => {
+    selectedArticleIdRef.current = selectedArticleId;
+    if (selectedArticleId) {
+      ignoredArticleQueue.current = [];
+    }
+  }, [selectedArticleId]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || hasLoadedSettingsForSession.current) {
@@ -2058,7 +2066,7 @@ export function App() {
 
     if (
       !article ||
-      selectedArticleId === articleId ||
+      selectedArticleIdRef.current !== null ||
       openedArticleIds.current.has(articleId) ||
       ignoredArticleIds.current.has(articleId) ||
       interactionStatus !== "unseen"
@@ -2657,7 +2665,7 @@ export function App() {
               isIgnoreTelemetryEnabled={
                 appSettings.behavior.markScrolledArticlesIgnored &&
                 (currentArticleView === "latest" || currentArticleView === "recommended") &&
-                !(selectedArticleId && isMobileArticleHistoryEnabled())
+                selectedArticleId === null
               }
               isArticlesLoading={isArticlesLoading}
               isMarkingScopeRead={isMarkingScopeRead}
@@ -7973,14 +7981,6 @@ function shouldLetBrowserHandleLinkClick(event: MouseEvent<HTMLAnchorElement>): 
     event.ctrlKey ||
     event.shiftKey ||
     event.altKey
-  );
-}
-
-function isMobileArticleHistoryEnabled(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(max-width: 767px)").matches
   );
 }
 
