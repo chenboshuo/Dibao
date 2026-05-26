@@ -8533,6 +8533,8 @@ function explanationReasonText(reason: RankExplanationReason, t: Dictionary): st
       return t.explanation.reasons.negative;
     case "penalty":
       return t.explanation.reasons.penalty;
+    case "exploration":
+      return t.explanation.reasons.exploration;
   }
 }
 

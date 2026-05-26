@@ -230,7 +230,15 @@ type ArticleDetail = ArticleListItem & {
 type RankExplanation = {
   articleId: string;
   reasons: Array<{
-    type: "interest" | "source" | "freshness" | "state" | "fallback" | "negative" | "penalty";
+    type:
+      | "interest"
+      | "source"
+      | "freshness"
+      | "state"
+      | "fallback"
+      | "negative"
+      | "penalty"
+      | "exploration";
     label: string;
     impact: "positive" | "negative" | "neutral";
     cluster?: {
@@ -1234,9 +1242,11 @@ state
 fallback
 negative
 penalty
+exploration
 ```
 
 前端 UI 应按 `type` 和 `impact` 本地化展示文案；`label` 只作为可读提示或来源名，不应作为最终 UI 文案。
+当 `type = "exploration"` 时，表示文章由较低信息茧房水平下的探索/破茧机制打捞进入推荐位置。
 
 ## Search
 

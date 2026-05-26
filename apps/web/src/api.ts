@@ -200,7 +200,8 @@ export type RankExplanationReasonType =
   | "state"
   | "fallback"
   | "negative"
-  | "penalty";
+  | "penalty"
+  | "exploration";
 
 export type RankExplanationReason = {
   type: RankExplanationReasonType;

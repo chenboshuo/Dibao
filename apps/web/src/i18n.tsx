@@ -1134,7 +1134,8 @@ export const zhCN = {
       state: "状态",
       fallback: "基础排序",
       negative: "负向",
-      penalty: "过滤"
+      penalty: "过滤",
+      exploration: "破茧"
     },
     reasons: {
       interest: "与你近期的正向兴趣相似，因此排序更靠前。",
@@ -1146,7 +1147,8 @@ export const zhCN = {
       stateNegative: "忽略、读完等状态降低了排序优先级。",
       fallback: "当前使用基础排序，暂时没有更强的推荐信号。",
       negative: "近期负向行为降低了排序。",
-      penalty: "隐藏或不感兴趣会显著降低排序。"
+      penalty: "隐藏或不感兴趣会显著降低排序。",
+      exploration: "本文由破茧算法打捞，你可在设置页调整算法信息茧房水平。"
     }
   },
   actions: {
@@ -2340,7 +2342,8 @@ export const enUS = {
       state: "State",
       fallback: "Baseline",
       negative: "Negative",
-      penalty: "Filter"
+      penalty: "Filter",
+      exploration: "Discovery"
     },
     reasons: {
       interest: "This is similar to recent positive interests, so it ranks higher.",
@@ -2353,7 +2356,9 @@ export const enUS = {
       stateNegative: "Ignored, finished, and similar states lowered its priority.",
       fallback: "Baseline ranking is active and no stronger signal is available yet.",
       negative: "Recent negative behavior lowered the rank.",
-      penalty: "Hidden or not interested state strongly lowers the rank."
+      penalty: "Hidden or not interested state strongly lowers the rank.",
+      exploration:
+        "This article was surfaced to broaden your feed. You can adjust the algorithm cocoon level in Settings."
     }
   },
   actions: {
@@ -3539,7 +3544,8 @@ export const jaJP = {
       state: "状態",
       fallback: "基本",
       negative: "ネガティブ",
-      penalty: "フィルター"
+      penalty: "フィルター",
+      exploration: "発見"
     },
     reasons: {
       interest: "最近のポジティブな興味に近いため、順位が上がっています。",
@@ -3552,7 +3558,9 @@ export const jaJP = {
       stateNegative: "無視、読了などの状態が優先度を下げました。",
       fallback: "基本の並び替えが有効で、まだ強い信号はありません。",
       negative: "最近のネガティブ行動が順位を下げました。",
-      penalty: "非表示または興味なしの状態は順位を大きく下げます。"
+      penalty: "非表示または興味なしの状態は順位を大きく下げます。",
+      exploration:
+        "この記事はフィードの偏りを広げるために表示されています。設定でアルゴリズムの情報偏りレベルを調整できます。"
     }
   },
   actions: {

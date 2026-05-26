@@ -37,7 +37,8 @@ export type RankExplanationReasonType =
   | "state"
   | "fallback"
   | "negative"
-  | "penalty";
+  | "penalty"
+  | "exploration";
 
 export type RankExplanationReason = {
   type: RankExplanationReasonType;
@@ -1658,6 +1659,25 @@ function rankReasonsFor(
     typeof components.diversityPenalty === "number"
       ? components.diversityPenalty
       : rank.diversityPenalty ?? 0;
+  const explorationScore =
+    typeof components.exploration === "number"
+      ? components.exploration
+      : rank.explorationBonus ?? 0;
+  const wasExploration = components.wasExploration === true || (rank.explorationBonus ?? 0) > MIN_REASON_SCORE;
+  const explorationReason: RankExplanationReason & { magnitude: number; priority: number } | null =
+    wasExploration
+      ? {
+          type: "exploration",
+          label: "Break-cocoon exploration",
+          impact: "neutral",
+          magnitude: Math.max(explorationScore, MIN_REASON_SCORE),
+          priority: 0
+        }
+      : null;
+
+  if (explorationReason) {
+    candidates.push(explorationReason);
+  }
 
   if ((rank.semanticScore ?? rank.interestScore) > MIN_REASON_SCORE) {
     candidates.push({
@@ -1763,10 +1783,19 @@ function rankReasonsFor(
     });
   }
 
-  const reasons = candidates
-    .sort((left, right) => right.magnitude - left.magnitude || left.priority - right.priority)
-    .slice(0, MAX_REASONS)
-    .map(({ magnitude: _magnitude, priority: _priority, ...reason }) => reason);
+  const sortedReasons = candidates.sort(
+    (left, right) => right.magnitude - left.magnitude || left.priority - right.priority
+  );
+  const selectedReasons =
+    explorationReason && !sortedReasons.slice(0, MAX_REASONS).some((reason) => reason.type === "exploration")
+      ? [
+          explorationReason,
+          ...sortedReasons
+            .filter((reason) => reason.type !== "exploration")
+            .slice(0, MAX_REASONS - 1)
+        ]
+      : sortedReasons.slice(0, MAX_REASONS);
+  const reasons = selectedReasons.map(({ magnitude: _magnitude, priority: _priority, ...reason }) => reason);
 
   return reasons.length > 0
     ? reasons

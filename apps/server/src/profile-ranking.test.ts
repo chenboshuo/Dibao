@@ -1027,6 +1027,15 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(payload.components?.wasExploration).toBe(true);
       expect(payload.components?.explorationBucket).toEqual(expect.any(String));
       expect(payload.components?.explorationReason).toEqual(expect.any(String));
+      expect(rankingLevel1.explainArticle(level1Exploration[0]!.articleId)?.reasons).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "exploration",
+            label: "Break-cocoon exploration",
+            impact: "neutral"
+          })
+        ])
+      );
 
       const rankingLevel10 = new RecommendationRankingService({
         db,

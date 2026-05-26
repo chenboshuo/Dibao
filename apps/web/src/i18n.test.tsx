@@ -1189,6 +1189,11 @@ describe("web i18n", () => {
                 type: "source",
                 label: "Fixture Feed",
                 impact: "positive"
+              },
+              {
+                type: "exploration",
+                label: "Break-cocoon exploration",
+                impact: "neutral"
               }
             ]
           }}
@@ -1201,6 +1206,7 @@ describe("web i18n", () => {
     expect(html).toContain("新鲜度");
     expect(html).toContain("文章较新");
     expect(html).toContain("来源 Fixture Feed");
+    expect(html).toContain("本文由破茧算法打捞，你可在设置页调整算法信息茧房水平。");
   });
 
   it("renders sorting notes for non-personalized article detail views", () => {
