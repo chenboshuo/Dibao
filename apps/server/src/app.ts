@@ -118,6 +118,11 @@ import {
   INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
   INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
 } from "./interest-cluster-merge-service.js";
+import {
+  InterestFamilyService,
+  INTEREST_FAMILY_REBUILD_JOB_TYPE,
+  type RecommendationClusterFamily
+} from "./interest-family-service.js";
 import { JobRunner } from "./job-runner.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import {
@@ -423,12 +428,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     clusterLabels: clusterLabelService,
     now: options.now
   });
+  const interestFamilyService = new InterestFamilyService({
+    db,
+    now: options.now
+  });
   const recommendationMaintenanceService = new RecommendationMaintenanceService({
     db,
     jobs,
     rankingJobs: rankingJobService,
     clusterLabels: clusterLabelService,
     clusterMerge: clusterMergeService,
+    interestFamilies: interestFamilyService,
     getRankingSettings: () => settingsService.getSettings().ranking,
     getMaintenanceSettings: () => settingsService.getSettings().recommendationMaintenance,
     now: options.now
@@ -667,6 +677,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       [INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job),
       [INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE]: (job) =>
+        recommendationMaintenanceService.handleJob(job),
+      [INTEREST_FAMILY_REBUILD_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job)
     },
     now: options.now,
@@ -984,6 +996,7 @@ export function buildServer(options: BuildServerOptions = {}) {
           rankings,
           rankingService,
           clusterLabels: clusterLabelService,
+          interestFamilies: interestFamilyService,
           settings: settingsService.getSettings().ranking,
           includeClusterItems: includeClusterItems ?? true
         })
@@ -999,6 +1012,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       rankings,
       rankingService,
       clusterLabels: clusterLabelService,
+      interestFamilies: interestFamilyService,
       settings: settingsService.getSettings().ranking,
       maintenanceSettings: settingsService.getSettings().recommendationMaintenance,
       maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates()
@@ -1015,6 +1029,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         rankings,
         rankingService,
         clusterLabels: clusterLabelService,
+        interestFamilies: interestFamilyService,
         settings: settingsService.getSettings().ranking,
         limit: request.query.limit === "all" ? null : parsePositiveInteger(request.query.limit, 12)
       })
@@ -1997,6 +2012,7 @@ function getRecommendationStatus(options: {
   rankings: SqliteRankingRepository;
   rankingService: RecommendationRankingService;
   clusterLabels: InterestClusterLabelService;
+  interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
   includeClusterItems?: boolean;
 }) {
@@ -2023,22 +2039,27 @@ function getRecommendationStatus(options: {
   const clusterMergeDiagnostics = activeIndex && includeClusterItems
     ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
     : new Map<string, ClusterMergeDiagnostics>();
-  const clusterItems = includeClusterItems
+  const clustersForStatus = includeClusterItems
     ? options.profiles
         .listClusters({
           ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
         })
         .slice(0, 12)
-        .map((cluster, index) =>
-          mapRecommendationCluster(
-            cluster,
-            index + 1,
-            clusterEvidence,
-            options.clusterLabels,
-            clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
-          )
-        )
     : [];
+  const clusterFamilyMap = includeClusterItems
+    ? options.interestFamilies.familyMapForClusters(clustersForStatus.map((cluster) => cluster.id))
+    : new Map<string, RecommendationClusterFamily>();
+  const clusterItems = clustersForStatus.map((cluster, index) =>
+    mapRecommendationCluster(
+      cluster,
+      index + 1,
+      clusterEvidence,
+      options.clusterLabels,
+      clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
+      clusterFamilyMap.get(cluster.id) ?? null
+    )
+  );
+  const familySummary = options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 8);
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
@@ -2064,8 +2085,8 @@ function getRecommendationStatus(options: {
     activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
     activeRankContext,
     algorithm: {
-      version: "rec_v2",
-      featureSchemaVersion: 2,
+      version: "rec_v3",
+      featureSchemaVersion: 3,
       cocoonLevel: options.settings.cocoonLevel,
       localLearning: {
         enabled: options.settings.localLearningEnabled,
@@ -2083,6 +2104,7 @@ function getRecommendationStatus(options: {
     behaviorCounts,
     clusters: {
       ...clusters,
+      families: familySummary,
       items: clusterItems
     },
     rankedArticles,
@@ -2129,17 +2151,22 @@ function getRecommendationClusters(
   const clusterMergeDiagnostics = activeIndex
     ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
     : new Map<string, ClusterMergeDiagnostics>();
+  const clusterFamilyMap = options.interestFamilies.familyMapForClusters(
+    limitedClusters.map((cluster) => cluster.id)
+  );
 
   return {
     activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
     total: clusters.length,
+    families: options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 24),
     items: limitedClusters.map((cluster, index) =>
       mapRecommendationCluster(
         cluster,
         index + 1,
         clusterEvidence,
         options.clusterLabels,
-        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
+        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
+        clusterFamilyMap.get(cluster.id) ?? null
       )
     )
   };
@@ -2166,6 +2193,8 @@ function enqueueRecommendationMaintenanceTask(
       return service.enqueueClusterMergeDiagnostics();
     case "cluster_auto_merge":
       return service.enqueueClusterAutoMerge();
+    case "interest_family_rebuild":
+      return service.enqueueInterestFamilyRebuild();
     case "evaluation":
       return service.enqueueEvaluation();
     case "ftrl_train":
@@ -2248,6 +2277,7 @@ function getRecommendationTransparency(options: {
   rankings: SqliteRankingRepository;
   rankingService: RecommendationRankingService;
   clusterLabels: InterestClusterLabelService;
+  interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
   maintenanceSettings?: ReturnType<SettingsService["getSettings"]>["recommendationMaintenance"];
   maintenanceScheduleStates?: Array<{
@@ -2279,7 +2309,7 @@ function getRecommendationTransparency(options: {
       currentFormula:
         status.mode === "baseline"
           ? "freshness + source + state fallback"
-          : "semantic + freshness + source + state - negative/dedupe/exposure + canonical MMR rerank",
+          : "family-aware semantic + freshness + source + state - negative/dedupe/exposure + canonical MMR rerank",
       fallbackReason,
       rankingCore: {
         usesRemoteLlm: false,
@@ -2290,7 +2320,7 @@ function getRecommendationTransparency(options: {
       moduleStatus,
       algorithmModules: recommendationAlgorithmModules(status, moduleStatus),
       maintenance: {
-        schemaMigration: "009_interest_cluster_merge_candidates",
+        schemaMigration: "017_interest_families",
         backfillState: "tracked in recommendation_backfill_state",
         explanationAuthority: "article_rank_explanations",
         scoreAuthority: "article_rank_scores",
@@ -2417,6 +2447,18 @@ function recommendationAlgorithmModules(
       summary: `${status.clusters.positive} positive · ${status.clusters.negative} negative`
     },
     {
+      id: "interest_families",
+      name: "Topic family diversity",
+      status:
+        status.clusters.families.concentrationRisk === "high"
+          ? "warning"
+          : moduleStatus.interestFamilies === "not_built" &&
+              status.clusters.positive + status.clusters.negative > 0
+            ? "warning"
+            : "normal",
+      summary: `${status.clusters.families.positive} positive · ${status.clusters.families.negative} negative topic families; concentration risk ${status.clusters.families.concentrationRisk}.`
+    },
+    {
       id: "semantic_ranking",
       name: "Semantic ranking",
       status: recommendationUsingFallback
@@ -2504,7 +2546,8 @@ function mapRecommendationCluster(
   displayIndex: number,
   evidence: InterestClusterEvidenceRow[],
   clusterLabels: InterestClusterLabelService,
-  mergeDiagnostics: ClusterMergeDiagnostics
+  mergeDiagnostics: ClusterMergeDiagnostics,
+  family: RecommendationClusterFamily | null = null
 ) {
   const diagnostics = clusterDiagnostics(cluster, evidence);
   const label = clusterLabels.displayLabelForCluster(
@@ -2534,6 +2577,7 @@ function mapRecommendationCluster(
     feedTitles: label.feedTitles,
     labelDiagnostics: label.labelDiagnostics,
     mergeDiagnostics,
+    family,
     lastGeneratedAt: timestampToIso(label.generatedAt),
     displayIndex,
     weight: cluster.weight,
@@ -2984,6 +3028,7 @@ function recommendationModuleStatus(
     ) > 0;
   const duplicateBuilt = countIfTable(db, "duplicate_groups") > 0;
   const evidenceRows = countIfTable(db, "interest_cluster_evidence");
+  const interestFamilyRows = countIfTable(db, "interest_families");
   const latestEval = db
     .prepare(
       `
@@ -3029,6 +3074,7 @@ function recommendationModuleStatus(
       : "disabled",
     evaluation: !algorithm.evaluation.enabled ? "unavailable" : evalMode,
     duplicate: nearDuplicateActive ? "near_duplicate_active" : duplicateBuilt ? "exact_scaffold" : "not_built",
+    interestFamilies: interestFamilyRows > 0 ? "active" : "not_built",
     evidence: evidenceRows > 0 ? "live_evidence" : "dynamic_fallback",
     stalePendingEmbeddingJobs,
     failedRankingJobs
@@ -3317,6 +3363,8 @@ function cocoonParametersForStatus(level: number) {
     mmrLambda: roundMetric(lerp(0.55, 0.88)),
     explorationRatio: roundMetric(lerp(0.08, 0.005)),
     sourceCapTop20: Math.round(lerp(3, 12)),
+    familyCapTop20: Math.round(lerp(4, 7)),
+    familyCapTop50: Math.round(lerp(8, 14)),
     pendingEmbeddingFloor: roundMetric(lerp(0.12, 0.03)),
     freshnessWeight: roundMetric(lerp(1.15, 0.75)),
     negativeSemanticStrength: roundMetric(lerp(0.75, 1.15)),

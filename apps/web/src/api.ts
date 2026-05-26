@@ -490,6 +490,7 @@ export type RecommendationMaintenanceTask =
   | "keyword_rebuild"
   | "cluster_label_rebuild"
   | "cluster_merge_diagnostics"
+  | "interest_family_rebuild"
   | "cluster_auto_merge"
   | "recent_intent_rebuild"
   | "evaluation"
@@ -595,6 +596,37 @@ export type BackfillEmbeddingIndexResponse = {
 
 export type RecommendationMode = "baseline" | "personalized" | "embedding" | "degraded";
 
+export type RecommendationFamilySummaryItem = {
+  id: string;
+  polarity: "positive" | "negative";
+  displayLabel: string;
+  weight: number;
+  clusterCount: number;
+  supportArticleCount: number;
+  supportEventCount: number;
+  sourceCount: number;
+  strongSignalCount: number;
+  topSourceShare: number;
+  maturity: number;
+  dominanceRatio: number;
+  labelTerms: string[];
+  representativeClusterIds: string[];
+  diagnostics: {
+    lowSupportClusterCount: number;
+    singleArticleClusterCount: number;
+    concentrationRisk: "low" | "medium" | "high";
+  };
+  updatedAt: number;
+};
+
+export type RecommendationFamilySummary = {
+  positive: number;
+  negative: number;
+  topFamilies: RecommendationFamilySummaryItem[];
+  dominantFamily: RecommendationFamilySummaryItem | null;
+  concentrationRisk: "low" | "medium" | "high";
+};
+
 export type RecommendationStatus = {
   mode: RecommendationMode;
   activeProvider: {
@@ -646,6 +678,7 @@ export type RecommendationStatus = {
   clusters: {
     positive: number;
     negative: number;
+    families?: RecommendationFamilySummary;
     items?: RecommendationClusterItem[];
   };
   rankedArticles: {
@@ -703,6 +736,7 @@ export type RecommendationTransparency = RecommendationStatus & {
       exploration: "disabled" | "enabled_bonus_only" | "enabled_slots_active";
       evaluation: "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" | "strict_replay";
       duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active";
+      interestFamilies: "not_built" | "active";
       evidence: "dynamic_fallback" | "reconstructed" | "live_evidence";
       stalePendingEmbeddingJobs: number;
       failedRankingJobs: number;
@@ -756,6 +790,20 @@ export type RecommendationClusterItem = {
       status: "open" | "merged" | "ignored" | "dismissed";
     } | null;
   };
+  family?: {
+    id: string;
+    polarity: "positive" | "negative";
+    displayLabel: string;
+    weight: number;
+    clusterCount: number;
+    supportArticleCount: number;
+    supportEventCount: number;
+    sourceCount: number;
+    maturity: number;
+    dominanceRatio: number;
+    membershipConfidence: number;
+    centroidSimilarity: number;
+  } | null;
   lastGeneratedAt?: string | null;
   displayIndex?: number;
   weight: number;
@@ -779,6 +827,7 @@ export type RecommendationClusterItem = {
 export type RecommendationClusterListResponse = {
   activeIndex: RecommendationStatus["activeIndex"];
   total: number;
+  families?: RecommendationFamilySummary;
   items: RecommendationClusterItem[];
 };
 

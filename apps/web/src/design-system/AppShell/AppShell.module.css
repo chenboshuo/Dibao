@@ -980,6 +980,59 @@
   overflow-wrap: anywhere;
 }
 
+.algorithmFamilyList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.algorithmFamilyRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  border-bottom: var(--border-subtle);
+  padding-block: var(--space-2);
+}
+
+.algorithmFamilyRow:last-child {
+  border-bottom: 0;
+}
+
+.algorithmFamilyRow strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.algorithmFamilyRow p {
+  margin: 2px 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.algorithmFamilyPill {
+  border: var(--border-subtle);
+  padding: 2px var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.algorithmFamilyGroup {
+  display: grid;
+  gap: var(--space-3);
+  border-top: var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.algorithmFamilyGroup summary {
+  cursor: pointer;
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+}
+
 .algorithmClusterGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

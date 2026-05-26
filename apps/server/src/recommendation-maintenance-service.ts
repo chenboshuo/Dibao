@@ -10,6 +10,10 @@ import {
   INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE,
   type InterestClusterMergeService
 } from "./interest-cluster-merge-service.js";
+import {
+  INTEREST_FAMILY_REBUILD_JOB_TYPE,
+  type InterestFamilyService
+} from "./interest-family-service.js";
 import { PermanentJobFailure } from "./job-runner.js";
 import type { RankingRecalculateJobService } from "./ranking-job-service.js";
 
@@ -17,6 +21,7 @@ export {
   INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
   INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
 } from "./interest-cluster-merge-service.js";
+export { INTEREST_FAMILY_REBUILD_JOB_TYPE } from "./interest-family-service.js";
 
 export const ARTICLE_FINGERPRINT_BACKFILL_JOB_TYPE = "article_fingerprint_backfill" as const;
 export const DUPLICATE_GROUP_REBUILD_JOB_TYPE = "duplicate_group_rebuild" as const;
@@ -41,7 +46,8 @@ type MaintenanceJobType =
   | typeof RECOMMENDATION_BACKFILL_JOB_TYPE
   | typeof INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE
   | typeof INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
-  | typeof INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE;
+  | typeof INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE
+  | typeof INTEREST_FAMILY_REBUILD_JOB_TYPE;
 
 export type RecommendationMaintenanceResult = {
   jobId: string;
@@ -71,6 +77,7 @@ export type RecommendationMaintenanceServiceOptions = {
     InterestClusterMergeService,
     "rebuildActiveIndexCandidates" | "autoMergeOpenCandidates"
   >;
+  interestFamilies?: Pick<InterestFamilyService, "rebuildActiveIndexFamilies">;
   getRankingSettings?: () => { localLearningEnabled: boolean; localLearningShadowMode: boolean };
   getMaintenanceSettings?: () => { ftrlAutoPromoteEnabled: boolean; clusterAutoMergeEnabled?: boolean };
   now?: () => number;
@@ -144,6 +151,10 @@ export class RecommendationMaintenanceService {
 
   enqueueClusterAutoMerge(options: RecommendationMaintenanceEnqueueOptions = {}): RecommendationMaintenanceResult {
     return this.enqueueUnique(INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE, options);
+  }
+
+  enqueueInterestFamilyRebuild(options: RecommendationMaintenanceEnqueueOptions = {}): RecommendationMaintenanceResult {
+    return this.enqueueUnique(INTEREST_FAMILY_REBUILD_JOB_TYPE, options);
   }
 
   enqueueStrongActionMaintenance(now: number = this.now()): {
@@ -413,6 +424,14 @@ export class RecommendationMaintenanceService {
           this.enqueueClusterLabelRebuild();
           this.options.rankingJobs.enqueueAll();
         }
+        this.markScheduleCompleted(job.id);
+        return;
+      case INTEREST_FAMILY_REBUILD_JOB_TYPE:
+        if (!this.options.interestFamilies) {
+          throw new PermanentJobFailure("Interest family service is not configured");
+        }
+        this.options.interestFamilies.rebuildActiveIndexFamilies();
+        this.options.rankingJobs.enqueueAll();
         this.markScheduleCompleted(job.id);
         return;
       default:
@@ -727,17 +746,17 @@ export class RecommendationMaintenanceService {
         { scope: "recent", decay: Math.pow(0.5, ageHours / 48) }
       ];
       const termWeights = new Map<string, number>();
-      for (const term of tokenize(row.title).slice(0, 12)) {
-        termWeights.set(term, (termWeights.get(term) ?? 0) + 3);
+      for (const term of profileTokens(row.title).slice(0, 12)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 3 * profileTermMultiplier(term));
       }
-      for (const term of tokenize(row.summary ?? "").slice(0, 24)) {
-        termWeights.set(term, (termWeights.get(term) ?? 0) + 1.5);
+      for (const term of profileTokens(row.summary ?? "").slice(0, 24)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 1.5 * profileTermMultiplier(term));
       }
-      for (const term of tokenize((row.contentText ?? "").slice(0, 4000)).slice(0, 64)) {
-        termWeights.set(term, (termWeights.get(term) ?? 0) + 0.35);
+      for (const term of profileTokens((row.contentText ?? "").slice(0, 4000)).slice(0, 64)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 0.35 * profileTermMultiplier(term));
       }
-      for (const term of tokenize(row.feedTitle).slice(0, 4)) {
-        termWeights.set(term, (termWeights.get(term) ?? 0) + 0.4);
+      for (const term of profileTokens(row.feedTitle).slice(0, 4)) {
+        termWeights.set(term, (termWeights.get(term) ?? 0) + 0.4 * profileTermMultiplier(term));
       }
       for (const scope of scopes) {
         for (const [term, fieldWeight] of termWeights) {
@@ -911,7 +930,7 @@ export class RecommendationMaintenanceService {
 
   private trainFtrl(): void {
     const now = this.now();
-    const modelId = "ftrl_schema_2";
+    const modelId = "ftrl_schema_3";
     const rows = this.options.db
       .prepare(
         `
@@ -1002,7 +1021,7 @@ export class RecommendationMaintenanceService {
               created_at,
               updated_at
             )
-            values (?, 'rec_v2', 2, ?, ?, ?, ?, ?, ?)
+            values (?, 'rec_v3', 3, ?, ?, ?, ?, ?, ?)
             on conflict(id) do update set
               sample_count = excluded.sample_count,
               blend_alpha = excluded.blend_alpha,
@@ -1160,7 +1179,7 @@ export class RecommendationMaintenanceService {
             started_at,
             finished_at
           )
-          values (?, 'rec_v2', 'diagnostic', 'succeeded', ?, null, ?, ?, ?)
+          values (?, 'rec_v3', 'diagnostic', 'succeeded', ?, null, ?, ?, ?)
         `
       )
       .run(
@@ -1297,6 +1316,116 @@ function tokenize(text: string): string[] {
     )
   );
 }
+
+function profileTokens(text: string): string[] {
+  const cleaned = stripProfileNoise(text);
+  return Array.from(
+    new Set(
+      cleaned
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .map((term) => term.trim())
+        .filter(isProfileTerm)
+        .slice(0, 96)
+    )
+  );
+}
+
+function stripProfileNoise(text: string): string {
+  return text
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/www\.\S+/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[a-z0-9#]+;/gi, " ")
+    .replace(/\b(?:class|href|src|alt|title|width|height|style|data-[\w-]+)=["'][^"']*["']/gi, " ")
+    .replace(/\b[a-z]+:\/\/\S+/gi, " ")
+    .replace(/\s+/g, " ");
+}
+
+function isProfileTerm(term: string): boolean {
+  if (term.length < 2 || term.length > 32) {
+    return false;
+  }
+  if (PROFILE_TERM_STOPWORDS.has(term)) {
+    return false;
+  }
+  if (/^\d+$/.test(term)) {
+    return false;
+  }
+  if (/^\d{4}[/-]?\d{0,2}[/-]?\d{0,2}$/.test(term)) {
+    return false;
+  }
+  if (/^[a-f0-9]{16,}$/i.test(term)) {
+    return false;
+  }
+  return true;
+}
+
+function profileTermMultiplier(term: string): number {
+  return BROAD_PROFILE_TERMS.has(term) ? 0.42 : 1;
+}
+
+const PROFILE_TERM_STOPWORDS = new Set([
+  "http",
+  "https",
+  "www",
+  "com",
+  "org",
+  "net",
+  "img",
+  "src",
+  "href",
+  "class",
+  "style",
+  "alt",
+  "title",
+  "width",
+  "height",
+  "url",
+  "css",
+  "html",
+  "decoding",
+  "async",
+  "aligncenter",
+  "blockquote",
+  "figure",
+  "figcaption",
+  "button",
+  "newsletter",
+  "subscribe",
+  "login",
+  "cookie",
+  "cookies",
+  "advertisement",
+  "sponsored",
+  "read",
+  "more",
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "into",
+  "over",
+  "your",
+  "you",
+  "are",
+  "was",
+  "were",
+  "to",
+  "in",
+  "on",
+  "of",
+  "a",
+  "an",
+  "is"
+]);
+
+const BROAD_PROFILE_TERMS = new Set(["ai"]);
 
 function keywordPolarity(
   eventType: string,

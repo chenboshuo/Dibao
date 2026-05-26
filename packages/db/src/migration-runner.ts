@@ -48,6 +48,9 @@ const feedFullContentModePath = fileURLToPath(
 const authUsernamePath = fileURLToPath(
   new URL("../migrations/016_auth_username.sql", import.meta.url)
 );
+const interestFamiliesPath = fileURLToPath(
+  new URL("../migrations/017_interest_families.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -125,6 +128,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "016",
       name: "auth_username",
       sql: readFileSync(authUsernamePath, "utf8")
+    },
+    {
+      version: "017",
+      name: "interest_families",
+      sql: readFileSync(interestFamiliesPath, "utf8")
     }
   ];
 }

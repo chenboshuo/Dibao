@@ -295,7 +295,13 @@ export class ProfileService {
       if (!forceCreate) {
         return;
       }
-      const cluster = this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+      const cluster = this.createCluster(
+        event.embeddingIndexId,
+        polarity,
+        vector,
+        newClusterWeightFor(eventWeight, polarity),
+        now
+      );
       this.recordClusterEvidence(event, cluster.id, "live_event", 1, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
       return;
@@ -328,8 +334,42 @@ export class ProfileService {
       return;
     }
 
-    if (forceCreate || (polarity === "positive" && best.similarity >= thresholds.create)) {
-      const cluster = this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+    if (best.similarity >= thresholds.create) {
+      const learningRate = clamp(eventWeight / 36, 0.02, 0.1);
+      const merged = mergeCentroid(best.centroid, vector, learningRate);
+      const dampenedWeight = eventWeight * 0.65;
+      this.options.profiles.updateCluster({
+        id: best.cluster.id,
+        centroidVectorBlob: toVectorBlob(merged),
+        weight: clamp(
+          best.cluster.weight + dampenedWeight,
+          profileAlgorithmDefaults.minClusterWeight,
+          profileAlgorithmDefaults.maxClusterWeight
+        ),
+        sampleCount: best.cluster.sampleCount + 1,
+        lastMatchedAt: now,
+        now
+      });
+      this.recordClusterEvidence(
+        event,
+        best.cluster.id,
+        "live_event",
+        best.similarity,
+        dampenedWeight,
+        now
+      );
+      this.compactAndTrimClusters(event.embeddingIndexId, polarity);
+      return;
+    }
+
+    if (forceCreate) {
+      const cluster = this.createCluster(
+        event.embeddingIndexId,
+        polarity,
+        vector,
+        newClusterWeightFor(eventWeight, polarity),
+        now
+      );
       this.recordClusterEvidence(event, cluster.id, "live_event", 1, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
     }
@@ -634,6 +674,11 @@ function impactForEvent(
     default:
       return { polarity: "stats_only", profileWeight: 0 };
   }
+}
+
+function newClusterWeightFor(eventWeight: number, polarity: InterestClusterPolarity): number {
+  const multiplier = polarity === "positive" ? 0.7 : 0.85;
+  return eventWeight * multiplier;
 }
 
 function sourceEventKeyFor(

@@ -1781,7 +1781,7 @@ describe("server API vertical slice", () => {
           activeIndex: {
             id: textSliceActive?.id
           },
-          activeRankContext: "rec_v2:embedding:cocoon_5:schema_2"
+          activeRankContext: "rec_v3:embedding:cocoon_5:schema_3"
         }
       });
     } finally {
@@ -2009,7 +2009,7 @@ describe("server API vertical slice", () => {
             model: "fixture-embedding",
             dimension: 3
           },
-          activeRankContext: "rec_v2:embedding:cocoon_5:schema_2",
+          activeRankContext: "rec_v3:embedding:cocoon_5:schema_3",
           coverage: {
             candidateCount: 2,
             eligibleArticleCount: 2,
@@ -2025,6 +2025,11 @@ describe("server API vertical slice", () => {
           clusters: {
             positive: 1,
             negative: 0,
+            families: {
+              positive: 0,
+              negative: 0,
+              topFamilies: []
+            },
             items: [
               {
                 id: "cluster_overfit_probe",
@@ -2068,6 +2073,11 @@ describe("server API vertical slice", () => {
           clusters: {
             positive: 1,
             negative: 0,
+            families: {
+              positive: 0,
+              negative: 0,
+              topFamilies: []
+            },
             items: []
           }
         }
@@ -2673,7 +2683,7 @@ describe("server API vertical slice", () => {
           started_at,
           finished_at
         )
-        values ('eval_diagnostic', 'rec_v2', 'diagnostic', 'succeeded', ?, null, 1000, 1000, 1000)
+        values ('eval_diagnostic', 'rec_v3', 'diagnostic', 'succeeded', ?, null, 1000, 1000, 1000)
       `
     ).run(
       JSON.stringify({
@@ -2740,7 +2750,7 @@ describe("server API vertical slice", () => {
           created_at,
           updated_at
         )
-        values ('ftrl_insufficient', 'rec_v2', 2, 'shadow', 12, 0, ?, 1000, 1000)
+        values ('ftrl_insufficient', 'rec_v3', 3, 'shadow', 12, 0, ?, 1000, 1000)
       `
     ).run(JSON.stringify({ highQualitySamples: 12 }));
     const app = buildServer({ db, logger: false });
@@ -2796,7 +2806,7 @@ describe("server API vertical slice", () => {
           created_at,
           updated_at
         )
-        values ('ftrl_ready', 'rec_v2', 2, 'shadow', 120, 0.05, ?, 1000, 1000)
+        values ('ftrl_ready', 'rec_v3', 3, 'shadow', 120, 0.05, ?, 1000, 1000)
       `
     ).run(JSON.stringify({ highQualitySamples: 120 }));
     const app = buildServer({ db, logger: false });
@@ -3077,7 +3087,7 @@ describe("server API vertical slice", () => {
             created_at,
             updated_at
           )
-          values ('ftrl_promote_test', 'rec_v2', 2, 'shadow', 120, 0.1, ?, 10_000, 10_000)
+          values ('ftrl_promote_test', 'rec_v3', 3, 'shadow', 120, 0.1, ?, 10_000, 10_000)
         `
       ).run(JSON.stringify({ highQualitySamples: 110 }));
 
@@ -3282,15 +3292,15 @@ describe("server API vertical slice", () => {
 
       insertSemanticRankForContext(db, {
         articleId: "article_cluster_label_api",
-        rankContext: "rec_v2:embedding:cocoon_5:schema_2",
+        rankContext: "rec_v3:embedding:cocoon_5:schema_3",
         embeddingIndexId: index.id,
         score: 1.4,
         calculatedAt: 21_000
       });
       new SqliteRankingRepository(db).upsertRankContext({
-        id: "rec_v2:embedding:cocoon_5:schema_2",
-        algorithmVersion: "rec_v2",
-        featureSchemaVersion: 2,
+        id: "rec_v3:embedding:cocoon_5:schema_3",
+        algorithmVersion: "rec_v3",
+        featureSchemaVersion: 3,
         embeddingIndexId: index.id,
         cocoonLevel: 5,
         now: 21_000
@@ -5055,7 +5065,7 @@ describe("server API vertical slice", () => {
       dimension: 4,
       now: 4000
     });
-    const activeContext = "rec_v2:embedding:cocoon_5:schema_2";
+    const activeContext = "rec_v3:embedding:cocoon_5:schema_3";
     for (const [articleId, score, rerankPosition] of [
       ["article_search_low", 0.1, 2],
       ["article_search_high", 0.9, 1],
@@ -5148,7 +5158,7 @@ describe("server API vertical slice", () => {
     insertRank(db, "article_read_later_base", 0.8, 10_000);
     insertRankForContext(db, {
       articleId: "article_read_later_active",
-      rankContext: "rec_v2:embedding:cocoon_5:schema_2",
+      rankContext: "rec_v3:embedding:cocoon_5:schema_3",
       embeddingIndexId: "index_sort",
       score: 0.9,
       calculatedAt: 10_000

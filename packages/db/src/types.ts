@@ -67,7 +67,8 @@ export type JobType =
   | "recommendation_backfill"
   | "interest_cluster_label_rebuild"
   | "interest_cluster_merge_diagnostics"
-  | "interest_cluster_auto_merge";
+  | "interest_cluster_auto_merge"
+  | "interest_family_rebuild";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -559,6 +560,39 @@ export type InterestClusterMergeCandidateRow = {
   createdAt: number;
   updatedAt: number;
   decidedAt: number | null;
+};
+
+export type InterestFamilyRow = {
+  id: string;
+  embeddingIndexId: string;
+  polarity: InterestClusterPolarity;
+  displayLabel: string;
+  centroidVectorBlob: Buffer;
+  weight: number;
+  clusterCount: number;
+  supportArticleCount: number;
+  supportEventCount: number;
+  sourceCount: number;
+  strongSignalCount: number;
+  topSourceShare: number;
+  maturity: number;
+  dominanceRatio: number;
+  labelTermsJson: string | null;
+  representativeClusterIdsJson: string | null;
+  diagnosticsJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type InterestClusterFamilyMemberRow = {
+  clusterId: string;
+  familyId: string;
+  embeddingIndexId: string;
+  polarity: InterestClusterPolarity;
+  membershipConfidence: number;
+  centroidSimilarity: number;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type EmbeddingUsageWindow = {

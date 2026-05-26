@@ -90,6 +90,13 @@ type ClusterVector = {
   polarity: InterestClusterPolarity;
   vector: number[];
   weightNorm: number;
+  familyId: string;
+  familyLabel: string | null;
+  familyMaturity: number;
+  familyDominanceRatio: number;
+  familyClusterCount: number;
+  supportArticleCount: number;
+  sourceCount: number;
 };
 
 type CandidateOrigin =
@@ -160,10 +167,15 @@ type V2Score = {
   pendingEmbeddingScore: number;
   exposurePenalty: number;
   preRerankScore: number;
+  primaryFamilyId: string | null;
+  primaryFamilyLabel: string | null;
+  primaryFamilyMaturity: number;
+  primaryFamilyDominanceRatio: number;
+  matchedFamilyCount: number;
 };
 
-const RECOMMENDATION_ALGORITHM_VERSION = "rec_v2";
-const RECOMMENDATION_FEATURE_SCHEMA_VERSION = 2;
+const RECOMMENDATION_ALGORITHM_VERSION = "rec_v3";
+const RECOMMENDATION_FEATURE_SCHEMA_VERSION = 3;
 const MMR_WINDOW_LIMIT = 500;
 
 export class RecommendationRankingService implements ArticleRankingRecalculator {
@@ -576,10 +588,10 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       return [];
     }
     const vectors = [
-      ...this.clusterVectorsFor(embeddingIndexId)
-        .filter((cluster) => cluster.polarity === "positive")
-        .slice(0, 8)
-        .map((cluster) => cluster.vector),
+      ...representativeFamilyVectors(
+        this.clusterVectorsFor(embeddingIndexId).filter((cluster) => cluster.polarity === "positive"),
+        8
+      ),
       ...this.recentIntentVectorsFor(embeddingIndexId)
         .filter((intent) => intent.polarity === "positive")
         .slice(0, 2)
@@ -942,16 +954,113 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       return [];
     }
 
-    return this.options.profiles.listClusters({ embeddingIndexId }).map((cluster) => ({
-      cluster,
-      polarity: cluster.polarity,
-      vector: fromVectorBlob(cluster.centroidVectorBlob),
-      weightNorm: clamp(
-        Math.log1p(cluster.weight) / Math.log1p(profileAlgorithmDefaults.maxClusterWeight),
-        0,
-        1
+    const clusters = this.options.profiles.listClusters({ embeddingIndexId });
+    const familyMap = this.clusterFamilyMap(clusters.map((cluster) => cluster.id));
+    const supportMap = this.clusterSupportMap(clusters.map((cluster) => cluster.id));
+    return clusters.map((cluster) => {
+      const family = familyMap.get(cluster.id);
+      const support = supportMap.get(cluster.id);
+      const fallbackMaturity = clusterMaturityFor({
+        supportArticleCount: support?.supportArticleCount ?? 0,
+        sourceCount: support?.sourceCount ?? 0,
+        sampleCount: cluster.sampleCount
+      });
+      const familyId = family?.familyId ?? cluster.id;
+      const familyMaturity = clamp(family?.maturity ?? fallbackMaturity, 0.2, 1);
+      return {
+        cluster,
+        polarity: cluster.polarity,
+        vector: fromVectorBlob(cluster.centroidVectorBlob),
+        weightNorm: clamp(
+          Math.log1p(cluster.weight) / Math.log1p(profileAlgorithmDefaults.maxClusterWeight),
+          0,
+          1
+        ),
+        familyId,
+        familyLabel: family?.displayLabel ?? cluster.label,
+        familyMaturity,
+        familyDominanceRatio: clamp(family?.dominanceRatio ?? 0, 0, 1),
+        familyClusterCount: family?.clusterCount ?? 1,
+        supportArticleCount: family?.supportArticleCount ?? support?.supportArticleCount ?? 0,
+        sourceCount: family?.sourceCount ?? support?.sourceCount ?? 0
+      };
+    });
+  }
+
+  private clusterFamilyMap(clusterIds: string[]): Map<string, {
+    familyId: string;
+    displayLabel: string;
+    maturity: number;
+    dominanceRatio: number;
+    clusterCount: number;
+    supportArticleCount: number;
+    sourceCount: number;
+  }> {
+    const db = this.options.db;
+    if (!db || clusterIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = db
+      .prepare(
+        `
+          select
+            m.cluster_id as clusterId,
+            f.id as familyId,
+            f.display_label as displayLabel,
+            f.maturity,
+            f.dominance_ratio as dominanceRatio,
+            f.cluster_count as clusterCount,
+            f.support_article_count as supportArticleCount,
+            f.source_count as sourceCount
+          from interest_cluster_family_members m
+          join interest_families f on f.id = m.family_id
+          where m.cluster_id in (${clusterIds.map(() => "?").join(", ")})
+        `
       )
-    }));
+      .all(...clusterIds) as Array<{
+      clusterId: string;
+      familyId: string;
+      displayLabel: string;
+      maturity: number;
+      dominanceRatio: number;
+      clusterCount: number;
+      supportArticleCount: number;
+      sourceCount: number;
+    }>;
+
+    return new Map(rows.map((row) => [row.clusterId, row]));
+  }
+
+  private clusterSupportMap(clusterIds: string[]): Map<string, {
+    supportArticleCount: number;
+    sourceCount: number;
+  }> {
+    const db = this.options.db;
+    if (!db || clusterIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = db
+      .prepare(
+        `
+          select
+            ice.cluster_id as clusterId,
+            count(distinct ice.article_id) as supportArticleCount,
+            count(distinct coalesce(ice.feed_id_snapshot, a.feed_id, ice.feed_title_snapshot, '')) as sourceCount
+          from interest_cluster_evidence ice
+          left join articles a on a.id = ice.article_id
+          where ice.cluster_id in (${clusterIds.map(() => "?").join(", ")})
+          group by ice.cluster_id
+        `
+      )
+      .all(...clusterIds) as Array<{
+      clusterId: string;
+      supportArticleCount: number;
+      sourceCount: number;
+    }>;
+
+    return new Map(rows.map((row) => [row.clusterId, row]));
   }
 }
 
@@ -971,32 +1080,70 @@ function interestMatchesFor(
   positiveInterestMatch: number;
   negativeInterestMatch: number;
   negativeSimilarity: number;
+  primaryFamilyId: string | null;
+  primaryFamilyLabel: string | null;
+  primaryFamilyMaturity: number;
+  primaryFamilyDominanceRatio: number;
+  matchedFamilyCount: number;
 } {
   if (!candidate.vectorBlob || clusters.length === 0) {
     return {
       positiveInterestMatch: 0,
       negativeInterestMatch: 0,
-      negativeSimilarity: 0
+      negativeSimilarity: 0,
+      primaryFamilyId: null,
+      primaryFamilyLabel: null,
+      primaryFamilyMaturity: 0,
+      primaryFamilyDominanceRatio: 0,
+      matchedFamilyCount: 0
     };
   }
 
   const articleVector = fromVectorBlob(candidate.vectorBlob);
-  const positive: Array<{ value: number; similarity: number }> = [];
-  const negative: Array<{ value: number; similarity: number }> = [];
+  const positiveByFamily = new Map<string, {
+    value: number;
+    similarity: number;
+    familyLabel: string | null;
+    familyMaturity: number;
+    familyDominanceRatio: number;
+  }>();
+  const negativeByFamily = new Map<string, { value: number; similarity: number }>();
 
   for (const cluster of clusters) {
     const similarity = cosineSimilarity(articleVector, cluster.vector);
-    const weightedMatch = Math.max(0, similarity) * cluster.weightNorm;
+    const maturity = cluster.familyMaturity;
+    const weightedMatch = Math.max(0, similarity) * cluster.weightNorm * maturity;
 
     if (cluster.polarity === "positive") {
       if (similarity >= profileAlgorithmDefaults.positiveInterestMatchThreshold) {
-        positive.push({ value: weightedMatch, similarity });
+        const existing = positiveByFamily.get(cluster.familyId);
+        if (!existing || weightedMatch > existing.value) {
+          positiveByFamily.set(cluster.familyId, {
+            value: weightedMatch,
+            similarity,
+            familyLabel: cluster.familyLabel,
+            familyMaturity: cluster.familyMaturity,
+            familyDominanceRatio: cluster.familyDominanceRatio
+          });
+        }
       }
     } else {
-      negative.push({ value: weightedMatch, similarity });
+      const negativeValue = Math.max(0, similarity) * cluster.weightNorm * Math.max(0.65, maturity);
+      const existing = negativeByFamily.get(cluster.familyId);
+      if (!existing || negativeValue > existing.value) {
+        negativeByFamily.set(cluster.familyId, { value: negativeValue, similarity });
+      }
     }
   }
 
+  const positive = Array.from(positiveByFamily.entries()).map(([familyId, match]) => ({
+    familyId,
+    ...match
+  }));
+  const negative = Array.from(negativeByFamily.values());
+  const primary = positive
+    .slice()
+    .sort((left, right) => right.value - left.value || right.similarity - left.similarity)[0];
   const positiveInterestMatch = topKWeightedAverage(positive, 4);
   const negativeInterestMatch = topKWeightedAverage(negative, 3);
   const negativeSimilarity = Math.max(0, ...negative.map((item) => item.similarity));
@@ -1004,7 +1151,12 @@ function interestMatchesFor(
   return {
     positiveInterestMatch,
     negativeInterestMatch,
-    negativeSimilarity
+    negativeSimilarity,
+    primaryFamilyId: primary?.familyId ?? null,
+    primaryFamilyLabel: primary?.familyLabel ?? null,
+    primaryFamilyMaturity: primary?.familyMaturity ?? 0,
+    primaryFamilyDominanceRatio: primary?.familyDominanceRatio ?? 0,
+    matchedFamilyCount: positive.length
   };
 }
 
@@ -1019,6 +1171,44 @@ function topKWeightedAverage(matches: Array<{ value: number }>, k: number): numb
   const weightedSum = top.reduce((sum, match, index) => sum + match.value / (index + 1), 0);
   const divisor = top.reduce((sum, _match, index) => sum + 1 / (index + 1), 0);
   return divisor > 0 ? weightedSum / divisor : 0;
+}
+
+function representativeFamilyVectors(clusters: ClusterVector[], limit: number): number[][] {
+  const bestByFamily = new Map<string, ClusterVector>();
+  for (const cluster of clusters) {
+    const existing = bestByFamily.get(cluster.familyId);
+    if (!existing || cluster.weightNorm > existing.weightNorm) {
+      bestByFamily.set(cluster.familyId, cluster);
+    }
+  }
+  return Array.from(bestByFamily.values())
+    .sort(
+      (left, right) =>
+        right.weightNorm * right.familyMaturity -
+        left.weightNorm * left.familyMaturity ||
+        right.cluster.updatedAt - left.cluster.updatedAt
+    )
+    .slice(0, limit)
+    .map((cluster) => cluster.vector);
+}
+
+function clusterMaturityFor(input: {
+  supportArticleCount: number;
+  sourceCount: number;
+  sampleCount: number;
+}): number {
+  const supportArticleCount =
+    input.supportArticleCount > 0
+      ? input.supportArticleCount
+      : Math.min(input.sampleCount, 2);
+  const value = clamp(
+    0.24 +
+      Math.min(supportArticleCount, 6) * 0.1 +
+      Math.min(input.sourceCount, 4) * 0.08,
+    0.24,
+    1
+  );
+  return supportArticleCount <= 1 ? Math.min(value, 0.38) : value;
 }
 
 function recentIntentMatchesFor(
@@ -1103,6 +1293,9 @@ function cocoonParameters(level: number) {
     mmrLambda: lerp(0.55, 0.88, c),
     explorationRatio: lerp(0.08, 0.005, c),
     sourceCap: Math.round(lerp(3, 12, c)),
+    familyCapTop20: Math.round(lerp(4, 7, c)),
+    familyCapTop50: Math.round(lerp(8, 14, c)),
+    familyDiversityStrength: lerp(1.35, 0.85, c),
     pendingEmbeddingFloor: lerp(0.12, 0.03, c),
     freshnessWeight: lerp(1.15, 0.75, c),
     negativeSemanticStrength: lerp(0.75, 1.15, c),
@@ -1244,7 +1437,12 @@ function calculateV2Score(input: {
     wasExploration: false,
     pendingEmbeddingScore: roundScore(pendingEmbeddingScore),
     exposurePenalty: roundScore(exposurePenalty),
-    preRerankScore: roundScore(preRerankScore)
+    preRerankScore: roundScore(preRerankScore),
+    primaryFamilyId: matches.primaryFamilyId,
+    primaryFamilyLabel: matches.primaryFamilyLabel,
+    primaryFamilyMaturity: roundScore(matches.primaryFamilyMaturity),
+    primaryFamilyDominanceRatio: roundScore(matches.primaryFamilyDominanceRatio),
+    matchedFamilyCount: matches.matchedFamilyCount
   };
 }
 
@@ -1411,6 +1609,7 @@ function rerankCanonicalWindow(
     .slice(0, limit);
   const selected: Array<{ candidate: ArticleRankingCandidateRow; score: V2Score; position: number }> = [];
   const sourceCounts = new Map<string, number>();
+  const familyCounts = new Map<string, number>();
   const duplicateGroups = new Set<string>();
 
   while (remaining.length > 0) {
@@ -1425,9 +1624,22 @@ function rerankCanonicalWindow(
       const duplicatePenalty = duplicateGroups.has(duplicateKey) && !item.candidate.state.favorited && !item.candidate.state.readLater
         ? 0.18 * params.diversityStrength
         : 0;
+      const familyCount =
+        item.score.primaryFamilyId !== null
+          ? familyCounts.get(item.score.primaryFamilyId) ?? 0
+          : 0;
+      const familyCap =
+        selected.length < 20 ? params.familyCapTop20 : params.familyCapTop50;
+      const familyPenalty =
+        item.score.primaryFamilyId === null
+          ? 0
+          : familyCount >= familyCap
+            ? (0.22 + (familyCount - familyCap + 1) * 0.05) *
+                params.familyDiversityStrength
+            : familyCount * 0.008 * params.familyDiversityStrength;
       const mmrScore =
         params.mmrLambda * item.score.score -
-        (1 - params.mmrLambda) * (sourcePenalty + duplicatePenalty);
+        (1 - params.mmrLambda) * (sourcePenalty + duplicatePenalty + familyPenalty);
       if (mmrScore > bestScore) {
         bestScore = mmrScore;
         bestIndex = index;
@@ -1446,6 +1658,12 @@ function rerankCanonicalWindow(
       score: roundScore(clamp(next.score.score + diversityPenalty, 0, 1))
     };
     sourceCounts.set(next.candidate.feedId, (sourceCounts.get(next.candidate.feedId) ?? 0) + 1);
+    if (next.score.primaryFamilyId !== null) {
+      familyCounts.set(
+        next.score.primaryFamilyId,
+        (familyCounts.get(next.score.primaryFamilyId) ?? 0) + 1
+      );
+    }
     duplicateGroups.add(duplicateKeyFor(next.candidate));
     selected.push({
       ...next,
@@ -1565,7 +1783,12 @@ function explanationPayloadFor(
       explorationBucket: score.wasExploration ? score.explorationBucket : null,
       explorationReason: score.wasExploration ? score.explorationReason : null,
       exposurePenalty: score.exposurePenalty,
-      ftrl: score.ftrlScore
+      ftrl: score.ftrlScore,
+      primaryFamilyId: score.primaryFamilyId,
+      primaryFamilyLabel: score.primaryFamilyLabel,
+      primaryFamilyMaturity: score.primaryFamilyMaturity,
+      primaryFamilyDominanceRatio: score.primaryFamilyDominanceRatio,
+      matchedFamilyCount: score.matchedFamilyCount
     },
     evidence: {
       feedId: candidate.feedId,

@@ -36,6 +36,7 @@ import {
   type RecommendationStatus,
   type RecommendationClusterItem,
   type RecommendationClusterMergeCandidate,
+  type RecommendationFamilySummaryItem,
   type RecommendationTransparency,
   type RecommendationMaintenanceTask,
   type RecommendationMaintenanceTaskResponse,
@@ -4580,6 +4581,8 @@ export function AlgorithmTransparencyPage(props: {
           ) : null}
         </section>
 
+        <FamilySummaryPanel families={props.status?.clusters.families ?? null} />
+
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
             <h3>{t.algorithmTransparency.sections.currentClusters}</h3>
@@ -4935,6 +4938,87 @@ function ClusterLabelLexiconPanel(props: {
   );
 }
 
+function FamilySummaryPanel(props: {
+  families: RecommendationStatus["clusters"]["families"] | null;
+}) {
+  const { t } = useI18n();
+  const families = props.families?.topFamilies ?? [];
+
+  return (
+    <section className={classNames(styles.settingsSection, "algorithm-card")}>
+      <div>
+        <h3>{t.algorithmTransparency.sections.topicFamilies}</h3>
+        <p>
+          {props.families
+            ? t.algorithmTransparency.families.summary(
+                props.families.positive,
+                props.families.negative,
+                t.algorithmTransparency.families.risk[props.families.concentrationRisk]
+              )
+            : t.algorithmTransparency.families.empty}
+        </p>
+      </div>
+      {families.length > 0 ? (
+        <div className={styles.algorithmFamilyList}>
+          {families.slice(0, 6).map((family) => (
+            <FamilySummaryRow family={family} key={family.id} />
+          ))}
+        </div>
+      ) : (
+        <p>{t.algorithmTransparency.families.empty}</p>
+      )}
+    </section>
+  );
+}
+
+function FamilySummaryRow(props: { family: RecommendationFamilySummaryItem }) {
+  const { t } = useI18n();
+  return (
+    <div className={styles.algorithmFamilyRow}>
+      <div>
+        <strong>{props.family.displayLabel}</strong>
+        <p>
+          {t.algorithmTransparency.families.rowMeta(
+            props.family.clusterCount,
+            props.family.supportArticleCount,
+            props.family.sourceCount,
+            formatPercent(props.family.dominanceRatio),
+            formatPercent(props.family.maturity)
+          )}
+        </p>
+      </div>
+      <span className={styles.algorithmFamilyPill}>
+        {t.algorithmTransparency.families.risk[props.family.diagnostics.concentrationRisk]}
+      </span>
+    </div>
+  );
+}
+
+function groupClustersByFamily(
+  clusters: RecommendationClusterItem[],
+  fallbackLabels: { positive: string; negative: string }
+): Array<{
+  id: string;
+  label: string;
+  clusters: RecommendationClusterItem[];
+}> {
+  const groups = new Map<string, { id: string; label: string; clusters: RecommendationClusterItem[] }>();
+  clusters.forEach((cluster, index) => {
+    const id = cluster.family?.id ?? `ungrouped:${cluster.polarity}`;
+    const label =
+      cluster.family?.displayLabel ??
+      (cluster.polarity === "positive" ? fallbackLabels.positive : fallbackLabels.negative);
+    const group = groups.get(id) ?? { id, label, clusters: [] };
+    group.clusters.push({ ...cluster, displayIndex: cluster.displayIndex ?? index + 1 });
+    groups.set(id, group);
+  });
+  return Array.from(groups.values()).sort(
+    (left, right) =>
+      right.clusters.length - left.clusters.length ||
+      left.label.localeCompare(right.label)
+  );
+}
+
 function AlgorithmClustersPage(props: {
   clusters: RecommendationClusterItem[];
   error: string | null;
@@ -4945,6 +5029,10 @@ function AlgorithmClustersPage(props: {
   updatingClusterLabelId: string | null;
 }) {
   const { t } = useI18n();
+  const familyGroups = groupClustersByFamily(props.clusters, {
+    positive: t.algorithmTransparency.families.positiveFallback,
+    negative: t.algorithmTransparency.families.negativeFallback
+  });
 
   return (
     <section
@@ -4970,16 +5058,29 @@ function AlgorithmClustersPage(props: {
             <p className={styles.settingsNotice}>{t.recommendationStatus.loading}</p>
           ) : null}
           {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
-          {!props.isLoading && !props.error && props.clusters.length > 0 ? (
-            <div className={styles.algorithmClusterGrid}>
-              {props.clusters.map((cluster, index) => (
-                <ClusterCard
-                  cluster={cluster}
-                  index={index}
-                  key={cluster.id}
-                  onUpdateLabel={props.onUpdateClusterLabel}
-                  updating={props.updatingClusterLabelId === cluster.id}
-                />
+          {!props.isLoading && !props.error && familyGroups.length > 0 ? (
+            <div className={styles.algorithmFamilyList}>
+              {familyGroups.map((group, groupIndex) => (
+                <details
+                  className={styles.algorithmFamilyGroup}
+                  key={group.id}
+                  open={groupIndex < 3}
+                >
+                  <summary>
+                    {group.label} · {t.algorithmTransparency.families.clusterCount(group.clusters.length)}
+                  </summary>
+                  <div className={styles.algorithmClusterGrid}>
+                    {group.clusters.map((cluster) => (
+                      <ClusterCard
+                        cluster={cluster}
+                        index={cluster.displayIndex ?? props.clusters.indexOf(cluster) + 1}
+                        key={cluster.id}
+                        onUpdateLabel={props.onUpdateClusterLabel}
+                        updating={props.updatingClusterLabelId === cluster.id}
+                      />
+                    ))}
+                  </div>
+                </details>
               ))}
             </div>
           ) : null}
@@ -5038,6 +5139,12 @@ function ClusterCard(props: {
           : t.algorithmTransparency.clusters.negative}
       </span>
       <strong>{clusterDisplayName(props.cluster, props.index, t)}</strong>
+      {props.cluster.family ? (
+        <p>
+          {t.algorithmTransparency.families.clusterFamily}:{" "}
+          {props.cluster.family.displayLabel}
+        </p>
+      ) : null}
       <p>
         {t.algorithmTransparency.clusters.sourceLabel}:{" "}
         {t.algorithmTransparency.clusters.source[source]} ·{" "}
@@ -8316,6 +8423,11 @@ function maintenanceTasks(t: Dictionary): Array<{
       key: "cluster_merge_diagnostics",
       scheduleKey: "cluster_merge_diagnostics_daily",
       ...copy.cluster_merge_diagnostics
+    },
+    {
+      key: "interest_family_rebuild",
+      scheduleKey: "interest_family_daily",
+      ...copy.interest_family_rebuild
     },
     {
       key: "cluster_auto_merge",

@@ -649,6 +649,7 @@ export const zhCN = {
     sections: {
       currentStatus: "当前推荐状态",
       currentClusters: "当前兴趣簇",
+      topicFamilies: "主题组概览",
       maintenance: "算法状态维护",
       mergeCandidates: "可能重复的兴趣簇",
       labelLexicon: "标签词典",
@@ -744,6 +745,28 @@ export const zhCN = {
       allSummary: (count: number) => `完整显示 ${count} 个兴趣簇，按权重从高到低排序。`,
       back: "返回算法透明说明"
     },
+    families: {
+      empty: "还没有生成主题组；下一次推荐维护会自动补齐。",
+      summary: (positive: number, negative: number, risk: string) =>
+        `正向主题组 ${positive} 个 · 负向主题组 ${negative} 个 · 集中度风险 ${risk}`,
+      rowMeta: (
+        clusterCount: number,
+        supportArticleCount: number,
+        sourceCount: number,
+        dominance: string,
+        maturity: string
+      ) =>
+        `${clusterCount} 个簇 · ${supportArticleCount} 篇文章 · ${sourceCount} 个来源 · 占比 ${dominance} · 成熟度 ${maturity}`,
+      clusterFamily: "所属主题",
+      clusterCount: (count: number) => `${count} 个簇`,
+      positiveFallback: "正向主题",
+      negativeFallback: "负向主题",
+      risk: {
+        low: "低",
+        medium: "中",
+        high: "高"
+      }
+    },
     mergeCandidates: {
       title: "可能重复的兴趣簇",
       body: "诊断只比较同一 polarity 的 active index 兴趣簇；合并会改变画像，因此默认需要手动确认。",
@@ -814,6 +837,11 @@ export const zhCN = {
         cluster_merge_diagnostics: {
           label: "重建兴趣簇重复诊断",
           description: "只生成可能重复的兴趣簇候选，不修改画像和排序。",
+          remoteUse: "不会调用 provider"
+        },
+        interest_family_rebuild: {
+          label: "重建主题组",
+          description: "把相近兴趣簇自动归入内部主题组，用于推荐多样性和诊断。",
           remoteUse: "不会调用 provider"
         },
         cluster_auto_merge: {
@@ -1856,6 +1884,7 @@ export const enUS = {
     sections: {
       currentStatus: "Current personalization status",
       currentClusters: "Current interest clusters",
+      topicFamilies: "Topic group overview",
       maintenance: "Algorithm maintenance",
       mergeCandidates: "Possible duplicate clusters",
       labelLexicon: "Label lexicon",
@@ -1951,6 +1980,28 @@ export const enUS = {
       allSummary: (count: number) => `Showing all ${count} interest clusters, sorted by weight.`,
       back: "Back to transparency"
     },
+    families: {
+      empty: "No topic groups have been generated yet; the next recommendation maintenance run will fill this in.",
+      summary: (positive: number, negative: number, risk: string) =>
+        `${positive} positive topic groups · ${negative} negative topic groups · concentration risk ${risk}`,
+      rowMeta: (
+        clusterCount: number,
+        supportArticleCount: number,
+        sourceCount: number,
+        dominance: string,
+        maturity: string
+      ) =>
+        `${clusterCount} clusters · ${supportArticleCount} articles · ${sourceCount} sources · share ${dominance} · maturity ${maturity}`,
+      clusterFamily: "Topic group",
+      clusterCount: (count: number) => `${count} clusters`,
+      positiveFallback: "Positive topic",
+      negativeFallback: "Negative topic",
+      risk: {
+        low: "Low",
+        medium: "Medium",
+        high: "High"
+      }
+    },
     mergeCandidates: {
       title: "Possible duplicate clusters",
       body: "Diagnostics only compare same-polarity clusters in the active index. Merge changes the profile, so it requires confirmation by default.",
@@ -2021,6 +2072,11 @@ export const enUS = {
         cluster_merge_diagnostics: {
           label: "Rebuild cluster merge diagnostics",
           description: "Generates possible duplicate-cluster candidates without changing the profile or ranking.",
+          remoteUse: "Does not call provider"
+        },
+        interest_family_rebuild: {
+          label: "Rebuild topic groups",
+          description: "Groups nearby interest clusters into internal topic groups for diversity and diagnostics.",
           remoteUse: "Does not call provider"
         },
         cluster_auto_merge: {
@@ -3058,6 +3114,7 @@ export const jaJP = {
     sections: {
       currentStatus: "現在のおすすめ状態",
       currentClusters: "現在の興味クラスター",
+      topicFamilies: "テーマグループ概要",
       maintenance: "アルゴリズムのメンテナンス",
       mergeCandidates: "重複候補のクラスター",
       labelLexicon: "ラベル辞書",
@@ -3153,6 +3210,28 @@ export const jaJP = {
       allSummary: (count: number) => `${count} 件の興味クラスターを重み順に表示しています。`,
       back: "透明性ページに戻る"
     },
+    families: {
+      empty: "テーマグループはまだ生成されていません。次回のおすすめメンテナンスで自動的に作成されます。",
+      summary: (positive: number, negative: number, risk: string) =>
+        `ポジティブテーマ ${positive} 件 · ネガティブテーマ ${negative} 件 · 集中リスク ${risk}`,
+      rowMeta: (
+        clusterCount: number,
+        supportArticleCount: number,
+        sourceCount: number,
+        dominance: string,
+        maturity: string
+      ) =>
+        `${clusterCount} クラスター · ${supportArticleCount} 記事 · ${sourceCount} ソース · 比率 ${dominance} · 成熟度 ${maturity}`,
+      clusterFamily: "所属テーマ",
+      clusterCount: (count: number) => `${count} クラスター`,
+      positiveFallback: "ポジティブテーマ",
+      negativeFallback: "ネガティブテーマ",
+      risk: {
+        low: "低",
+        medium: "中",
+        high: "高"
+      }
+    },
     mergeCandidates: {
       title: "重複候補のクラスター",
       body: "診断は active index 内の同じ polarity のクラスターだけを比較します。マージはプロファイルを変更するため、既定では確認が必要です。",
@@ -3223,6 +3302,11 @@ export const jaJP = {
         cluster_merge_diagnostics: {
           label: "クラスター重複診断を再構築",
           description: "重複している可能性がある興味クラスター候補だけを生成します。プロファイルやランキングは変更しません。",
+          remoteUse: "provider は呼び出しません"
+        },
+        interest_family_rebuild: {
+          label: "テーマグループを再構築",
+          description: "近い興味クラスターを内部テーマグループにまとめ、多様性と診断に使います。",
           remoteUse: "provider は呼び出しません"
         },
         cluster_auto_merge: {
