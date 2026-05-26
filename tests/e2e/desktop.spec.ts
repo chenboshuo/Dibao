@@ -155,7 +155,8 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     const recommendedReader = page.getByTestId("reader-scroll-container");
     await expect(recommendedReader.getByRole("button", { name: "为什么推荐" })).toBeVisible();
     await expect(recommendedReader.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
-    await expect(recommendedReader).toContainText(/推荐|排序|稍后读|新鲜度/);
+    await expect(recommendedReader.getByText("阅读过半后显示推荐解释。")).toBeVisible();
+    await expect(recommendedReader.getByText("与你近期的正向兴趣相似")).toHaveCount(0);
     const scrollTopBeforeExplanation = await recommendedReader.evaluate(
       (element) => element.scrollTop
     );

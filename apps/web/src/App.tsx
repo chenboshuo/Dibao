@@ -353,6 +353,7 @@ export function App() {
   const articleStateById = useRef(new Map<string, ArticleState>());
   const locallyUpdatedArticleIds = useRef(new Set<string>());
   const articleRequestVersion = useRef(0);
+  const detailExplanationRequestVersion = useRef(0);
   const listExplanationRequestVersion = useRef(0);
   const hasLoadedSettingsForSession = useRef(false);
   const hasAppliedDefaultHomeViewForSession = useRef(false);
@@ -432,6 +433,7 @@ export function App() {
   }
 
   function clearSelectedArticle() {
+    detailExplanationRequestVersion.current += 1;
     setSelectedArticleId(null);
     setArticleDetail(null);
     setRankExplanation(null);
@@ -550,6 +552,7 @@ export function App() {
     setReadLaterSort(defaultReadLaterArticleSort);
     setSelectedArticleId(null);
     setArticleDetail(null);
+    detailExplanationRequestVersion.current += 1;
     setRankExplanation(null);
     setRecommendationStatus(null);
     setAllRecommendationClusters([]);
@@ -800,17 +803,25 @@ export function App() {
   }, [appPage.type, appStage.type, loadEmbeddingSettings]);
 
   const refreshArticleExplanation = useCallback(async (articleId: string) => {
+    const requestVersion = detailExplanationRequestVersion.current + 1;
+    detailExplanationRequestVersion.current = requestVersion;
     setIsExplanationLoading(true);
     setExplanationError(null);
 
     try {
       const explanation = await dibaoApi.getArticleExplanation(articleId);
-      setRankExplanation(explanation);
+      if (detailExplanationRequestVersion.current === requestVersion) {
+        setRankExplanation(explanation);
+      }
     } catch (error) {
-      setRankExplanation(null);
-      setExplanationError(userMessageForError(error, t.errors.api));
+      if (detailExplanationRequestVersion.current === requestVersion) {
+        setRankExplanation(null);
+        setExplanationError(userMessageForError(error, t.errors.api));
+      }
     } finally {
-      setIsExplanationLoading(false);
+      if (detailExplanationRequestVersion.current === requestVersion) {
+        setIsExplanationLoading(false);
+      }
     }
   }, [t.errors.api]);
 
@@ -1178,6 +1189,7 @@ export function App() {
     async function loadDetail(articleId: string) {
       setIsDetailLoading(true);
       setDetailError(null);
+      detailExplanationRequestVersion.current += 1;
       setRankExplanation(null);
       setExplanationError(null);
       setIsExplanationOpen(false);
@@ -1212,16 +1224,6 @@ export function App() {
             }
           }
         }
-        if (
-          !cancelled &&
-          shouldLoadDetailRankExplanation(
-            appPageRef.current,
-            currentArticleView,
-            submittedSearchForm.sort
-          )
-        ) {
-          await refreshArticleExplanation(articleId);
-        }
       } catch (error) {
         if (!cancelled) {
           setArticleDetail(null);
@@ -1235,6 +1237,7 @@ export function App() {
     }
 
     if (!selectedArticleId) {
+      detailExplanationRequestVersion.current += 1;
       setArticleDetail(null);
       setRankExplanation(null);
       setIsExplanationOpen(false);
@@ -1551,6 +1554,7 @@ export function App() {
     setSourceSelection(nextSourceSelection);
 
     if (articleDetail && !nextFeeds.some((feed) => feed.id === articleDetail.feedId)) {
+      detailExplanationRequestVersion.current += 1;
       setSelectedArticleId(null);
       setArticleDetail(null);
       setRankExplanation(null);
@@ -2108,6 +2112,15 @@ export function App() {
     if (previousState) {
       applyArticleState(articleId, optimisticReadProgressState(previousState, progress));
     }
+    if (
+      progress >= 0.5 &&
+      articleId === selectedArticleId &&
+      shouldLoadDetailRankExplanation(appPage, currentArticleView, submittedSearchForm.sort) &&
+      rankExplanation?.articleId !== articleId &&
+      !isExplanationLoading
+    ) {
+      void refreshArticleExplanation(articleId);
+    }
 
     if (options.keepalive) {
       dibaoApi.postArticleActionKeepalive(articleId, request);
@@ -2161,6 +2174,13 @@ export function App() {
       return;
     }
 
+    if (
+      selectedArticleId &&
+      rankExplanation?.articleId !== selectedArticleId &&
+      !isExplanationLoading
+    ) {
+      void refreshArticleExplanation(selectedArticleId);
+    }
     setIsExplanationOpen(true);
   }
 
@@ -6558,6 +6578,7 @@ export function ArticleActionControls(props: {
 export function RankExplanationPanel(props: {
   error: string | null;
   explanation: RankExplanation | null;
+  idleMessage?: string | null;
   isLoading: boolean;
 }) {
   const { t, formatDate } = useI18n();
@@ -6596,6 +6617,9 @@ export function RankExplanationPanel(props: {
           <p className={styles.explanationMeta}>{t.explanation.empty}</p>
         )
       ) : null}
+      {!props.isLoading && !props.error && !props.explanation && props.idleMessage ? (
+        <p className={styles.explanationMeta}>{props.idleMessage}</p>
+      ) : null}
     </section>
   );
 }
@@ -6628,6 +6652,7 @@ export function ArticleExplanationEntry(props: {
         <RankExplanationPanel
           error={props.error}
           explanation={props.explanation}
+          idleMessage={t.explanation.lazy}
           isLoading={props.isLoading}
         />
       </section>

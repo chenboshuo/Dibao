@@ -1265,6 +1265,25 @@ describe("web i18n", () => {
     expect(html).not.toContain(">查看完整理由</button>");
     expect(html).not.toContain("关闭");
   });
+
+  it("renders lazy personalized explanation copy before reasons are loaded", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="recommended"
+          error={null}
+          explanation={null}
+          isLoading={false}
+          isOpen={false}
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("阅读过半后显示推荐解释");
+    expect(html).not.toContain("与你近期的正向兴趣相似");
+  });
 });
 
 function dictionaryShape(value: unknown, path = "$"): string[] {
