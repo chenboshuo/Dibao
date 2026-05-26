@@ -207,6 +207,16 @@ export type RankExplanationReason = {
   type: RankExplanationReasonType;
   label: string;
   impact: "positive" | "negative" | "neutral";
+  family?: {
+    id: string;
+    label: string;
+    maturity: number;
+    dominanceRatio: number;
+    matchedFamilyCount: number;
+  };
+  recentIntent?: {
+    polarity: "positive";
+  };
   cluster?: RecommendationClusterItem & {
     similarity: number;
   };

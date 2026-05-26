@@ -1272,6 +1272,50 @@ describe("web i18n", () => {
     expect(html).not.toContain("关闭");
   });
 
+  it("renders interest family and recent intent explanation copy", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="recommended"
+          error={null}
+          explanation={{
+            articleId: "article_fixture",
+            generatedAt: "2026-05-14T08:10:00.000Z",
+            reasons: [
+              {
+                type: "interest",
+                label: "Interest family match",
+                impact: "positive",
+                family: {
+                  id: "family_product_ai",
+                  label: "产品 / AI",
+                  maturity: 0.82,
+                  dominanceRatio: 0.24,
+                  matchedFamilyCount: 2
+                }
+              },
+              {
+                type: "interest",
+                label: "Recent interest trend",
+                impact: "positive",
+                recentIntent: {
+                  polarity: "positive"
+                }
+              }
+            ]
+          }}
+          isLoading={false}
+          isOpen={false}
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("与你的兴趣主题「产品 / AI」相近");
+    expect(html).toContain("与你近期的阅读趋势相近");
+  });
+
   it("renders lazy personalized explanation copy before reasons are loaded", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>

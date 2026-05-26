@@ -5836,6 +5836,64 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("returns an interest family explanation when semantic rank has no cluster match", async () => {
+    const db = createFixtureDatabase();
+    insertRank(db, "article_recommended", 1.2, 7000, {
+      interestScore: 0.12,
+      sourceScore: 0.03,
+      freshnessScore: 0.04,
+      stateScore: 0.01
+    });
+    db.prepare(
+      "update article_rank_scores set semantic_score = ? where article_id = ? and rank_context = 'base'"
+    ).run(0.12, "article_recommended");
+    new SqliteRankingRepository(db).upsertExplanation({
+      articleId: "article_recommended",
+      rankContext: "base",
+      embeddingIndexId: null,
+      payloadJson: JSON.stringify({
+        components: {
+          primaryFamilyId: "family_product_ai",
+          primaryFamilyLabel: "产品 / AI",
+          primaryFamilyMaturity: 0.82,
+          primaryFamilyDominanceRatio: 0.24,
+          matchedFamilyCount: 2
+        }
+      }),
+      createdAt: 7000
+    });
+    const app = buildServer({ db, logger: false, now: () => 8000 });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          reasons: expect.arrayContaining([
+            expect.objectContaining({
+              type: "interest",
+              label: "Interest family match",
+              family: {
+                id: "family_product_ai",
+                label: "产品 / AI",
+                maturity: 0.82,
+                dominanceRatio: 0.24,
+                matchedFamilyCount: 2
+              }
+            })
+          ])
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("returns fallback explanation when rank is missing", async () => {
     const db = createRankingFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 9000 });

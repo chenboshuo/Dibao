@@ -1168,6 +1168,8 @@ export const zhCN = {
     reasons: {
       interest: "与你近期的正向兴趣相似，因此排序更靠前。",
       interestCluster: (summary: string) => `与你近期的正向兴趣相似，因此排序更靠前。${summary}`,
+      interestFamily: (label: string) => `与你的兴趣主题「${label}」相近，因此排序更靠前。`,
+      recentIntent: "与你近期的阅读趋势相近，因此排序更靠前。",
       sourcePositive: (label: string) => `来源 ${label} 对排序有正向影响。`,
       sourceNegative: (label: string) => `来源 ${label} 当前权重偏低。`,
       freshness: "文章较新，获得新鲜度加分。",
@@ -2405,6 +2407,9 @@ export const enUS = {
       interest: "This is similar to recent positive interests, so it ranks higher.",
       interestCluster: (summary: string) =>
         `This is similar to recent positive interests, so it ranks higher. ${summary}`,
+      interestFamily: (label: string) =>
+        `This is close to your interest topic "${label}", so it ranks higher.`,
+      recentIntent: "This matches your recent reading direction, so it ranks higher.",
       sourcePositive: (label: string) => `Source ${label} is helping this rank higher.`,
       sourceNegative: (label: string) => `Source ${label} currently has a lower weight.`,
       freshness: "The article is recent and receives a freshness boost.",
@@ -3635,6 +3640,9 @@ export const jaJP = {
       interest: "最近のポジティブな興味に近いため、順位が上がっています。",
       interestCluster: (summary: string) =>
         `最近のポジティブな興味に近いため、順位が上がっています。${summary}`,
+      interestFamily: (label: string) =>
+        `興味トピック「${label}」に近いため、順位が上がっています。`,
+      recentIntent: "最近の読書傾向に近いため、順位が上がっています。",
       sourcePositive: (label: string) => `ソース ${label} が順位を上げています。`,
       sourceNegative: (label: string) => `ソース ${label} は現在重みが低めです。`,
       freshness: "新しい記事のため、新鮮度による加点があります。",

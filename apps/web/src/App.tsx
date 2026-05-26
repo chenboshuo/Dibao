@@ -8628,6 +8628,12 @@ function explanationReasonText(reason: RankExplanationReason, t: Dictionary): st
           )
         );
       }
+      if (reason.family) {
+        return t.explanation.reasons.interestFamily(reason.family.label);
+      }
+      if (reason.recentIntent) {
+        return t.explanation.reasons.recentIntent;
+      }
       return t.explanation.reasons.interest;
     case "source":
       return reason.impact === "negative"

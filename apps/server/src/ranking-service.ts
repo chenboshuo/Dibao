@@ -44,8 +44,22 @@ export type RankExplanationReason = {
   type: RankExplanationReasonType;
   label: string;
   impact: "positive" | "negative" | "neutral";
+  family?: RankExplanationFamilyMatch;
+  recentIntent?: RankExplanationRecentIntentMatch;
   cluster?: RankExplanationClusterMatch;
   clusters?: RankExplanationClusterMatch[];
+};
+
+export type RankExplanationFamilyMatch = {
+  id: string;
+  label: string;
+  maturity: number;
+  dominanceRatio: number;
+  matchedFamilyCount: number;
+};
+
+export type RankExplanationRecentIntentMatch = {
+  polarity: "positive";
 };
 
 export type RankExplanationClusterMatch = {
@@ -1887,6 +1901,8 @@ function rankReasonsFor(
       ? components.exploration
       : rank.explorationBonus ?? 0;
   const wasExploration = components.wasExploration === true || (rank.explorationBonus ?? 0) > MIN_REASON_SCORE;
+  const familyMatch = familyMatchFromComponents(components);
+  const semanticScore = rank.semanticScore ?? 0;
   const explorationReason: RankExplanationReason & { magnitude: number; priority: number } | null =
     wasExploration
       ? {
@@ -1905,9 +1921,19 @@ function rankReasonsFor(
   if ((rank.semanticScore ?? rank.interestScore) > MIN_REASON_SCORE) {
     candidates.push({
       type: "interest",
-      label: "Interest match",
+      label: familyMatch
+        ? "Interest family match"
+        : clusterMatches[0]
+          ? "Interest match"
+          : semanticScore > MIN_REASON_SCORE
+            ? "Recent interest trend"
+            : "Interest match",
       impact: "positive",
       ...(clusterMatches[0] ? { cluster: clusterMatches[0], clusters: clusterMatches } : {}),
+      ...(!clusterMatches[0] && familyMatch ? { family: familyMatch } : {}),
+      ...(!clusterMatches[0] && !familyMatch && semanticScore > MIN_REASON_SCORE
+        ? { recentIntent: { polarity: "positive" as const } }
+        : {}),
       magnitude: rank.semanticScore ?? rank.interestScore,
       priority: 1
     });
@@ -2029,6 +2055,35 @@ function rankReasonsFor(
           impact: "neutral"
         }
       ];
+}
+
+function familyMatchFromComponents(components: Record<string, unknown>): RankExplanationFamilyMatch | null {
+  const id = typeof components.primaryFamilyId === "string" ? components.primaryFamilyId.trim() : "";
+  const label = typeof components.primaryFamilyLabel === "string" ? components.primaryFamilyLabel.trim() : "";
+  const maturity = typeof components.primaryFamilyMaturity === "number" &&
+    Number.isFinite(components.primaryFamilyMaturity)
+    ? components.primaryFamilyMaturity
+    : 0;
+  const dominanceRatio = typeof components.primaryFamilyDominanceRatio === "number" &&
+    Number.isFinite(components.primaryFamilyDominanceRatio)
+    ? components.primaryFamilyDominanceRatio
+    : 0;
+  const matchedFamilyCount = typeof components.matchedFamilyCount === "number" &&
+    Number.isFinite(components.matchedFamilyCount)
+    ? Math.max(0, Math.trunc(components.matchedFamilyCount))
+    : 0;
+
+  if (!id || !label || matchedFamilyCount <= 0) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    maturity: roundScore(clamp(maturity, 0, 1)),
+    dominanceRatio: roundScore(clamp(dominanceRatio, 0, 1)),
+    matchedFamilyCount
+  };
 }
 
 function fallbackLabelFor(source: ArticleRankExplanationSourceRow): string {
