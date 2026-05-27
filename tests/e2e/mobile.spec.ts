@@ -256,6 +256,63 @@ test("mobile browser history back returns from article detail to the list", asyn
   expect(backLayout.readerDisplay).toBe("none");
 });
 
+test("mobile browser history back preserves the unread list queue without refetching", async ({
+  page
+}) => {
+  const baseTime = Date.parse("2026-05-24T08:00:00.000Z");
+  for (let index = 1; index <= 16; index += 1) {
+    seedUnreadArticle(
+      `article_mobile_history_${String(index).padStart(2, "0")}`,
+      `E2E Mobile History ${String(index).padStart(2, "0")}`,
+      baseTime + index * 60_000
+    );
+  }
+
+  await login(page);
+  await page.getByRole("link", { name: "最新" }).click();
+  await expect(page.getByRole("heading", { name: "最新" })).toBeVisible();
+  await page.getByTitle("只看未读").click();
+
+  const preservedTitle = "E2E Mobile History 16";
+  const openTitle = "E2E Mobile History 15";
+  await expect(page.getByRole("link", { name: new RegExp(preservedTitle) })).toBeVisible();
+
+  const articleListRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === "/api/articles") {
+      articleListRequests.push(url.search);
+    }
+  });
+
+  const listPanel = page.getByTestId("article-list-scroll-container");
+  await listPanel.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect
+    .poll(() => articleStatusInList(page, preservedTitle), { timeout: 20_000 })
+    .toBe("ignored");
+
+  await listPanel.evaluate((element) => {
+    element.scrollTop = 120;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(page.getByRole("link", { name: new RegExp(openTitle) })).toBeVisible();
+  const scrollTopBeforeOpen = await listPanel.evaluate((element) => element.scrollTop);
+
+  await page.getByRole("link", { name: new RegExp(openTitle) }).click();
+  await expect(page.getByRole("heading", { name: openTitle })).toBeVisible();
+
+  await page.goBack();
+  await expect(page.getByRole("link", { name: new RegExp(openTitle) })).toBeVisible();
+  await expect.poll(() => articleStatusInList(page, preservedTitle)).toBe("ignored");
+
+  const scrollTopAfterBack = await listPanel.evaluate((element) => element.scrollTop);
+  expect(Math.abs(scrollTopAfterBack - scrollTopBeforeOpen)).toBeLessThanOrEqual(2);
+  expect(articleListRequests).toEqual([]);
+});
+
 test("favorites page sort dropdown can switch order", async ({ page }) => {
   await login(page);
 
@@ -363,7 +420,7 @@ async function saveArticleForLater(page: Page, title: string): Promise<void> {
   await expect(page.getByRole("link", { name: new RegExp(title) })).toBeVisible();
 }
 
-function seedUnreadArticle(articleId: string, title: string): void {
+function seedUnreadArticle(articleId: string, title: string, publishedAt?: number): void {
   const db = new Database(e2eDatabasePath);
   try {
     const feed = db.prepare("select id from feeds where deleted_at is null limit 1").get() as
@@ -372,7 +429,7 @@ function seedUnreadArticle(articleId: string, title: string): void {
     if (!feed) {
       throw new Error("No feed available for mobile unread seed");
     }
-    const now = Date.parse("2026-05-23T08:00:00.000Z");
+    const now = publishedAt ?? Date.parse("2026-05-23T08:00:00.000Z");
     db.prepare(
       `
         insert into articles (
@@ -413,6 +470,16 @@ function seedUnreadArticle(articleId: string, title: string): void {
   } finally {
     db.close();
   }
+}
+
+async function articleStatusInList(page: Page, title: string): Promise<string | null> {
+  return page.getByTestId("article-list-scroll-container").evaluate((element, articleTitle) => {
+    const row = Array.from(element.querySelectorAll("[data-article-id]")).find(
+      (candidate) => candidate instanceof HTMLElement && candidate.textContent?.includes(articleTitle)
+    );
+
+    return row instanceof HTMLElement ? row.dataset.interactionStatus ?? null : null;
+  }, title);
 }
 
 async function firstArticleTitle(page: Page): Promise<string> {

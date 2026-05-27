@@ -216,6 +216,22 @@ export function correctSourceSelection(
   return source;
 }
 
+function sameAppPage(left: AppPage, right: AppPage): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+
+  if (left.type === "reader" && right.type === "reader") {
+    return left.view === right.view;
+  }
+
+  if (left.type === "full-content-preview" && right.type === "full-content-preview") {
+    return left.feedId === right.feedId;
+  }
+
+  return true;
+}
+
 export function App() {
   const { t, setLocale } = useI18n();
   const initialRoute = useMemo(
@@ -1079,10 +1095,11 @@ export function App() {
       return;
     }
 
-    void loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, readLaterSort, timeWindow);
+    void loadArticles(sourceSelection, currentArticleView, unreadOnly, favoriteSort, readLaterSort, timeWindow);
   }, [
-    appPage,
+    appPage.type,
     appStage.type,
+    currentArticleView,
     favoriteSort,
     loadArticles,
     readLaterSort,
@@ -1100,16 +1117,20 @@ export function App() {
   }, [appPage.type, appStage.type, hasSubmittedSearch, loadSearchArticles, submittedSearchForm]);
 
   useEffect(() => {
-    if (appStage.type !== "reader" || appPage.type !== "reader" || !supportsQuickFilters(appPage.view)) {
+    if (
+      appStage.type !== "reader" ||
+      appPage.type !== "reader" ||
+      !supportsQuickFilters(currentArticleView)
+    ) {
       return;
     }
 
-    persistReaderFilters(appPage.view, {
+    persistReaderFilters(currentArticleView, {
       sourceSelection,
       unreadOnly,
       timeWindow
     });
-  }, [appPage, appStage.type, sourceSelection, timeWindow, unreadOnly]);
+  }, [appPage.type, appStage.type, currentArticleView, sourceSelection, timeWindow, unreadOnly]);
 
   useEffect(() => {
     if (appStage.type !== "reader") {
@@ -1119,7 +1140,7 @@ export function App() {
       return;
     }
 
-    if (appPage.type === "reader" && appPage.view === "recommended") {
+    if (appPage.type === "reader" && currentArticleView === "recommended") {
       void loadRecommendationSummaryStatus();
       return;
     }
@@ -1132,7 +1153,13 @@ export function App() {
     setRecommendationStatus(null);
     setRecommendationStatusError(null);
     setIsRecommendationStatusLoading(false);
-  }, [appPage, appStage.type, loadRecommendationStatus, loadRecommendationSummaryStatus]);
+  }, [
+    appPage.type,
+    appStage.type,
+    currentArticleView,
+    loadRecommendationStatus,
+    loadRecommendationSummaryStatus
+  ]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || appPage.type !== "algorithm-clusters") {
@@ -1158,7 +1185,7 @@ export function App() {
       ) {
         resetArticleListForPendingQuery();
       }
-      setAppPage(route.page);
+      setAppPage((current) => (sameAppPage(current, route.page) ? current : route.page));
       if (route.page.type === "search") {
         const nextSearchForm = searchFormFromLocation();
         setSearchForm(nextSearchForm);
