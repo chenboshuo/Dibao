@@ -1,0 +1,31 @@
+name: Question / 问题咨询
+description: Ask a usage or project question / 咨询用法或项目问题
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when you need clarification before filing a bug or feature request.
+
+        如果你还不确定这是缺陷还是功能建议，可以先用这个模板提问。
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / 问题
+      description: What would you like to know? / 你想了解什么？
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / 背景
+      description: What have you tried, and what result did you get? / 你尝试过什么，结果如何？
+      placeholder: |
+        English: I tried..., but...
+        中文：我尝试了……，但……
+  - type: textarea
+    id: related
+    attributes:
+      label: Related links / 相关链接
+      description: Add related issues, docs, screenshots, or examples. / 可补充相关 Issue、文档、截图或示例。

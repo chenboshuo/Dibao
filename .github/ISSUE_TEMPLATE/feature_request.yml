@@ -1,24 +1,36 @@
-name: Feature request
-description: Suggest an idea for the roadmap
+name: Feature request / 功能建议
+description: Suggest an idea for the roadmap / 提出路线图功能建议
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature. Please describe the user problem first, then the proposed solution.
+
+        感谢你提出功能建议。请先描述要解决的用户问题，再说明你期望的方案。
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What problem would this feature solve?
+      label: Problem / 问题
+      description: What problem would this feature solve? / 这个功能要解决什么问题？
+      placeholder: |
+        English: When I..., I need..., but currently...
+        中文：当我……时，我需要……，但目前……
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposal
-      description: What should be added or changed?
+      label: Proposal / 建议方案
+      description: What should be added or changed? / 你希望新增或调整什么？
+      placeholder: |
+        English: Add support for...
+        中文：希望支持……
     validations:
       required: true
   - type: textarea
     id: context
     attributes:
-      label: Context
-      description: Add screenshots, examples, or alternatives if useful.
+      label: Context / 补充信息
+      description: Add screenshots, examples, or alternatives if useful. / 如有截图、示例或替代方案，请补充。

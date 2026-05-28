@@ -1,0 +1,43 @@
+name: Documentation / 文档改进
+description: Report missing, unclear, or outdated docs / 反馈缺失、不清楚或过期的文档
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for documentation issues, examples, guides, or wording improvements.
+
+        这个模板用于反馈文档、示例、指南或措辞改进。
+  - type: textarea
+    id: location
+    attributes:
+      label: Location / 位置
+      description: Link the page, file, or section. / 请提供页面、文件或章节位置。
+      placeholder: |
+        English: README section "..."
+        中文：README 中的“……”章节
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue / 问题
+      description: What is missing, confusing, or incorrect? / 哪些内容缺失、不清楚或不正确？
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested change / 建议修改
+      description: What should the documentation say instead? / 你建议文档如何修改？
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact / 影响范围
+      description: Who is affected by this documentation issue? / 这个文档问题影响谁？
+      options:
+        - New users / 新用户
+        - Existing users / 现有用户
+        - Contributors / 贡献者
+        - Maintainers / 维护者
