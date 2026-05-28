@@ -5,7 +5,11 @@
 <h1 align="center">邸报 Dibao</h1>
 
 <p align="center">
-  把算法推荐放回你的 RSS 信源里。一个开源、自托管、个人可控的 RSS 推荐阅读器。
+  把算法推荐放回你的 RSS 信源里。一个 source-available、fair-code、自托管、个人可控的 RSS 推荐阅读器。
+</p>
+
+<p align="center">
+  Dibao is source-available, fair-code, and self-hostable under BUSL-1.1.
 </p>
 
 <p align="center">
@@ -35,6 +39,7 @@
 - [快速安装](#快速安装)
 - [推荐 Provider](#推荐-provider)
 - [备份与升级](#备份与升级)
+- [许可证](#许可证)
 - [常见问题](#常见问题)
 - [发布说明](./docs/release-notes-v0.1.0.md)
 - [Roadmap](./docs/roadmap.md)
@@ -193,6 +198,14 @@ docker compose ps
 
 数据库迁移会在启动时自动执行。升级后打开 `http://localhost:8080/api/system/health`，返回 `ok: true` 即表示基础健康检查通过。
 
+### 许可证
+
+Dibao 采用 [Business Source License 1.1](./LICENSE.md)（`BUSL-1.1`）实现 source-available / fair-code / delayed open source 模式。BUSL-1.1 不是 OSI 意义上的开源许可证；每个公开发布版本会在首次公开发布 4 年后的 Change Date 自动变更为 [Apache License 2.0](./LICENSE-APACHE-2.0.md)（`Apache-2.0`）。
+
+个人、家庭、非商业、研究、评估、学习用途，以及公司 / 机构 / 组织内部自托管使用，均可免费使用、修改、自托管和生产使用 Dibao。有偿部署、咨询、培训、迁移和运维支持也被允许，但客户获得的必须是部署在客户自有环境、客户自有账号或客户控制基础设施中的 Dibao 实例。
+
+未经项目维护者单独商业授权，不得提供收费托管、SaaS、Managed Service、Cloud Service、白标、转售、竞争性商业产品，或任何以 Dibao / 修改版 Dibao 为核心能力的商业 RSS 阅读服务、信息流推荐服务、AI 阅读 / 摘要服务、内容聚合平台或知识流产品。商业授权联系：https://dibao.app。具体 Release Date 和 Change Date 以对应 release tag 中冻结的 `LICENSE.md` 为准；`main` 分支只代表当前开发版。中文说明见 [许可证 FAQ](./docs/license-faq.md)。
+
 ### 常见问题
 
 **没有 Provider 可以用吗？**
@@ -346,6 +359,7 @@ Quick links:
 - [Quick Install](#quick-install)
 - [Recommended Providers](#recommended-providers)
 - [Backup And Upgrade](#backup-and-upgrade)
+- [License](#license)
 - [FAQ](#faq)
 - [Release notes](./docs/release-notes-v0.1.0.md)
 - [Roadmap](./docs/roadmap.md)
@@ -476,6 +490,14 @@ docker compose ps
 ```
 
 Health check: `http://localhost:8080/api/system/health`.
+
+### License
+
+Dibao is source-available, fair-code, and self-hostable under the [Business Source License 1.1](./LICENSE.md) (`BUSL-1.1`). BUSL-1.1 is not an OSI-approved open-source license before the Change Date. Each released version becomes open source under [Apache License 2.0](./LICENSE-APACHE-2.0.md) (`Apache-2.0`) after its Change Date.
+
+Personal, household, non-commercial, research, evaluation, learning, and internal company or organization self-hosting are free to use in production. Paid deployment, consulting, training, migration, and operational support are allowed when the customer receives a Dibao instance in the customer's own environment, account, or controlled infrastructure.
+
+Paid hosting, SaaS, Managed Service, Cloud Service, white-label distribution, resale, competing commercial products, or commercial services where Dibao or modified Dibao is a core capability require a separate commercial license. Contact https://dibao.app for commercial licensing. The exact Release Date and Change Date are defined by the frozen `LICENSE.md` in the corresponding release tag; the `main` branch represents the current development version.
 
 ### FAQ
 
