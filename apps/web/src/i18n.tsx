@@ -126,10 +126,13 @@ export const zhCN = {
     },
     provider: {
       title: "推荐能力",
-      body: "当前先使用基础排序。Embedding provider 会在后续设置中配置，本轮不会发送正文到外部服务。",
-      currentTitle: "当前使用基础排序",
-      currentBody: "你仍然可以阅读、收藏、稍后读，并让基础排序使用这些行为信号。",
-      continue: "暂不配置，继续"
+      body: "配置 embedding provider 后，邸报会用文章语义和你的阅读行为生成更贴近个人的信息流。",
+      recommendationLink: "查看这里选择合适的（免费）Provider。",
+      currentTitle: "跳过也是可选项",
+      currentBody: "暂不配置时，邸报仍可阅读、收藏、稍后读，并使用基础排序。",
+      saveAndContinue: "保存并启用",
+      saving: "保存中",
+      continue: "跳过，使用基础排序"
     }
   },
   feeds: {
@@ -1370,10 +1373,13 @@ export const enUS = {
     },
     provider: {
       title: "Personalization",
-      body: "Dibao will use baseline ranking for now. You can add an embedding provider later in Settings; this step does not send article text to any external service.",
-      currentTitle: "Baseline ranking is active",
-      currentBody: "You can still read, favorite, and save articles for later. Dibao will use those signals for baseline ranking.",
-      continue: "Skip for now and continue"
+      body: "Set up an embedding provider so Dibao can use article semantics and your reading signals for a more personal feed.",
+      recommendationLink: "See this guide to choose a suitable free provider.",
+      currentTitle: "Skipping is still available",
+      currentBody: "If you skip this step, Dibao remains usable for reading, favorites, read-later, and baseline ranking.",
+      saveAndContinue: "Save and enable",
+      saving: "Saving",
+      continue: "Skip and use baseline ranking"
     }
   },
   feeds: {
@@ -2603,10 +2609,13 @@ export const jaJP = {
     },
     provider: {
       title: "おすすめ機能",
-      body: "今は基本の並び替えを使用します。Embedding provider は後ほど設定できます。この手順では記事本文を外部サービスへ送信しません。",
-      currentTitle: "基本の並び替えを使用中",
-      currentBody: "読む、お気に入り、あとで読む、といった操作は引き続き利用でき、基本の並び替えにも反映されます。",
-      continue: "今は設定せずに進む"
+      body: "Embedding provider を設定すると、記事の意味と読書行動を使って、より自分向けのフィードを作れます。",
+      recommendationLink: "こちらを見て、適した無料 Provider を選んでください。",
+      currentTitle: "スキップも選べます",
+      currentBody: "ここで設定しなくても、閲覧、お気に入り、あとで読む、基本の並び替えは利用できます。",
+      saveAndContinue: "保存して有効化",
+      saving: "保存中",
+      continue: "スキップして基本の並び替えを使う"
     }
   },
   feeds: {
@@ -3738,7 +3747,7 @@ const defaultI18n = createI18n(defaultLocale);
 const I18nContext = createContext<I18nValue>(defaultI18n);
 
 export function DibaoI18nProvider(props: DibaoI18nProviderProps) {
-  const [locale, setLocale] = useState<Locale>(props.locale ?? defaultLocale);
+  const [locale, setLocale] = useState<Locale>(() => props.locale ?? browserPreferredLocale());
   const value = useMemo(() => createI18n(locale, {}, setLocale), [locale]);
 
   useEffect(() => {
@@ -3761,6 +3770,33 @@ export function DibaoI18nProvider(props: DibaoI18nProviderProps) {
 
 export function useI18n(): I18nValue {
   return useContext(I18nContext);
+}
+
+export function browserPreferredLocale(): Locale {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return defaultLocale;
+  }
+
+  const languages = navigator.languages?.length
+    ? navigator.languages
+    : navigator.language
+      ? [navigator.language]
+      : [];
+
+  for (const language of languages) {
+    const normalized = language.toLowerCase();
+    if (normalized === "zh-cn" || normalized.startsWith("zh")) {
+      return "zh-CN";
+    }
+    if (normalized === "ja-jp" || normalized.startsWith("ja")) {
+      return "ja-JP";
+    }
+    if (normalized === "en-us" || normalized.startsWith("en")) {
+      return "en-US";
+    }
+  }
+
+  return defaultLocale;
 }
 
 export function createI18n(

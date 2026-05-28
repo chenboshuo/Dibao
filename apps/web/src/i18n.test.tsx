@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   AlgorithmTransparencyPage,
@@ -12,7 +12,7 @@ import {
   pageForNavigationItem,
   RankExplanationPanel,
   SettingsWorkspace,
-  SetupProviderPlaceholderPanel,
+  SetupProviderPanel,
   SetupSourcesPanel,
   SetupWelcomePanel,
   correctSourceSelection,
@@ -31,6 +31,7 @@ import { defaultAppSettings, type ArticleListItem } from "./api.js";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
 import {
   DibaoI18nProvider,
+  browserPreferredLocale,
   createI18n,
   defaultLocale,
   dictionaries,
@@ -38,6 +39,10 @@ import {
 } from "./i18n.js";
 
 describe("web i18n", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("keeps dictionary key structure aligned across locales", () => {
     const [baseLocale, ...otherLocales] = supportedLocales;
     const baseShape = dictionaryShape(dictionaries[baseLocale]);
@@ -53,6 +58,16 @@ describe("web i18n", () => {
     expect(i18n.locale).toBe(defaultLocale);
     expect(i18n.t.errors.api.requestFailed).toBe("请求失败，请稍后重试。");
     expect(i18n.formatDate("2026-05-14T08:00:00.000Z")).not.toBe("2026-05-14T08:00:00.000Z");
+  });
+
+  it("chooses the initial locale from browser languages when available", () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", {
+      languages: ["ja-JP", "en-US"],
+      language: "ja-JP"
+    });
+
+    expect(browserPreferredLocale()).toBe("ja-JP");
   });
 
   it("renders App auth loading with dictionary copy for a non-default locale", () => {
@@ -245,7 +260,7 @@ describe("web i18n", () => {
     expect(loginHtml).toContain("Invalid password");
   });
 
-  it("renders first-run wizard copy without provider configuration fields", () => {
+  it("renders first-run wizard with provider configuration and skip fallback", () => {
     const welcomeHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
         <SetupWelcomePanel onStart={() => undefined} />
@@ -271,7 +286,50 @@ describe("web i18n", () => {
     );
     const providerHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
-        <SetupProviderPlaceholderPanel onContinue={() => undefined} />
+        <SetupProviderPanel
+          deletingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onContinue={() => undefined}
+          onDeleteEmbeddingProvider={() => Promise.resolve()}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
+      </DibaoI18nProvider>
+    );
+    const providerEnglishHtml = renderToStaticMarkup(
+      <DibaoI18nProvider locale="en-US">
+        <SetupProviderPanel
+          deletingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onContinue={() => undefined}
+          onDeleteEmbeddingProvider={() => Promise.resolve()}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
+      </DibaoI18nProvider>
+    );
+    const providerJapaneseHtml = renderToStaticMarkup(
+      <DibaoI18nProvider locale="ja-JP">
+        <SetupProviderPanel
+          deletingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onContinue={() => undefined}
+          onDeleteEmbeddingProvider={() => Promise.resolve()}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
       </DibaoI18nProvider>
     );
 
@@ -281,12 +339,21 @@ describe("web i18n", () => {
     expect(sourcesHtml).toContain("导入 OPML 文件");
     expect(sourcesHtml).toContain("网站或 RSS / Atom URL");
     expect(providerHtml).toContain("推荐能力");
-    expect(providerHtml).toContain("当前使用基础排序");
-    expect(providerHtml).toContain("暂不配置，继续");
-    expect(providerHtml).not.toContain("API Key");
-    expect(providerHtml).not.toContain("Provider URL");
-    expect(providerHtml).not.toContain("Model");
-    expect(providerHtml).not.toContain("测试连接");
+    expect(providerHtml).toContain("查看这里选择合适的（免费）Provider。");
+    expect(providerHtml).toContain("tree/main");
+    expect(providerHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
+    expect(providerHtml).toContain("跳过，使用基础排序");
+    expect(providerHtml).toContain("保存并启用");
+    expect(providerHtml).toContain("API Key");
+    expect(providerHtml).toContain("Base URL");
+    expect(providerHtml).toContain("模型");
+    expect(providerHtml).toContain("切片长度");
+    expect(providerHtml).toContain("测试连接");
+    expect(providerEnglishHtml).toContain("tree/main");
+    expect(providerEnglishHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
+    expect(providerJapaneseHtml).toContain("README.ja.md");
+    expect(providerJapaneseHtml).toContain("blob/main");
+    expect(providerJapaneseHtml).not.toContain("%E3%81%8A%E3%81%99%E3%81%99%E3%82%81-provider");
   });
 
   it("renders OPML, folder, and pagination copy from the dictionary", () => {
