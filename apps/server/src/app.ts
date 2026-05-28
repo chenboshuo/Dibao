@@ -37,6 +37,7 @@ import {
   type ArticleSearchSort,
   type ArticleSearchState,
   type DibaoDatabase,
+  type EmbeddingIndexRow,
   type EmbeddingIndexListRow,
   type EmbeddingProviderRow,
   type FeedFolderRow,
@@ -46,7 +47,8 @@ import {
   type InterestClusterRow,
   type JobRow,
   type JobStatus,
-  type JobType
+  type JobType,
+  type ProfileSignalCountRow
 } from "@dibao/db";
 import { cosineSimilarity, profileAlgorithmDefaults } from "@dibao/ranking";
 import { dibaoVersion, type ApiError } from "@dibao/shared";
@@ -116,7 +118,13 @@ import {
   INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
   INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE
 } from "./interest-cluster-merge-service.js";
+import {
+  InterestFamilyService,
+  INTEREST_FAMILY_REBUILD_JOB_TYPE,
+  type RecommendationClusterFamily
+} from "./interest-family-service.js";
 import { JobRunner } from "./job-runner.js";
+import { LatestReleaseService } from "./latest-release-service.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import {
   DEFAULT_PROFILE_DECAY_INTERVAL_MS,
@@ -162,6 +170,10 @@ import {
 } from "./retention-cleanup-job-service.js";
 import { SettingsService, SettingsServiceError } from "./settings-service.js";
 import {
+  attachServerTelemetryErrorHandler,
+  configureServerTelemetry
+} from "./telemetry.js";
+import {
   VectorIndexRebuildJobService,
   VECTOR_INDEX_REBUILD_JOB_TYPE
 } from "./vector-index-rebuild-job-service.js";
@@ -204,6 +216,7 @@ type FeedFolderParams = {
 type AuthCredentialBody = {
   username?: unknown;
   password?: unknown;
+  telemetryEnabled?: unknown;
 };
 
 type ChangePasswordBody = {
@@ -316,6 +329,8 @@ type BuildServerOptions = {
   logger?: boolean;
   cookieSecure?: boolean;
   authRequired?: boolean;
+  authMaxFailedLoginAttempts?: number;
+  authLoginLockoutMs?: number;
   backgroundJobs?: boolean;
   feedRefreshIntervalMs?: number;
   retentionCleanupIntervalMs?: number;
@@ -325,6 +340,7 @@ type BuildServerOptions = {
   jobRetryDelayMs?: number;
   embeddingFetcher?: typeof fetch;
   fullContentFetcher?: typeof fetch;
+  latestReleaseFetcher?: typeof fetch;
   webDistDir?: string | false;
 };
 
@@ -344,8 +360,15 @@ export function buildServer(options: BuildServerOptions = {}) {
   const rankings = new SqliteRankingRepository(db);
   const profiles = new SqliteProfileRepository(db);
   const vectorStore = new SqliteVecVectorStore(db);
+  const app = Fastify({
+    logger: options.logger ?? true
+  });
+  const onFetchWarning = (warning: unknown) => {
+    app.log.warn({ event: "outbound_fetch_private_target", warning });
+  };
   const fullContentExtractor = new FullContentExtractionService({
-    fetcher: options.fullContentFetcher
+    fetcher: options.fullContentFetcher,
+    onFetchWarning
   });
   const embeddingAdapters = {
     openai_compatible: new OpenAiCompatibleEmbeddingAdapter({
@@ -364,15 +387,30 @@ export function buildServer(options: BuildServerOptions = {}) {
     adapters: embeddingAdapters,
     now: options.now
   });
-  const profileService = new ProfileService({
-    embeddings,
-    profiles,
-    now: options.now
-  });
   const settingsService = new SettingsService({
     settings,
     now: options.now
   });
+  const existingCredential = credentials.findCredential();
+  if (existingCredential) {
+    settingsService.ensureInstallationCompletedAt(existingCredential.createdAt);
+  }
+  const latestReleaseService = new LatestReleaseService({
+    settings,
+    now: options.now,
+    fetcher: options.latestReleaseFetcher,
+    getInstallationCompletedAt: () => settingsService.ensureInstallationCompletedAt()
+  });
+  const profileService = new ProfileService({
+    embeddings,
+    profiles,
+    getClusterLimits: () => settingsService.getSettings().ranking,
+    now: options.now
+  });
+  configureServerTelemetry({
+    enabled: settingsService.getSettings().telemetry.enabled
+  });
+  attachServerTelemetryErrorHandler(app);
   const rankingService = new RecommendationRankingService({
     db,
     embeddings,
@@ -402,12 +440,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     clusterLabels: clusterLabelService,
     now: options.now
   });
+  const interestFamilyService = new InterestFamilyService({
+    db,
+    now: options.now
+  });
   const recommendationMaintenanceService = new RecommendationMaintenanceService({
     db,
     jobs,
     rankingJobs: rankingJobService,
     clusterLabels: clusterLabelService,
     clusterMerge: clusterMergeService,
+    interestFamilies: interestFamilyService,
     getRankingSettings: () => settingsService.getSettings().ranking,
     getMaintenanceSettings: () => settingsService.getSettings().recommendationMaintenance,
     now: options.now
@@ -474,6 +517,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     articles,
     fetcher: options.feedFetcher,
     fullContentExtractor,
+    onFetchWarning,
     now: options.now
   });
   const feedFullContentService = new FeedFullContentService({
@@ -483,7 +527,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
   const feedDiscoveryService = new FeedDiscoveryService({
     feeds,
-    fetcher: options.feedFetcher
+    fetcher: options.feedFetcher,
+    onFetchWarning
   });
   const feedHealthService = new FeedHealthService({
     feeds,
@@ -583,7 +628,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     credentials,
     sessions,
     settings,
-    now: options.now
+    now: options.now,
+    maxFailedLoginAttempts: options.authMaxFailedLoginAttempts,
+    loginLockoutMs: options.authLoginLockoutMs
   });
   const articleRetentionService = new ArticleRetentionService({
     settings,
@@ -609,9 +656,6 @@ export function buildServer(options: BuildServerOptions = {}) {
   const authRequired = options.authRequired ?? true;
   const backgroundJobs = options.backgroundJobs ?? false;
 
-  const app = Fastify({
-    logger: options.logger ?? true
-  });
   const jobRunner = new JobRunner({
     jobs,
     handlers: {
@@ -645,6 +689,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       [INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job),
       [INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE]: (job) =>
+        recommendationMaintenanceService.handleJob(job),
+      [INTEREST_FAMILY_REBUILD_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job)
     },
     now: options.now,
@@ -847,6 +893,17 @@ export function buildServer(options: BuildServerOptions = {}) {
 
     try {
       const session = await authService.setup(parsed.username, parsed.password, requestMeta(request));
+      settingsService.markInstallationCompleted();
+      if (parsed.telemetryEnabled !== undefined) {
+        const result = settingsService.updateSettings({
+          telemetry: {
+            enabled: parsed.telemetryEnabled
+          }
+        });
+        configureServerTelemetry({
+          enabled: result.settings.telemetry.enabled
+        });
+      }
       reply.header(
         "set-cookie",
         serializeSessionCookie(session.token, session.expiresAt, cookieOptions)
@@ -952,6 +1009,7 @@ export function buildServer(options: BuildServerOptions = {}) {
           rankings,
           rankingService,
           clusterLabels: clusterLabelService,
+          interestFamilies: interestFamilyService,
           settings: settingsService.getSettings().ranking,
           includeClusterItems: includeClusterItems ?? true
         })
@@ -967,6 +1025,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       rankings,
       rankingService,
       clusterLabels: clusterLabelService,
+      interestFamilies: interestFamilyService,
       settings: settingsService.getSettings().ranking,
       maintenanceSettings: settingsService.getSettings().recommendationMaintenance,
       maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates()
@@ -983,6 +1042,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         rankings,
         rankingService,
         clusterLabels: clusterLabelService,
+        interestFamilies: interestFamilyService,
         settings: settingsService.getSettings().ranking,
         limit: request.query.limit === "all" ? null : parsePositiveInteger(request.query.limit, 12)
       })
@@ -1144,13 +1204,31 @@ export function buildServer(options: BuildServerOptions = {}) {
     data: settingsService.getSettings()
   }));
 
+  app.get("/api/system/latest-release", async () => ({
+    data: await latestReleaseService.getLatestRelease()
+  }));
+
+  app.post("/api/system/latest-release/check", async () => ({
+    data: await latestReleaseService.refresh()
+  }));
+
   app.patch<{ Body: unknown }>("/api/settings", async (request, reply) => {
     try {
-      const beforeRanking = settingsService.getSettings().ranking;
+      const beforeSettings = settingsService.getSettings();
+      const beforeRanking = beforeSettings.ranking;
       const result = settingsService.updateSettings(request.body);
+      configureServerTelemetry({
+        enabled: result.settings.telemetry.enabled
+      });
       const afterRanking = result.settings.ranking;
       const rankingJob = rankingSettingsChanged(beforeRanking, afterRanking)
         ? rankingJobService.enqueueAll()
+        : null;
+      const retentionCleanupJob = retentionSettingsRequireCleanupQueue(
+        beforeSettings.retention,
+        result.settings.retention
+      )
+        ? retentionCleanupJobService.enqueueCleanup()
         : null;
       if (rankingJob) {
         drainBackgroundJobs();
@@ -1159,7 +1237,9 @@ export function buildServer(options: BuildServerOptions = {}) {
         data: {
           ...result,
           rankingRecalculateQueued: rankingJob !== null,
-          rankingRecalculateJobId: rankingJob?.id ?? null
+          rankingRecalculateJobId: rankingJob?.id ?? null,
+          retentionCleanupQueued: retentionCleanupJob !== null,
+          retentionCleanupJobId: retentionCleanupJob?.id ?? null
         }
       };
     } catch (error) {
@@ -1953,15 +2033,21 @@ function getRecommendationStatus(options: {
   rankings: SqliteRankingRepository;
   rankingService: RecommendationRankingService;
   clusterLabels: InterestClusterLabelService;
+  interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
   includeClusterItems?: boolean;
 }) {
   const includeClusterItems = options.includeClusterItems ?? true;
   const activeProvider = options.embeddings.findActiveProvider();
-  const indexes = options.embeddings.listIndexes();
-  const activeIndex = activeProvider ? activeDiagnosticIndexFor(activeProvider.id, indexes) : null;
+  const activeIndex = activeProvider
+    ? includeClusterItems
+      ? activeDiagnosticIndexFor(activeProvider.id, options.embeddings.listIndexes())
+      : options.embeddings.findActiveIndexForProvider(activeProvider.id)
+    : null;
   const activeRankContext = options.rankingService.getActiveRankContext();
-  const coverage = coverageFor(activeIndex);
+  const coverage = includeClusterItems
+    ? coverageFor(activeIndex as EmbeddingIndexListRow | null)
+    : lightweightCoverageFor(options.db, activeIndex);
   const behaviorCounts = Object.fromEntries(
     options.profiles.countBehaviorEvents().map((row) => [row.eventType, row.count])
   );
@@ -1974,28 +2060,34 @@ function getRecommendationStatus(options: {
   const clusterMergeDiagnostics = activeIndex && includeClusterItems
     ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
     : new Map<string, ClusterMergeDiagnostics>();
-  const clusterItems = includeClusterItems
+  const clustersForStatus = includeClusterItems
     ? options.profiles
         .listClusters({
           ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
         })
         .slice(0, 12)
-        .map((cluster, index) =>
-          mapRecommendationCluster(
-            cluster,
-            index + 1,
-            clusterEvidence,
-            options.clusterLabels,
-            clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
-          )
-        )
     : [];
+  const clusterFamilyMap = includeClusterItems
+    ? options.interestFamilies.familyMapForClusters(clustersForStatus.map((cluster) => cluster.id))
+    : new Map<string, RecommendationClusterFamily>();
+  const clusterItems = clustersForStatus.map((cluster, index) =>
+    mapRecommendationCluster(
+      cluster,
+      index + 1,
+      clusterEvidence,
+      options.clusterLabels,
+      clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
+      clusterFamilyMap.get(cluster.id) ?? null
+    )
+  );
+  const familySummary = options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 8);
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
   const lastRankingUpdate = options.rankings.getLastRankingUpdate({ activeRankContext });
-  const profileLearning = isProfileLearning(behaviorCounts, clusters);
+  const profileSignals = options.profiles.countProfileSignals();
+  const profileLearning = isProfileLearning(profileSignals, clusters);
   const warnings = recommendationWarnings({
     activeProvider,
     activeIndex,
@@ -2014,8 +2106,8 @@ function getRecommendationStatus(options: {
     activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
     activeRankContext,
     algorithm: {
-      version: "rec_v2",
-      featureSchemaVersion: 2,
+      version: "rec_v3",
+      featureSchemaVersion: 3,
       cocoonLevel: options.settings.cocoonLevel,
       localLearning: {
         enabled: options.settings.localLearningEnabled,
@@ -2033,6 +2125,7 @@ function getRecommendationStatus(options: {
     behaviorCounts,
     clusters: {
       ...clusters,
+      families: familySummary,
       items: clusterItems
     },
     rankedArticles,
@@ -2079,17 +2172,22 @@ function getRecommendationClusters(
   const clusterMergeDiagnostics = activeIndex
     ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
     : new Map<string, ClusterMergeDiagnostics>();
+  const clusterFamilyMap = options.interestFamilies.familyMapForClusters(
+    limitedClusters.map((cluster) => cluster.id)
+  );
 
   return {
     activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
     total: clusters.length,
+    families: options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 24),
     items: limitedClusters.map((cluster, index) =>
       mapRecommendationCluster(
         cluster,
         index + 1,
         clusterEvidence,
         options.clusterLabels,
-        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics()
+        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
+        clusterFamilyMap.get(cluster.id) ?? null
       )
     )
   };
@@ -2116,6 +2214,8 @@ function enqueueRecommendationMaintenanceTask(
       return service.enqueueClusterMergeDiagnostics();
     case "cluster_auto_merge":
       return service.enqueueClusterAutoMerge();
+    case "interest_family_rebuild":
+      return service.enqueueInterestFamilyRebuild();
     case "evaluation":
       return service.enqueueEvaluation();
     case "ftrl_train":
@@ -2198,6 +2298,7 @@ function getRecommendationTransparency(options: {
   rankings: SqliteRankingRepository;
   rankingService: RecommendationRankingService;
   clusterLabels: InterestClusterLabelService;
+  interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
   maintenanceSettings?: ReturnType<SettingsService["getSettings"]>["recommendationMaintenance"];
   maintenanceScheduleStates?: Array<{
@@ -2229,7 +2330,7 @@ function getRecommendationTransparency(options: {
       currentFormula:
         status.mode === "baseline"
           ? "freshness + source + state fallback"
-          : "semantic + freshness + source + state - negative/dedupe/exposure + canonical MMR rerank",
+          : "family-aware semantic + freshness + source + state - negative/dedupe/exposure + canonical MMR rerank",
       fallbackReason,
       rankingCore: {
         usesRemoteLlm: false,
@@ -2240,7 +2341,7 @@ function getRecommendationTransparency(options: {
       moduleStatus,
       algorithmModules: recommendationAlgorithmModules(status, moduleStatus),
       maintenance: {
-        schemaMigration: "009_interest_cluster_merge_candidates",
+        schemaMigration: "017_interest_families",
         backfillState: "tracked in recommendation_backfill_state",
         explanationAuthority: "article_rank_explanations",
         scoreAuthority: "article_rank_scores",
@@ -2367,6 +2468,18 @@ function recommendationAlgorithmModules(
       summary: `${status.clusters.positive} positive · ${status.clusters.negative} negative`
     },
     {
+      id: "interest_families",
+      name: "Topic family diversity",
+      status:
+        status.clusters.families.concentrationRisk === "high"
+          ? "warning"
+          : moduleStatus.interestFamilies === "not_built" &&
+              status.clusters.positive + status.clusters.negative > 0
+            ? "warning"
+            : "normal",
+      summary: `${status.clusters.families.positive} positive · ${status.clusters.families.negative} negative topic families; concentration risk ${status.clusters.families.concentrationRisk}.`
+    },
+    {
       id: "semantic_ranking",
       name: "Semantic ranking",
       status: recommendationUsingFallback
@@ -2454,7 +2567,8 @@ function mapRecommendationCluster(
   displayIndex: number,
   evidence: InterestClusterEvidenceRow[],
   clusterLabels: InterestClusterLabelService,
-  mergeDiagnostics: ClusterMergeDiagnostics
+  mergeDiagnostics: ClusterMergeDiagnostics,
+  family: RecommendationClusterFamily | null = null
 ) {
   const diagnostics = clusterDiagnostics(cluster, evidence);
   const label = clusterLabels.displayLabelForCluster(
@@ -2484,6 +2598,7 @@ function mapRecommendationCluster(
     feedTitles: label.feedTitles,
     labelDiagnostics: label.labelDiagnostics,
     mergeDiagnostics,
+    family,
     lastGeneratedAt: timestampToIso(label.generatedAt),
     displayIndex,
     weight: cluster.weight,
@@ -2718,6 +2833,10 @@ type RecommendationCoverage = {
 
 type RecommendationMode = "baseline" | "personalized" | "embedding" | "degraded";
 
+const PROFILE_WARMUP_MIN_SIGNAL_COUNT = 8;
+const PROFILE_WARMUP_MIN_SIGNAL_ARTICLE_COUNT = 5;
+const PROFILE_WARMUP_MIN_POSITIVE_CLUSTERS = 2;
+
 function activeDiagnosticIndexFor(
   providerId: string,
   indexes: EmbeddingIndexListRow[]
@@ -2763,7 +2882,7 @@ function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverag
 
 function recommendationMode(input: {
   activeProvider: EmbeddingProviderRow | null;
-  activeIndex: EmbeddingIndexListRow | null;
+  activeIndex: EmbeddingIndexRow | null;
   coverage: RecommendationCoverage;
 }): RecommendationMode {
   if (!input.activeProvider || !input.activeIndex) {
@@ -2799,7 +2918,7 @@ function hasBlockingEmbeddingFailures(coverage: RecommendationCoverage): boolean
 
 function recommendationWarnings(input: {
   activeProvider: EmbeddingProviderRow | null;
-  activeIndex: EmbeddingIndexListRow | null;
+  activeIndex: EmbeddingIndexRow | null;
   coverage: RecommendationCoverage;
   profileLearning: boolean;
 }): Array<{ code: string; message: string }> {
@@ -2810,24 +2929,24 @@ function recommendationWarnings(input: {
       code: "NO_PROVIDER",
       message: "No active embedding provider and index are configured; recommendations are using baseline ranking."
     });
-    return warnings;
-  }
-
-  if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
+  } else if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
     warnings.push({
       code: "EMBEDDING_PENDING",
       message: "Embedding generation is still running or incomplete for the active index."
     });
   }
 
-  if (hasBlockingEmbeddingFailures(input.coverage) || input.activeIndex.status === "failed") {
+  if (
+    input.activeIndex &&
+    (hasBlockingEmbeddingFailures(input.coverage) || input.activeIndex.status === "failed")
+  ) {
     warnings.push({
       code: "EMBEDDING_JOB_FAILED",
       message: "Embedding generation has failed jobs for the active index."
     });
   }
 
-  if (input.activeProvider.lastTestStatus === "failed") {
+  if (input.activeProvider?.lastTestStatus === "failed") {
     warnings.push({
       code: "PROVIDER_TEST_FAILED",
       message: "The active embedding provider's latest connection test failed."
@@ -2845,11 +2964,14 @@ function recommendationWarnings(input: {
 }
 
 function isProfileLearning(
-  behaviorCounts: Record<string, number>,
+  profileSignals: ProfileSignalCountRow,
   clusters: { positive: number; negative: number }
 ): boolean {
-  const behaviorTotal = Object.values(behaviorCounts).reduce((sum, count) => sum + count, 0);
-  return behaviorTotal < 3 || clusters.positive + clusters.negative === 0;
+  return (
+    profileSignals.signalCount < PROFILE_WARMUP_MIN_SIGNAL_COUNT ||
+    profileSignals.articleCount < PROFILE_WARMUP_MIN_SIGNAL_ARTICLE_COUNT ||
+    clusters.positive < PROFILE_WARMUP_MIN_POSITIVE_CLUSTERS
+  );
 }
 
 function rankingSettingsChanged(
@@ -2862,6 +2984,22 @@ function rankingSettingsChanged(
     before.localLearningShadowMode !== after.localLearningShadowMode ||
     before.explorationEnabled !== after.explorationEnabled ||
     before.evaluationEnabled !== after.evaluationEnabled
+  );
+}
+
+function retentionSettingsRequireCleanupQueue(
+  before: ReturnType<SettingsService["getSettings"]>["retention"],
+  after: ReturnType<SettingsService["getSettings"]>["retention"]
+): boolean {
+  if (after.retentionDays === 0) {
+    return false;
+  }
+
+  return (
+    before.retentionDays === 0 ||
+    after.retentionDays < before.retentionDays ||
+    (before.keepFavorites && !after.keepFavorites) ||
+    (before.keepReadLater && !after.keepReadLater)
   );
 }
 
@@ -2911,6 +3049,7 @@ function recommendationModuleStatus(
     ) > 0;
   const duplicateBuilt = countIfTable(db, "duplicate_groups") > 0;
   const evidenceRows = countIfTable(db, "interest_cluster_evidence");
+  const interestFamilyRows = countIfTable(db, "interest_families");
   const latestEval = db
     .prepare(
       `
@@ -2956,6 +3095,7 @@ function recommendationModuleStatus(
       : "disabled",
     evaluation: !algorithm.evaluation.enabled ? "unavailable" : evalMode,
     duplicate: nearDuplicateActive ? "near_duplicate_active" : duplicateBuilt ? "exact_scaffold" : "not_built",
+    interestFamilies: interestFamilyRows > 0 ? "active" : "not_built",
     evidence: evidenceRows > 0 ? "live_evidence" : "dynamic_fallback",
     stalePendingEmbeddingJobs,
     failedRankingJobs
@@ -3091,13 +3231,132 @@ function mapRecommendationProvider(provider: EmbeddingProviderRow) {
   };
 }
 
-function mapRecommendationIndex(index: EmbeddingIndexListRow) {
+function mapRecommendationIndex(index: EmbeddingIndexRow) {
   return {
     id: index.id,
     status: index.status,
     model: index.model,
     dimension: index.dimension
   };
+}
+
+function lightweightCoverageFor(
+  db: DibaoDatabase,
+  index: EmbeddingIndexRow | null
+): RecommendationCoverage {
+  if (!index) {
+    return coverageFor(null);
+  }
+
+  const row = db
+    .prepare(
+      `
+        with eligible_article_rows as (
+          select
+            a.id as articleId,
+            coalesce(a.content_hash, a.id || ':' || a.updated_at) as contentHash
+          from articles a
+          join feeds f on f.id = a.feed_id
+          left join article_contents ac on ac.article_id = a.id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and (
+              trim(coalesce(a.title, '')) != ''
+              or trim(coalesce(a.summary, '')) != ''
+              or trim(substr(coalesce(ac.content_text, ''), 1, 256)) != ''
+            )
+        )
+        select
+          count(*) as candidateCount,
+          sum(case when ae.article_id is null then 1 else 0 end) as missingEmbeddingCount,
+          sum(case when ae.article_id is not null and ae.content_hash != ear.contentHash then 1 else 0 end) as staleEmbeddingCount,
+          sum(case when ae.article_id is not null and ae.content_hash = ear.contentHash then 1 else 0 end) as coveredArticleCount,
+          (
+            select count(*)
+            from article_embeddings ae_count
+            where ae_count.embedding_index_id = ?
+          ) as embeddingCount,
+          (
+            select count(*)
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status in ('queued', 'running')
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+          ) as pendingJobs,
+          (
+            select count(*)
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status = 'failed'
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+          ) as failedJobs,
+          (
+            select coalesce(j.finished_at, j.updated_at)
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status = 'failed'
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+            order by coalesce(j.finished_at, j.updated_at) desc, j.id desc
+            limit 1
+          ) as lastFailedAt,
+          (
+            select j.error
+            from jobs j
+            where j.type = 'embedding_generate'
+              and j.status = 'failed'
+              and j.payload_json is not null
+              and json_valid(j.payload_json)
+              and json_extract(j.payload_json, '$.embeddingIndexId') = ?
+            order by coalesce(j.finished_at, j.updated_at) desc, j.id desc
+            limit 1
+          ) as lastError
+        from eligible_article_rows ear
+        left join article_embeddings ae
+          on ae.article_id = ear.articleId
+         and ae.embedding_index_id = ?
+      `
+    )
+    .get(index.id, index.id, index.id, index.id, index.id, index.id) as
+    | {
+        candidateCount: number;
+        missingEmbeddingCount: number | null;
+        staleEmbeddingCount: number | null;
+        coveredArticleCount: number | null;
+        embeddingCount: number;
+        pendingJobs: number;
+        failedJobs: number;
+        lastFailedAt: number | null;
+        lastError: string | null;
+      }
+    | undefined;
+
+  const candidateCount = row?.candidateCount ?? 0;
+  const coveredArticleCount = row?.coveredArticleCount ?? 0;
+  return {
+    candidateCount,
+    eligibleArticleCount: candidateCount,
+    missingEmbeddingCount: row?.missingEmbeddingCount ?? 0,
+    staleEmbeddingCount: row?.staleEmbeddingCount ?? 0,
+    coveredArticleCount,
+    embeddingCount: row?.embeddingCount ?? 0,
+    coverageRatio: coverageRatioForCounts(coveredArticleCount, candidateCount),
+    pendingJobs: row?.pendingJobs ?? 0,
+    failedJobs: row?.failedJobs ?? 0,
+    lastFailedAt: row?.lastFailedAt ?? null,
+    lastError: row?.lastError ?? null
+  };
+}
+
+function coverageRatioForCounts(coveredArticleCount: number, candidateCount: number): number {
+  return candidateCount === 0 ? 0 : Math.min(1, coveredArticleCount / candidateCount);
 }
 
 function mapCoverage(coverage: RecommendationCoverage) {
@@ -3125,6 +3384,8 @@ function cocoonParametersForStatus(level: number) {
     mmrLambda: roundMetric(lerp(0.55, 0.88)),
     explorationRatio: roundMetric(lerp(0.08, 0.005)),
     sourceCapTop20: Math.round(lerp(3, 12)),
+    familyCapTop20: Math.round(lerp(4, 7)),
+    familyCapTop50: Math.round(lerp(8, 14)),
     pendingEmbeddingFloor: roundMetric(lerp(0.12, 0.03)),
     freshnessWeight: roundMetric(lerp(1.15, 0.75)),
     negativeSemanticStrength: roundMetric(lerp(0.75, 1.15)),
@@ -3886,7 +4147,7 @@ function parseDiscoverFeedBody(body: DiscoverFeedBody | undefined):
 }
 
 function parseAuthCredentialBody(body: AuthCredentialBody | undefined):
-  | { ok: true; username: string; password: string }
+  | { ok: true; username: string; password: string; telemetryEnabled?: boolean }
   | { ok: false; message: string; details?: unknown } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, message: "request body must be an object" };
@@ -3908,10 +4169,25 @@ function parseAuthCredentialBody(body: AuthCredentialBody | undefined):
     };
   }
 
+  if (
+    Object.hasOwn(body, "telemetryEnabled") &&
+    typeof body.telemetryEnabled !== "boolean"
+  ) {
+    return {
+      ok: false,
+      message: "telemetryEnabled must be a boolean",
+      details: { field: "telemetryEnabled" }
+    };
+  }
+
+  const telemetryEnabled =
+    typeof body.telemetryEnabled === "boolean" ? body.telemetryEnabled : undefined;
+
   return {
     ok: true,
     username: body.username,
-    password: body.password
+    password: body.password,
+    telemetryEnabled
   };
 }
 
@@ -4438,7 +4714,7 @@ function mapArticleListItem(article: ArticleListItemRow) {
     title: article.title,
     url: article.url,
     author: article.author,
-    summary: article.summary,
+    summary: articleListSummaryPreview(article.summary),
     publishedAt: timestampToIso(article.publishedAt),
     discoveredAt: timestampToIsoValue(article.discoveredAt),
     state: article.state,
@@ -4454,13 +4730,41 @@ function mapArticleListItem(article: ArticleListItemRow) {
 }
 
 function mapArticleDetail(article: ArticleDetailRow) {
+  const hasBody = Boolean(article.contentHtml || article.contentText);
+
   return {
     ...mapArticleListItem(article),
     contentHtml: article.contentHtml,
     contentText: article.contentText,
+    summary: hasBody ? articleListSummaryPreview(article.summary) : article.summary,
     extractionStatus: article.extractionStatus,
     extractionError: article.extractionError
   };
+}
+
+function articleListSummaryPreview(summary: string | null): string | null {
+  if (!summary) {
+    return null;
+  }
+
+  const text = summary
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  return text.length > 360 ? `${text.slice(0, 360)}...` : text;
 }
 
 function timestampToIso(value: number | null): string | null {

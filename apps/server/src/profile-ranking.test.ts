@@ -22,6 +22,7 @@ import {
   PROFILE_EVENT_PROCESS_JOB_TYPE,
   ProfileEventProcessJobService
 } from "./profile-event-job-service.js";
+import { ProfileRebuildService } from "./profile-rebuild-service.js";
 import { ProfileService } from "./profile-service.js";
 import {
   RankingRecalculateJobService,
@@ -53,7 +54,7 @@ function buildServer(options: Parameters<typeof buildRealServer>[0] = {}) {
 }
 
 describe("profile algorithm and recommendation ranking", () => {
-  it("processes a single event idempotently and does not replay it for a new content hash", () => {
+  it("processes a single event idempotently and does not replay it after a content hash change", () => {
     const fixture = createProfileFixture();
     const { actions, articles, db, profile, profiles, vectorStore } = fixture;
 
@@ -70,9 +71,9 @@ describe("profile algorithm and recommendation ranking", () => {
 
       expect(profiles.listClusters({ embeddingIndexId: "index_profile" })).toHaveLength(1);
       expect(profiles.listClusters({ embeddingIndexId: "index_profile" })[0]).toMatchObject({
-        label: null,
-        weight: 6
+        label: null
       });
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })[0]?.weight).toBeCloseTo(4.2);
 
       articles.upsert({
         id: "article_liked",
@@ -98,14 +99,152 @@ describe("profile algorithm and recommendation ranking", () => {
       profile.processArticleEvents(["article_liked"]);
 
       expect(profiles.listClusters({ embeddingIndexId: "index_profile" })).toHaveLength(1);
-      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })[0]?.weight).toBe(6);
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })[0]?.weight).toBeCloseTo(4.2);
 
       const snapshot = JSON.parse(profiles.getTopicSnapshot("article_liked") ?? "{}") as {
         profileV0?: Record<string, Record<string, { processedEventIds?: string[] }>>;
       };
-      expect(
-        snapshot.profileV0?.index_profile?.hash_liked_v2?.processedEventIds
-      ).toContain(result!.eventId);
+      expect(snapshot.profileV0?.index_profile?.hash_liked?.processedEventIds).toContain(
+        result!.eventId
+      );
+      expect(snapshot.profileV0?.index_profile?.hash_liked_v2?.processedEventIds).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps a valid profile signal when article updated_at is newer but content hash still matches", () => {
+    const fixture = createProfileFixture();
+    const { actions, articles, db, profile, profiles } = fixture;
+
+    try {
+      const result = actions.record({
+        articleId: "article_liked",
+        type: "favorite",
+        now: 2000
+      });
+      articles.upsert({
+        id: "article_liked",
+        feedId: "feed_profile",
+        url: "https://example.com/article_liked",
+        canonicalUrl: "https://example.com/article_liked",
+        title: "Liked profile topic",
+        summary: "The same content refreshed by the feed.",
+        publishedAt: 1000,
+        discoveredAt: 1000,
+        contentHash: "hash_liked",
+        dedupeKey: "article_liked",
+        now: 3000
+      });
+
+      profile.processEvent(result!.eventId);
+
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })).toHaveLength(1);
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })[0]?.weight).toBeCloseTo(4.2);
+      expect(clusterEvidenceCount(db)).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not mark a stale embedding hash as processed before the current vector arrives", () => {
+    const fixture = createProfileFixture();
+    const { actions, articles, db, profile, profiles, vectorStore } = fixture;
+
+    try {
+      const result = actions.record({
+        articleId: "article_liked",
+        type: "favorite",
+        now: 2000
+      });
+      articles.upsert({
+        id: "article_liked",
+        feedId: "feed_profile",
+        url: "https://example.com/article_liked",
+        canonicalUrl: "https://example.com/article_liked",
+        title: "Liked profile topic rewritten",
+        summary: "A changed article body.",
+        publishedAt: 1000,
+        discoveredAt: 1000,
+        contentHash: "hash_liked_v2",
+        dedupeKey: "article_liked",
+        now: 3000
+      });
+
+      profile.processEvent(result!.eventId);
+
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })).toHaveLength(0);
+      expect(profiles.getTopicSnapshot("article_liked")).toBeNull();
+
+      vectorStore.upsertArticleVector({
+        articleId: "article_liked",
+        embeddingIndexId: "index_profile",
+        vector: [1, 0, 0],
+        contentHash: "hash_liked_v2",
+        now: 4000
+      });
+      profile.processArticleEvents(["article_liked"]);
+
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })).toHaveLength(1);
+      expect(clusterEvidenceCount(db)).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds active-index profile clusters from behavior history without recomputing embeddings", () => {
+    const fixture = createProfileFixture();
+    const { actions, db, profile, profiles } = fixture;
+
+    try {
+      const result = actions.record({
+        articleId: "article_liked",
+        type: "favorite",
+        now: 2000
+      });
+      profiles.upsertTopicSnapshot({
+        articleId: "article_liked",
+        feedId: "feed_profile",
+        topicSnapshotJson: JSON.stringify({
+          profileV0: {
+            index_profile: {
+              hash_liked: {
+                processedEventIds: [result!.eventId]
+              }
+            }
+          }
+        }),
+        now: 3000
+      });
+
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })).toHaveLength(0);
+
+      const rebuild = new ProfileRebuildService({
+        db,
+        profile
+      });
+      const rebuildResult = rebuild.rebuildActiveIndexProfile({
+        rebuildLabels: false,
+        rebuildFamilies: false,
+        recalculateRanking: false
+      });
+
+      expect(rebuildResult).toMatchObject({
+        embeddingIndexId: "index_profile",
+        reset: {
+          snapshotsTouched: 1
+        },
+        replay: {
+          articleCount: 1,
+          profileChanged: true
+        },
+        after: {
+          clusters: 1,
+          evidence: 1
+        }
+      });
+      expect(profiles.listClusters({ embeddingIndexId: "index_profile" })[0]?.weight).toBeCloseTo(4.2);
+      expect(clusterEvidenceCount(db)).toBe(1);
     } finally {
       db.close();
     }
@@ -200,7 +339,8 @@ describe("profile algorithm and recommendation ranking", () => {
       profile.processEvent(favorite!.eventId);
 
       const clusters = profiles.listClusters({ embeddingIndexId: "index_like", polarity: "positive" });
-      expect(clusters.map((cluster) => cluster.weight)).toEqual([8, 6]);
+      expect(clusters[0]?.weight).toBeCloseTo(5.6);
+      expect(clusters[1]?.weight).toBeCloseTo(4.2);
       expect(clusters.map((cluster) => cluster.label)).toEqual([null, null]);
       expect(feedStats(db, "feed_like").positiveScore).toBeGreaterThan(
         feedStats(db, "feed_favorite").positiveScore
@@ -335,7 +475,7 @@ describe("profile algorithm and recommendation ranking", () => {
     }
   });
 
-  it("orders recommended articles by canonical rerank_position before score and keeps latest date-based", () => {
+  it("orders recommended articles by score before chunk-local rerank_position and keeps latest date-based", () => {
     const db = openDatabase(tempDatabasePath(), { migrate: true });
     const feeds = new SqliteFeedRepository(db);
     const articles = new SqliteArticleRepository(db);
@@ -382,7 +522,7 @@ describe("profile algorithm and recommendation ranking", () => {
 
       expect(
         articles.list({ view: "recommended", rankContext: "ctx_rerank" }).items.map((article) => article.id)
-      ).toEqual(["article_position_1", "article_position_2"]);
+      ).toEqual(["article_position_2", "article_position_1"]);
       expect(articles.list().items.map((article) => article.id)).toEqual([
         "article_position_2",
         "article_position_1"
@@ -430,6 +570,110 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(
         articles.list({ view: "recommended", rankContext: "ctx_score_fallback" }).items.map((article) => article.id)
       ).toEqual(["article_score_high", "article_score_low"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps mature non-AI families in the top window when AI has more matching clusters", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const embeddings = new SqliteEmbeddingRepository(db);
+    const profiles = new SqliteProfileRepository(db);
+    const rankings = new SqliteRankingRepository(db);
+    const vectorStore = new SqliteVecVectorStore(db);
+
+    try {
+      embeddings.upsertProvider({
+        id: "provider_family_rank",
+        type: "openai_compatible",
+        name: "Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture",
+        dimension: 3,
+        enabled: true,
+        now: 1000
+      });
+      embeddings.createIndex({
+        id: "index_family_rank",
+        providerId: "provider_family_rank",
+        model: "fixture",
+        dimension: 3,
+        status: "active",
+        now: 1000
+      });
+      for (const feedId of ["feed_ai_rank", "feed_finance_rank", "feed_science_rank"]) {
+        feeds.upsert({
+          id: feedId,
+          title: feedId,
+          feedUrl: `https://example.com/${feedId}.xml`,
+          now: 1000
+        });
+      }
+
+      insertRankingFamily(db, profiles, {
+        familyId: "family_ai_rank",
+        displayLabel: "AI",
+        clusters: [
+          ["cluster_ai_rank_1", [1, 0, 0]],
+          ["cluster_ai_rank_2", [0.99, 0.01, 0]],
+          ["cluster_ai_rank_3", [0.98, 0.02, 0]]
+        ],
+        dominanceRatio: 0.6
+      });
+      insertRankingFamily(db, profiles, {
+        familyId: "family_finance_rank",
+        displayLabel: "Finance",
+        clusters: [["cluster_finance_rank", [0, 1, 0]]],
+        dominanceRatio: 0.25
+      });
+      insertRankingFamily(db, profiles, {
+        familyId: "family_science_rank",
+        displayLabel: "Science",
+        clusters: [["cluster_science_rank", [0, 0, 1]]],
+        dominanceRatio: 0.15
+      });
+
+      for (let index = 0; index < 24; index += 1) {
+        insertRankCandidate(articles, vectorStore, {
+          articleId: `article_ai_family_${index}`,
+          feedId: "feed_ai_rank",
+          title: `AI family ${index}`,
+          vector: [1, 0, 0],
+          publishedAt: 10_000 - index
+        });
+      }
+      for (let index = 0; index < 8; index += 1) {
+        insertRankCandidate(articles, vectorStore, {
+          articleId: `article_finance_family_${index}`,
+          feedId: "feed_finance_rank",
+          title: `Finance family ${index}`,
+          vector: [0, 1, 0],
+          publishedAt: 9_000 - index
+        });
+        insertRankCandidate(articles, vectorStore, {
+          articleId: `article_science_family_${index}`,
+          feedId: "feed_science_rank",
+          title: `Science family ${index}`,
+          vector: [0, 0, 1],
+          publishedAt: 8_000 - index
+        });
+      }
+
+      const ranking = new RecommendationRankingService({
+        db,
+        embeddings,
+        profiles,
+        rankings,
+        now: () => 20_000
+      });
+      ranking.recalculateAll();
+
+      const top20 = recommendedIds(db).slice(0, 20);
+      expect(top20.filter((id) => id.startsWith("article_ai_family_")).length).toBeLessThan(20);
+      expect(top20.some((id) => id.startsWith("article_finance_family_"))).toBe(true);
+      expect(top20.some((id) => id.startsWith("article_science_family_"))).toBe(true);
     } finally {
       db.close();
     }
@@ -885,7 +1129,7 @@ describe("profile algorithm and recommendation ranking", () => {
             created_at,
             updated_at
           )
-          values ('ftrl_active_test', 'rec_v2', 2, 'active', 60, 0.25, ?, 5000, 5000)
+          values ('ftrl_active_test', 'rec_v3', 3, 'active', 60, 0.25, ?, 5000, 5000)
         `
       ).run(JSON.stringify({ highQualitySamples: 60 }));
       db.prepare(
@@ -1027,6 +1271,15 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(payload.components?.wasExploration).toBe(true);
       expect(payload.components?.explorationBucket).toEqual(expect.any(String));
       expect(payload.components?.explorationReason).toEqual(expect.any(String));
+      expect(rankingLevel1.explainArticle(level1Exploration[0]!.articleId)?.reasons).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "exploration",
+            label: "Break-cocoon exploration",
+            impact: "neutral"
+          })
+        ])
+      );
 
       const rankingLevel10 = new RecommendationRankingService({
         db,
@@ -1219,6 +1472,139 @@ describe("profile algorithm and recommendation ranking", () => {
       expect(positive.weight).toBeLessThan(10);
       expect(negative.weight).toBeLessThan(10);
       expect(negative.weight).toBeGreaterThan(positive.weight);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("uses configured positive cluster limits when trimming profile clusters", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const embeddings = new SqliteEmbeddingRepository(db);
+    const profiles = new SqliteProfileRepository(db);
+
+    try {
+      embeddings.upsertProvider({
+        id: "provider_trim_config",
+        type: "openai_compatible",
+        name: "Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture",
+        dimension: 3,
+        enabled: true,
+        now: 0
+      });
+      embeddings.createIndex({
+        id: "index_trim_config",
+        providerId: "provider_trim_config",
+        model: "fixture",
+        dimension: 3,
+        now: 0
+      });
+      for (let index = 0; index < 30; index += 1) {
+        profiles.upsertCluster({
+          id: `cluster_trim_large_${index}`,
+          embeddingIndexId: "index_trim_config",
+          polarity: "positive",
+          centroidVectorBlob: toVectorBlob([0, 0, 0]),
+          weight: 30 - index,
+          sampleCount: 2,
+          lastMatchedAt: 1000,
+          now: 1000 + index
+        });
+      }
+
+      new ProfileService({
+        embeddings,
+        profiles,
+        getClusterLimits: () => ({
+          maxPositiveInterestClusters: 32,
+          maxNegativeInterestClusters: 16
+        }),
+        now: () => 2000
+      }).decayClusters();
+      expect(profiles.listClusters({ embeddingIndexId: "index_trim_config", polarity: "positive" }))
+        .toHaveLength(30);
+
+      new ProfileService({
+        embeddings,
+        profiles,
+        getClusterLimits: () => ({
+          maxPositiveInterestClusters: 12,
+          maxNegativeInterestClusters: 16
+        }),
+        now: () => 3000
+      }).decayClusters();
+      const remaining = profiles.listClusters({
+        embeddingIndexId: "index_trim_config",
+        polarity: "positive"
+      });
+      expect(remaining).toHaveLength(12);
+      expect(remaining.map((cluster) => cluster.id)).toEqual(
+        Array.from({ length: 12 }, (_, index) => `cluster_trim_large_${index}`)
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("trims older low-ranked clusters before newly created single-sample clusters", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    const embeddings = new SqliteEmbeddingRepository(db);
+    const profiles = new SqliteProfileRepository(db);
+    const now = 2 * 86_400_000;
+
+    try {
+      embeddings.upsertProvider({
+        id: "provider_trim_new",
+        type: "openai_compatible",
+        name: "Provider",
+        baseUrl: "https://api.example.com/v1",
+        model: "fixture",
+        dimension: 3,
+        enabled: true,
+        now: 0
+      });
+      embeddings.createIndex({
+        id: "index_trim_new",
+        providerId: "provider_trim_new",
+        model: "fixture",
+        dimension: 3,
+        now: 0
+      });
+      for (const cluster of [
+        { id: "cluster_keep_top_0", weight: 10, sampleCount: 3, createdAt: 0 },
+        { id: "cluster_keep_top_1", weight: 9, sampleCount: 3, createdAt: 0 },
+        { id: "cluster_delete_mature_tail", weight: 8, sampleCount: 3, createdAt: 0 },
+        { id: "cluster_keep_new_tail", weight: 1, sampleCount: 1, createdAt: now },
+        { id: "cluster_delete_old_tail", weight: 0.9, sampleCount: 3, createdAt: 0 }
+      ]) {
+        profiles.upsertCluster({
+          id: cluster.id,
+          embeddingIndexId: "index_trim_new",
+          polarity: "positive",
+          centroidVectorBlob: toVectorBlob([0, 0, 0]),
+          weight: cluster.weight,
+          sampleCount: cluster.sampleCount,
+          lastMatchedAt: now,
+          now: cluster.createdAt
+        });
+      }
+
+      new ProfileService({
+        embeddings,
+        profiles,
+        getClusterLimits: () => ({
+          maxPositiveInterestClusters: 3,
+          maxNegativeInterestClusters: 16
+        }),
+        now: () => now
+      }).decayClusters();
+
+      expect(
+        profiles
+          .listClusters({ embeddingIndexId: "index_trim_new", polarity: "positive" })
+          .map((cluster) => cluster.id)
+      ).toEqual(["cluster_keep_top_0", "cluster_keep_top_1", "cluster_keep_new_tail"]);
     } finally {
       db.close();
     }
@@ -1452,9 +1838,122 @@ function insertArticleForFeed(
   });
 }
 
+function insertRankCandidate(
+  articles: SqliteArticleRepository,
+  vectorStore: SqliteVecVectorStore,
+  input: {
+    articleId: string;
+    feedId: string;
+    title: string;
+    vector: [number, number, number];
+    publishedAt: number;
+  }
+): void {
+  insertArticleForFeed(
+    articles,
+    input.articleId,
+    input.feedId,
+    input.title,
+    `hash_${input.articleId}`,
+    input.publishedAt
+  );
+  vectorStore.upsertArticleVector({
+    articleId: input.articleId,
+    embeddingIndexId: "index_family_rank",
+    vector: input.vector,
+    contentHash: `hash_${input.articleId}`,
+    now: input.publishedAt
+  });
+}
+
+function insertRankingFamily(
+  db: DibaoDatabase,
+  profiles: SqliteProfileRepository,
+  input: {
+    familyId: string;
+    displayLabel: string;
+    clusters: Array<[string, [number, number, number]]>;
+    dominanceRatio: number;
+  }
+): void {
+  const now = 5_000;
+  for (const [clusterId, vector] of input.clusters) {
+    profiles.upsertCluster({
+      id: clusterId,
+      embeddingIndexId: "index_family_rank",
+      polarity: "positive",
+      label: input.displayLabel,
+      centroidVectorBlob: toVectorBlob(vector),
+      weight: 12,
+      sampleCount: 6,
+      now
+    });
+  }
+  db.prepare(
+    `
+      insert into interest_families (
+        id,
+        embedding_index_id,
+        polarity,
+        display_label,
+        centroid_vector_blob,
+        weight,
+        cluster_count,
+        support_article_count,
+        support_event_count,
+        source_count,
+        strong_signal_count,
+        top_source_share,
+        maturity,
+        dominance_ratio,
+        label_terms_json,
+        representative_cluster_ids_json,
+        diagnostics_json,
+        created_at,
+        updated_at
+      )
+      values (?, 'index_family_rank', 'positive', ?, ?, ?, ?, 12, 12, 3, 12, 0.34, 1, ?, ?, ?, ?, ?, ?)
+    `
+  ).run(
+    input.familyId,
+    input.displayLabel,
+    toVectorBlob(input.clusters[0]?.[1] ?? [1, 0, 0]),
+    input.clusters.length * 12,
+    input.clusters.length,
+    input.dominanceRatio,
+    JSON.stringify([input.displayLabel]),
+    JSON.stringify(input.clusters.map(([clusterId]) => clusterId)),
+    JSON.stringify({
+      lowSupportClusterCount: 0,
+      singleArticleClusterCount: 0,
+      concentrationRisk: input.dominanceRatio > 0.5 ? "medium" : "low"
+    }),
+    now,
+    now
+  );
+  const insertMember = db.prepare(
+    `
+      insert into interest_cluster_family_members (
+        cluster_id,
+        family_id,
+        embedding_index_id,
+        polarity,
+        membership_confidence,
+        centroid_similarity,
+        created_at,
+        updated_at
+      )
+      values (?, ?, 'index_family_rank', 'positive', 1, 1, ?, ?)
+    `
+  );
+  for (const [clusterId] of input.clusters) {
+    insertMember.run(clusterId, input.familyId, now, now);
+  }
+}
+
 function recommendedIds(
   db: DibaoDatabase,
-  rankContext = "rec_v2:embedding:cocoon_5:schema_2",
+  rankContext = "rec_v3:embedding:cocoon_5:schema_3",
   limit = 100
 ): string[] {
   return new SqliteArticleRepository(db)
@@ -1470,7 +1969,7 @@ function activeScoreForContext(
   const contexts =
     rankContext === "base"
       ? ["base"]
-      : [rankContext, "rec_v2:embedding:cocoon_5:schema_2"];
+      : [rankContext, "rec_v3:embedding:cocoon_5:schema_3"];
   const row = db
     .prepare(
       `
@@ -1478,7 +1977,7 @@ function activeScoreForContext(
         from article_rank_scores
         where article_id = ?
           and rank_context in (${contexts.map(() => "?").join(", ")})
-        order by case when rank_context = 'rec_v2:embedding:cocoon_5:schema_2' then 0 else 1 end
+        order by case when rank_context = 'rec_v3:embedding:cocoon_5:schema_3' then 0 else 1 end
       `
     )
     .get(articleId, ...contexts) as { score: number } | undefined;
@@ -1586,8 +2085,8 @@ function activeScore(db: DibaoDatabase, articleId: string): number | null {
         select score
         from article_rank_scores
         where article_id = ?
-          and rank_context in ('index_profile', 'rec_v2:embedding:cocoon_5:schema_2')
-        order by case when rank_context = 'rec_v2:embedding:cocoon_5:schema_2' then 0 else 1 end
+          and rank_context in ('index_profile', 'rec_v3:embedding:cocoon_5:schema_3')
+        order by case when rank_context = 'rec_v3:embedding:cocoon_5:schema_3' then 0 else 1 end
       `
     )
     .get(articleId) as { score: number } | undefined;
@@ -1602,7 +2101,7 @@ function activeBm25Score(db: DibaoDatabase, articleId: string): number | null {
         select bm25_score as bm25Score
         from article_rank_scores
         where article_id = ?
-          and rank_context = 'rec_v2:embedding:cocoon_5:schema_2'
+          and rank_context = 'rec_v3:embedding:cocoon_5:schema_3'
       `
     )
     .get(articleId) as { bm25Score: number | null } | undefined;
@@ -1665,6 +2164,10 @@ function maintenanceJob(type: Parameters<RecommendationMaintenanceService["handl
     createdAt: 0,
     updatedAt: 0
   };
+}
+
+function clusterEvidenceCount(db: DibaoDatabase): number {
+  return countRows(db, "interest_cluster_evidence");
 }
 
 function countRows(db: DibaoDatabase, tableName: string): number {

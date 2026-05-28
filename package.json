@@ -2,12 +2,14 @@
   "name": "dibao",
   "version": "0.1.0",
   "private": true,
+  "license": "BUSL-1.1",
   "type": "module",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "prebuild": "node scripts/prepare-sentry-config.mjs",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
@@ -19,7 +21,8 @@
     "smoke:docker-recommendation": "node scripts/smoke/docker-recommendation-smoke.mjs",
     "test:ollama:optional": "node scripts/smoke/ollama-probe.mjs",
     "spike:sqlite-vec": "node scripts/spikes/sqlite-vec-node.mjs",
-    "ops:migrate:recommendation-v2": "tsx scripts/ops/recommendation-v2-live-migrate.ts"
+    "ops:migrate:recommendation-v2": "tsx scripts/ops/recommendation-v2-live-migrate.ts",
+    "ops:rebuild:profile": "tsx apps/server/src/profile-rebuild-cli.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

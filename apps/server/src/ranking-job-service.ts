@@ -5,12 +5,17 @@ import type { ArticleRankingRecalculator } from "./ranking-service.js";
 
 export const RANKING_RECALCULATE_JOB_TYPE = "ranking_recalculate" as const;
 export const RANKING_RECALCULATE_ARTICLE_LIMIT = 500;
-export const RANKING_RECALCULATE_CHUNK_SIZE = 500;
+export const RANKING_RECALCULATE_CHUNK_SIZE = 100;
+export const RANKING_RECALCULATE_CHUNK_DELAY_MS = 60_000;
 
 export type RankingRecalculateJobPayload = {
   articleIds?: string[];
   cursor?: string | null;
   limit?: number;
+};
+
+export type RankingRecalculateEnqueueOptions = {
+  delayMs?: number;
 };
 
 export type RankingRecalculateJobServiceOptions = {
@@ -29,7 +34,7 @@ export class RankingRecalculateJobService {
     this.jobIdFactory = options.jobIdFactory ?? randomJobId;
   }
 
-  enqueueAll(): JobRow {
+  enqueueAll(options: RankingRecalculateEnqueueOptions = {}): JobRow {
     const existing = this.options.jobs
       .listOpenByType(RANKING_RECALCULATE_JOB_TYPE)
       .find((job) => {
@@ -46,7 +51,7 @@ export class RankingRecalculateJobService {
       type: RANKING_RECALCULATE_JOB_TYPE,
       payloadJson: null,
       maxAttempts: 2,
-      runAfter: now,
+      runAfter: now + Math.max(0, options.delayMs ?? 0),
       now
     });
   }
@@ -87,10 +92,14 @@ export class RankingRecalculateJobService {
     if (payload.articleIds) {
       this.options.ranking.recalculateArticles(payload.articleIds);
     } else {
+      const limit = Math.min(
+        payload.limit ?? RANKING_RECALCULATE_CHUNK_SIZE,
+        RANKING_RECALCULATE_CHUNK_SIZE
+      );
       const result = this.options.ranking.recalculateChunk
         ? this.options.ranking.recalculateChunk({
             cursor: payload.cursor ?? null,
-            limit: payload.limit ?? RANKING_RECALCULATE_CHUNK_SIZE
+            limit
           })
         : {
             processed: this.options.ranking.recalculateAll(),
@@ -103,10 +112,10 @@ export class RankingRecalculateJobService {
           type: RANKING_RECALCULATE_JOB_TYPE,
           payloadJson: JSON.stringify({
             cursor: result.nextCursor,
-            limit: payload.limit ?? RANKING_RECALCULATE_CHUNK_SIZE
+            limit
           } satisfies RankingRecalculateJobPayload),
           maxAttempts: 2,
-          runAfter: now,
+          runAfter: now + RANKING_RECALCULATE_CHUNK_DELAY_MS,
           now
         });
       }

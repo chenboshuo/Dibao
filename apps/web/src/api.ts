@@ -200,12 +200,23 @@ export type RankExplanationReasonType =
   | "state"
   | "fallback"
   | "negative"
-  | "penalty";
+  | "penalty"
+  | "exploration";
 
 export type RankExplanationReason = {
   type: RankExplanationReasonType;
   label: string;
   impact: "positive" | "negative" | "neutral";
+  family?: {
+    id: string;
+    label: string;
+    maturity: number;
+    dominanceRatio: number;
+    matchedFamilyCount: number;
+  };
+  recentIntent?: {
+    polarity: "positive";
+  };
   cluster?: RecommendationClusterItem & {
     similarity: number;
   };
@@ -318,6 +329,9 @@ export type AppSettings = {
     markScrolledArticlesIgnored: boolean;
     removeReadLaterOnReadComplete: boolean;
   };
+  telemetry: {
+    enabled: boolean;
+  };
   retention: {
     retentionDays: number;
     keepFavorites: boolean;
@@ -328,12 +342,27 @@ export type AppSettings = {
     preferSource: number;
     preferDiversity: number;
     cocoonLevel: number;
+    maxPositiveInterestClusters: number;
+    maxNegativeInterestClusters: number;
     localLearningEnabled: boolean;
     localLearningShadowMode: boolean;
     explorationEnabled: boolean;
     evaluationEnabled: boolean;
   };
   recommendationMaintenance: RecommendationMaintenanceSettings;
+};
+
+export type LatestReleaseStatus = {
+  currentVersion: string;
+  latestVersion: string | null;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  publishedAt: string | null;
+  checkedAt: string | null;
+  nextAutoCheckAt: string;
+  updateAvailable: boolean;
+  status: "unknown" | "current" | "update_available" | "error";
+  error: string | null;
 };
 
 export type RecommendationMaintenanceSettings = {
@@ -363,6 +392,9 @@ export type UpdateSettingsInput = {
     markScrolledArticlesIgnored?: boolean;
     removeReadLaterOnReadComplete?: boolean;
   };
+  telemetry?: {
+    enabled?: boolean;
+  };
   retention?: {
     retentionDays?: number;
     keepFavorites?: boolean;
@@ -370,6 +402,8 @@ export type UpdateSettingsInput = {
   };
   ranking?: {
     cocoonLevel?: number;
+    maxPositiveInterestClusters?: number;
+    maxNegativeInterestClusters?: number;
     localLearningEnabled?: boolean;
     localLearningShadowMode?: boolean;
     explorationEnabled?: boolean;
@@ -381,6 +415,10 @@ export type UpdateSettingsInput = {
 export type UpdateSettingsResponse = {
   ok: true;
   settings: AppSettings;
+  rankingRecalculateQueued?: boolean;
+  rankingRecalculateJobId?: string | null;
+  retentionCleanupQueued?: boolean;
+  retentionCleanupJobId?: string | null;
 };
 
 export type EmbeddingProviderType =
@@ -475,6 +513,7 @@ export type RecommendationMaintenanceTask =
   | "keyword_rebuild"
   | "cluster_label_rebuild"
   | "cluster_merge_diagnostics"
+  | "interest_family_rebuild"
   | "cluster_auto_merge"
   | "recent_intent_rebuild"
   | "evaluation"
@@ -580,6 +619,37 @@ export type BackfillEmbeddingIndexResponse = {
 
 export type RecommendationMode = "baseline" | "personalized" | "embedding" | "degraded";
 
+export type RecommendationFamilySummaryItem = {
+  id: string;
+  polarity: "positive" | "negative";
+  displayLabel: string;
+  weight: number;
+  clusterCount: number;
+  supportArticleCount: number;
+  supportEventCount: number;
+  sourceCount: number;
+  strongSignalCount: number;
+  topSourceShare: number;
+  maturity: number;
+  dominanceRatio: number;
+  labelTerms: string[];
+  representativeClusterIds: string[];
+  diagnostics: {
+    lowSupportClusterCount: number;
+    singleArticleClusterCount: number;
+    concentrationRisk: "low" | "medium" | "high";
+  };
+  updatedAt: number;
+};
+
+export type RecommendationFamilySummary = {
+  positive: number;
+  negative: number;
+  topFamilies: RecommendationFamilySummaryItem[];
+  dominantFamily: RecommendationFamilySummaryItem | null;
+  concentrationRisk: "low" | "medium" | "high";
+};
+
 export type RecommendationStatus = {
   mode: RecommendationMode;
   activeProvider: {
@@ -631,6 +701,7 @@ export type RecommendationStatus = {
   clusters: {
     positive: number;
     negative: number;
+    families?: RecommendationFamilySummary;
     items?: RecommendationClusterItem[];
   };
   rankedArticles: {
@@ -688,6 +759,7 @@ export type RecommendationTransparency = RecommendationStatus & {
       exploration: "disabled" | "enabled_bonus_only" | "enabled_slots_active";
       evaluation: "unavailable" | "diagnostic_only" | "lightweight_replay_diagnostic" | "strict_replay";
       duplicate: "not_built" | "exact_scaffold" | "near_duplicate_active";
+      interestFamilies: "not_built" | "active";
       evidence: "dynamic_fallback" | "reconstructed" | "live_evidence";
       stalePendingEmbeddingJobs: number;
       failedRankingJobs: number;
@@ -741,6 +813,20 @@ export type RecommendationClusterItem = {
       status: "open" | "merged" | "ignored" | "dismissed";
     } | null;
   };
+  family?: {
+    id: string;
+    polarity: "positive" | "negative";
+    displayLabel: string;
+    weight: number;
+    clusterCount: number;
+    supportArticleCount: number;
+    supportEventCount: number;
+    sourceCount: number;
+    maturity: number;
+    dominanceRatio: number;
+    membershipConfidence: number;
+    centroidSimilarity: number;
+  } | null;
   lastGeneratedAt?: string | null;
   displayIndex?: number;
   weight: number;
@@ -764,6 +850,7 @@ export type RecommendationClusterItem = {
 export type RecommendationClusterListResponse = {
   activeIndex: RecommendationStatus["activeIndex"];
   total: number;
+  families?: RecommendationFamilySummary;
   items: RecommendationClusterItem[];
 };
 
@@ -811,8 +898,11 @@ export const defaultAppSettings: AppSettings = {
     markScrolledArticlesIgnored: true,
     removeReadLaterOnReadComplete: false
   },
+  telemetry: {
+    enabled: true
+  },
   retention: {
-    retentionDays: 60,
+    retentionDays: 0,
     keepFavorites: true,
     keepReadLater: true
   },
@@ -821,6 +911,8 @@ export const defaultAppSettings: AppSettings = {
     preferSource: 0.5,
     preferDiversity: 0.5,
     cocoonLevel: 5,
+    maxPositiveInterestClusters: 24,
+    maxNegativeInterestClusters: 16,
     localLearningEnabled: true,
     localLearningShadowMode: false,
     explorationEnabled: true,
@@ -943,11 +1035,20 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       return (await request<AuthSession>("/api/auth/session")).data;
     },
 
-    async setupAuth(username: string, password: string): Promise<AuthOkResponse> {
+    async setupAuth(
+      username: string,
+      password: string,
+      telemetryEnabled?: boolean
+    ): Promise<AuthOkResponse> {
+      const body =
+        telemetryEnabled === undefined
+          ? { username, password }
+          : { username, password, telemetryEnabled };
+
       return (
         await request<AuthOkResponse>("/api/auth/setup", {
           method: "POST",
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify(body)
         })
       ).data;
     },
@@ -984,6 +1085,18 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getSettings(): Promise<AppSettings> {
       return (await request<AppSettings>("/api/settings")).data;
+    },
+
+    async getLatestRelease(): Promise<LatestReleaseStatus> {
+      return (await request<LatestReleaseStatus>("/api/system/latest-release")).data;
+    },
+
+    async checkLatestRelease(): Promise<LatestReleaseStatus> {
+      return (
+        await request<LatestReleaseStatus>("/api/system/latest-release/check", {
+          method: "POST"
+        })
+      ).data;
     },
 
     async updateSettings(input: UpdateSettingsInput): Promise<UpdateSettingsResponse> {

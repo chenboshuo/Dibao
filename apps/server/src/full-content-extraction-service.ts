@@ -1,3 +1,10 @@
+import {
+  controlledFetchText,
+  fullContentFetchMaxBytes,
+  type ControlledFetcher,
+  type FetchPrivacyWarning
+} from "./controlled-fetch.js";
+
 export type FullContentExtractionStatus = "success" | "failed" | "skipped";
 
 export type FullContentExtractionResult = {
@@ -11,17 +18,18 @@ export type FullContentExtractionResult = {
 };
 
 export type FullContentExtractionServiceOptions = {
-  fetcher?: typeof fetch;
+  fetcher?: ControlledFetcher;
   minTextLength?: number;
+  onFetchWarning?: (warning: FetchPrivacyWarning) => void;
 };
 
 const DEFAULT_MIN_TEXT_LENGTH = 200;
 
 export class FullContentExtractionService {
-  private readonly fetcher: typeof fetch;
+  private readonly fetcher: ControlledFetcher;
   private readonly minTextLength: number;
 
-  constructor(options: FullContentExtractionServiceOptions = {}) {
+  constructor(private readonly options: FullContentExtractionServiceOptions = {}) {
     this.fetcher = options.fetcher ?? fetch;
     this.minTextLength = options.minTextLength ?? DEFAULT_MIN_TEXT_LENGTH;
   }
@@ -36,42 +44,44 @@ export class FullContentExtractionService {
       return failed(articleUrl, "Only http and https article URLs can be fetched");
     }
 
-    let response: Response;
     try {
-      response = await this.fetcher(normalized, {
+      const result = await controlledFetchText(normalized, {
+        fetcher: this.fetcher,
         headers: {
           accept: "text/html, application/xhtml+xml;q=0.9, */*;q=0.5",
           "user-agent": "DibaoFullContentFetcher/0.1"
-        }
+        },
+        maxBytes: fullContentFetchMaxBytes(),
+        onWarning: this.options.onFetchWarning
       });
+      const response = result.response;
+      const rawHtml = result.body;
+      if (!response.ok) {
+        return failed(normalized, `Article fetch failed with HTTP ${response.status}`);
+      }
+
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      if (contentType && !contentType.includes("html") && !contentType.includes("xml")) {
+        return skipped(normalized, `Article response is not HTML (${contentType})`);
+      }
+
+      const extracted = extractReadableContent(rawHtml);
+      if (extracted.contentText.length < this.minTextLength) {
+        return skipped(normalized, "Extracted article text is too short");
+      }
+
+      return {
+        articleUrl: normalized,
+        status: "success",
+        title: extracted.title,
+        contentHtml: extracted.contentHtml,
+        contentText: extracted.contentText,
+        excerpt: excerptFor(extracted.contentText),
+        error: null
+      };
     } catch (error) {
       return failed(normalized, `Article fetch failed: ${errorMessage(error)}`);
     }
-
-    if (!response.ok) {
-      return failed(normalized, `Article fetch failed with HTTP ${response.status}`);
-    }
-
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (contentType && !contentType.includes("html") && !contentType.includes("xml")) {
-      return skipped(normalized, `Article response is not HTML (${contentType})`);
-    }
-
-    const rawHtml = await response.text();
-    const extracted = extractReadableContent(rawHtml);
-    if (extracted.contentText.length < this.minTextLength) {
-      return skipped(normalized, "Extracted article text is too short");
-    }
-
-    return {
-      articleUrl: normalized,
-      status: "success",
-      title: extracted.title,
-      contentHtml: extracted.contentHtml,
-      contentText: extracted.contentText,
-      excerpt: excerptFor(extracted.contentText),
-      error: null
-    };
   }
 }
 

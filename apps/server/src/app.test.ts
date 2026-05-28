@@ -450,6 +450,64 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("rate limits repeated failed logins and clears the counter after success", async () => {
+    const db = createEmptyDatabase();
+    let now = 1_000;
+    const app = buildRealServer({
+      db,
+      logger: false,
+      cookieSecure: false,
+      now: () => now,
+      authMaxFailedLoginAttempts: 2,
+      authLoginLockoutMs: 60_000
+    });
+
+    try {
+      await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      const first = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "wrong password"
+      });
+      const second = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "wrong password"
+      });
+      const limited = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      expect(first.statusCode, first.body).toBe(401);
+      expect(second.statusCode, second.body).toBe(401);
+      expect(limited.statusCode, limited.body).toBe(429);
+      expect(limited.json()).toMatchObject({
+        error: {
+          code: "RATE_LIMITED"
+        }
+      });
+
+      now += 60_001;
+      const success = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      expect(success.statusCode, success.body).toBe(200);
+
+      const afterSuccessWrong = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "wrong password"
+      });
+      expect(afterSuccessWrong.statusCode, afterSuccessWrong.body).toBe(401);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("changes the access password for an authenticated session", async () => {
     const db = createEmptyDatabase();
     const app = buildRealServer({ db, logger: false, cookieSecure: false });
@@ -850,15 +908,169 @@ describe("server API vertical slice", () => {
           },
           lastProfileUpdate: null,
           lastRankingUpdate: null,
-          warnings: [
+          warnings: expect.arrayContaining([
             {
               code: "NO_PROVIDER",
               message:
                 "No active embedding provider and index are configured; recommendations are using baseline ranking."
+            },
+            {
+              code: "PROFILE_WARMUP",
+              message: "The recommendation profile still has limited behavior and interest signals."
             }
-          ]
+          ])
         }
       });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("keeps profile warmup active for open-only behavior", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    createActiveEmbeddingDiagnosticsFixture(db, { providerTestStatus: "success" });
+    feeds.upsert({
+      id: "feed_warmup_open",
+      title: "Warmup Open Feed",
+      feedUrl: "https://example.com/warmup-open.xml",
+      now: 1000
+    });
+    for (let index = 0; index < 3; index += 1) {
+      const articleId = `article_warmup_open_${index}`;
+      articles.upsert({
+        id: articleId,
+        feedId: "feed_warmup_open",
+        url: `https://example.com/warmup-open/${index}`,
+        title: `Warmup open ${index}`,
+        summary: "Open-only behavior should not complete profile warmup.",
+        discoveredAt: 2000 + index,
+        dedupeKey: articleId,
+        now: 2000 + index
+      });
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            created_at
+          )
+          values (?, ?, 'open', 0.2, ?)
+        `
+      ).run(`event_warmup_open_${index}`, articleId, 3000 + index);
+    }
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            code: "PROFILE_WARMUP",
+            message: "The recommendation profile still has limited behavior and interest signals."
+          }
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("clears profile warmup after enough profile signals and positive clusters", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const profiles = new SqliteProfileRepository(db);
+    const { index: activeIndex } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    feeds.upsert({
+      id: "feed_warmup_ready",
+      title: "Warmup Ready Feed",
+      feedUrl: "https://example.com/warmup-ready.xml",
+      now: 1000
+    });
+    const signalEvents = [
+      ["article_warmup_ready_0", "favorite"],
+      ["article_warmup_ready_0", "like"],
+      ["article_warmup_ready_1", "read_later"],
+      ["article_warmup_ready_1", "read_progress"],
+      ["article_warmup_ready_2", "favorite"],
+      ["article_warmup_ready_3", "like"],
+      ["article_warmup_ready_4", "read_later"],
+      ["article_warmup_ready_4", "read_progress"]
+    ] as const;
+    for (let index = 0; index < 5; index += 1) {
+      const articleId = `article_warmup_ready_${index}`;
+      articles.upsert({
+        id: articleId,
+        feedId: "feed_warmup_ready",
+        url: `https://example.com/warmup-ready/${index}`,
+        title: `Warmup ready ${index}`,
+        summary: "Enough profile behavior should clear warmup.",
+        discoveredAt: 2000 + index,
+        dedupeKey: articleId,
+        now: 2000 + index
+      });
+    }
+    signalEvents.forEach(([articleId, eventType], eventIndex) => {
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            metadata_json,
+            created_at
+          )
+          values (?, ?, ?, 1, ?, ?)
+        `
+      ).run(
+        `event_warmup_ready_${eventIndex}`,
+        articleId,
+        eventType,
+        eventType === "read_progress" ? JSON.stringify({ progress: 0.75 }) : null,
+        3000 + eventIndex
+      );
+    });
+    for (const clusterId of ["cluster_warmup_ready_a", "cluster_warmup_ready_b"]) {
+      profiles.upsertCluster({
+        id: clusterId,
+        embeddingIndexId: activeIndex.id,
+        polarity: "positive",
+        centroidVectorBlob: toVectorBlob([1, 0, 0]),
+        weight: 8,
+        sampleCount: 4,
+        now: 4000
+      });
+    }
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.warnings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "PROFILE_WARMUP"
+          })
+        ])
+      );
     } finally {
       await app.close();
       db.close();
@@ -1569,7 +1781,7 @@ describe("server API vertical slice", () => {
           activeIndex: {
             id: textSliceActive?.id
           },
-          activeRankContext: "rec_v2:embedding:cocoon_5:schema_2"
+          activeRankContext: "rec_v3:embedding:cocoon_5:schema_3"
         }
       });
     } finally {
@@ -1797,7 +2009,7 @@ describe("server API vertical slice", () => {
             model: "fixture-embedding",
             dimension: 3
           },
-          activeRankContext: "rec_v2:embedding:cocoon_5:schema_2",
+          activeRankContext: "rec_v3:embedding:cocoon_5:schema_3",
           coverage: {
             candidateCount: 2,
             eligibleArticleCount: 2,
@@ -1813,6 +2025,11 @@ describe("server API vertical slice", () => {
           clusters: {
             positive: 1,
             negative: 0,
+            families: {
+              positive: 0,
+              negative: 0,
+              topFamilies: []
+            },
             items: [
               {
                 id: "cluster_overfit_probe",
@@ -1856,6 +2073,11 @@ describe("server API vertical slice", () => {
           clusters: {
             positive: 1,
             negative: 0,
+            families: {
+              positive: 0,
+              negative: 0,
+              topFamilies: []
+            },
             items: []
           }
         }
@@ -2230,8 +2452,11 @@ describe("server API vertical slice", () => {
             markScrolledArticlesIgnored: true,
             removeReadLaterOnReadComplete: false
           },
+          telemetry: {
+            enabled: true
+          },
           retention: {
-            retentionDays: 60,
+            retentionDays: 0,
             keepFavorites: true,
             keepReadLater: true
           },
@@ -2240,6 +2465,8 @@ describe("server API vertical slice", () => {
             preferSource: 0.5,
             preferDiversity: 0.5,
             cocoonLevel: 5,
+            maxPositiveInterestClusters: 24,
+            maxNegativeInterestClusters: 16,
             localLearningEnabled: true,
             localLearningShadowMode: false,
             explorationEnabled: true,
@@ -2280,8 +2507,13 @@ describe("server API vertical slice", () => {
           markScrolledArticlesIgnored: false,
           removeReadLaterOnReadComplete: true
         },
+        telemetry: {
+          enabled: false
+        },
         ranking: {
-          cocoonLevel: 7
+          cocoonLevel: 7,
+          maxPositiveInterestClusters: 48,
+          maxNegativeInterestClusters: 32
         }
       });
       expect(updated.statusCode, updated.body).toBe(200);
@@ -2308,8 +2540,13 @@ describe("server API vertical slice", () => {
               markScrolledArticlesIgnored: false,
               removeReadLaterOnReadComplete: true
             },
+            telemetry: {
+              enabled: false
+            },
             ranking: {
-              cocoonLevel: 7
+              cocoonLevel: 7,
+              maxPositiveInterestClusters: 48,
+              maxNegativeInterestClusters: 32
             }
           }
         }
@@ -2343,6 +2580,9 @@ describe("server API vertical slice", () => {
             behavior: {
               markScrolledArticlesIgnored: false,
               removeReadLaterOnReadComplete: true
+            },
+            telemetry: {
+              enabled: false
             }
           }
         }
@@ -2380,8 +2620,23 @@ describe("server API vertical slice", () => {
           }
         },
         {
+          telemetry: {
+            enabled: "yes"
+          }
+        },
+        {
           ranking: {
             preferFreshness: 0.9
+          }
+        },
+        {
+          ranking: {
+            maxPositiveInterestClusters: 7
+          }
+        },
+        {
+          ranking: {
+            maxNegativeInterestClusters: 129
           }
         }
       ]) {
@@ -2393,6 +2648,129 @@ describe("server API vertical slice", () => {
           }
         });
       }
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("checks the latest GitHub release once per installation-anchored day and on demand", async () => {
+    const db = createEmptyDatabase();
+    let now = Date.parse("2026-05-28T09:30:00.000Z");
+    let requestCount = 0;
+    const latestReleaseFetcher: typeof fetch = async () => {
+      requestCount += 1;
+      return new Response(
+        JSON.stringify({
+          tag_name: "v0.2.0",
+          name: "Dibao v0.2.0",
+          html_url: "https://github.com/Pls-1q43/Dibao/releases/tag/v0.2.0",
+          published_at: "2026-05-28T08:00:00.000Z"
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    };
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => now,
+      latestReleaseFetcher
+    });
+
+    try {
+      await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toMatchObject({
+        data: {
+          currentVersion: "0.1.0",
+          latestVersion: "v0.2.0",
+          releaseUrl: "https://github.com/Pls-1q43/Dibao/releases/tag/v0.2.0",
+          updateAvailable: true,
+          status: "update_available",
+          checkedAt: "2026-05-28T09:30:00.000Z",
+          nextAutoCheckAt: "2026-05-29T09:30:00.000Z"
+        }
+      });
+      expect(requestCount).toBe(1);
+
+      now = Date.parse("2026-05-29T09:29:59.000Z");
+      const sameWindow = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(sameWindow.statusCode, sameWindow.body).toBe(200);
+      expect(requestCount).toBe(1);
+
+      now = Date.parse("2026-05-29T09:30:01.000Z");
+      const nextWindow = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(nextWindow.statusCode, nextWindow.body).toBe(200);
+      expect(requestCount).toBe(2);
+
+      const manual = await app.inject({
+        method: "POST",
+        url: "/api/system/latest-release/check"
+      });
+      expect(manual.statusCode, manual.body).toBe(200);
+      expect(requestCount).toBe(3);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("treats a missing GitHub latest release as an empty release status", async () => {
+    const db = createEmptyDatabase();
+    const now = Date.parse("2026-05-28T09:30:00.000Z");
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => now,
+      latestReleaseFetcher: async () =>
+        new Response(JSON.stringify({ message: "Not Found" }), {
+          status: 404,
+          headers: {
+            "content-type": "application/json"
+          }
+        })
+    });
+
+    try {
+      await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          latestVersion: null,
+          releaseUrl: null,
+          updateAvailable: false,
+          status: "unknown",
+          error: null,
+          checkedAt: "2026-05-28T09:30:00.000Z"
+        }
+      });
     } finally {
       await app.close();
       db.close();
@@ -2428,7 +2806,7 @@ describe("server API vertical slice", () => {
           started_at,
           finished_at
         )
-        values ('eval_diagnostic', 'rec_v2', 'diagnostic', 'succeeded', ?, null, 1000, 1000, 1000)
+        values ('eval_diagnostic', 'rec_v3', 'diagnostic', 'succeeded', ?, null, 1000, 1000, 1000)
       `
     ).run(
       JSON.stringify({
@@ -2495,7 +2873,7 @@ describe("server API vertical slice", () => {
           created_at,
           updated_at
         )
-        values ('ftrl_insufficient', 'rec_v2', 2, 'shadow', 12, 0, ?, 1000, 1000)
+        values ('ftrl_insufficient', 'rec_v3', 3, 'shadow', 12, 0, ?, 1000, 1000)
       `
     ).run(JSON.stringify({ highQualitySamples: 12 }));
     const app = buildServer({ db, logger: false });
@@ -2551,7 +2929,7 @@ describe("server API vertical slice", () => {
           created_at,
           updated_at
         )
-        values ('ftrl_ready', 'rec_v2', 2, 'shadow', 120, 0.05, ?, 1000, 1000)
+        values ('ftrl_ready', 'rec_v3', 3, 'shadow', 120, 0.05, ?, 1000, 1000)
       `
     ).run(JSON.stringify({ highQualitySamples: 120 }));
     const app = buildServer({ db, logger: false });
@@ -2668,6 +3046,68 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("queues retention cleanup when retention settings become more restrictive", async () => {
+    const db = createEmptyDatabase();
+    const settings = new SqliteAppSettingsRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 5000 });
+    const jobs = new SqliteJobRepository(db);
+
+    try {
+      settings.setJson("retention.articleDays", 90, 4000);
+
+      const changed = await injectJson(app, "PATCH", "/api/settings", {
+        retention: {
+          retentionDays: 30
+        }
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      expect(changed.json()).toMatchObject({
+        data: {
+          retentionCleanupQueued: true,
+          retentionCleanupJobId: expect.any(String),
+          rankingRecalculateQueued: false,
+          settings: {
+            retention: {
+              retentionDays: 30
+            }
+          }
+        }
+      });
+      expect(jobs.countByTypeAndStatus("retention_cleanup", "queued")).toBe(1);
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(0);
+
+      const same = await injectJson(app, "PATCH", "/api/settings", {
+        retention: {
+          retentionDays: 30
+        }
+      });
+      expect(same.statusCode, same.body).toBe(200);
+      expect(same.json()).toMatchObject({
+        data: {
+          retentionCleanupQueued: false,
+          retentionCleanupJobId: null
+        }
+      });
+      expect(jobs.countByTypeAndStatus("retention_cleanup", "queued")).toBe(1);
+
+      const disabled = await injectJson(app, "PATCH", "/api/settings", {
+        retention: {
+          retentionDays: 0
+        }
+      });
+      expect(disabled.statusCode, disabled.body).toBe(200);
+      expect(disabled.json()).toMatchObject({
+        data: {
+          retentionCleanupQueued: false,
+          retentionCleanupJobId: null
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("queues delayed recommendation maintenance only for strong article actions", async () => {
     const db = createEmptyDatabase();
     const feeds = new SqliteFeedRepository(db);
@@ -2770,7 +3210,7 @@ describe("server API vertical slice", () => {
             created_at,
             updated_at
           )
-          values ('ftrl_promote_test', 'rec_v2', 2, 'shadow', 120, 0.1, ?, 10_000, 10_000)
+          values ('ftrl_promote_test', 'rec_v3', 3, 'shadow', 120, 0.1, ?, 10_000, 10_000)
         `
       ).run(JSON.stringify({ highQualitySamples: 110 }));
 
@@ -2975,15 +3415,15 @@ describe("server API vertical slice", () => {
 
       insertSemanticRankForContext(db, {
         articleId: "article_cluster_label_api",
-        rankContext: "rec_v2:embedding:cocoon_5:schema_2",
+        rankContext: "rec_v3:embedding:cocoon_5:schema_3",
         embeddingIndexId: index.id,
         score: 1.4,
         calculatedAt: 21_000
       });
       new SqliteRankingRepository(db).upsertRankContext({
-        id: "rec_v2:embedding:cocoon_5:schema_2",
-        algorithmVersion: "rec_v2",
-        featureSchemaVersion: 2,
+        id: "rec_v3:embedding:cocoon_5:schema_3",
+        algorithmVersion: "rec_v3",
+        featureSchemaVersion: 3,
         embeddingIndexId: index.id,
         cocoonLevel: 5,
         now: 21_000
@@ -4748,7 +5188,7 @@ describe("server API vertical slice", () => {
       dimension: 4,
       now: 4000
     });
-    const activeContext = "rec_v2:embedding:cocoon_5:schema_2";
+    const activeContext = "rec_v3:embedding:cocoon_5:schema_3";
     for (const [articleId, score, rerankPosition] of [
       ["article_search_low", 0.1, 2],
       ["article_search_high", 0.9, 1],
@@ -4841,7 +5281,7 @@ describe("server API vertical slice", () => {
     insertRank(db, "article_read_later_base", 0.8, 10_000);
     insertRankForContext(db, {
       articleId: "article_read_later_active",
-      rankContext: "rec_v2:embedding:cocoon_5:schema_2",
+      rankContext: "rec_v3:embedding:cocoon_5:schema_3",
       embeddingIndexId: "index_sort",
       score: 0.9,
       calculatedAt: 10_000
@@ -5068,6 +5508,59 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("keeps article list payloads compact while preserving reader body content", async () => {
+    const db = createFixtureDatabase();
+    const articles = new SqliteArticleRepository(db);
+    const longHtmlSummary = `<section>${"很长的列表摘要 ".repeat(80)}<strong>重点</strong></section>`;
+    articles.upsert({
+      id: "article_long_summary",
+      feedId: "feed_design",
+      url: "https://example.com/long-summary",
+      title: "Long summary fixture",
+      summary: longHtmlSummary,
+      publishedAt: 4500,
+      discoveredAt: 4500,
+      dedupeKey: "long_summary",
+      now: 4500
+    });
+    articles.upsertContent({
+      articleId: "article_long_summary",
+      contentHtml: "<article><p>完整正文 HTML</p></article>",
+      contentText: "完整正文纯文本不需要和 HTML 同时返回。",
+      extractionStatus: "success",
+      extractedAt: 4500,
+      now: 4500
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const list = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=latest&limit=1"
+      });
+      expect(list.statusCode, list.body).toBe(200);
+      expect(list.json().data[0]).toMatchObject({
+        id: "article_long_summary",
+        summary: expect.not.stringContaining("<section>")
+      });
+      expect(list.json().data[0].summary.length).toBeLessThanOrEqual(363);
+
+      const detail = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_long_summary"
+      });
+      expect(detail.statusCode, detail.body).toBe(200);
+      expect(detail.json().data).toMatchObject({
+        contentHtml: "<article><p>完整正文 HTML</p></article>",
+        contentText: "完整正文纯文本不需要和 HTML 同时返回。"
+      });
+      expect(detail.json().data.summary.length).toBeLessThanOrEqual(363);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("marks the current article list scope read through the reader command API", async () => {
     const db = createFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 6000 });
@@ -5113,11 +5606,89 @@ describe("server API vertical slice", () => {
         db.prepare("select command_type as commandType from reader_command_events").get()
       ).toEqual({ commandType: "mark_scope_read" });
       expect(
+        JSON.parse(
+          (
+            db
+              .prepare("select result_json as resultJson from reader_command_events")
+              .get() as { resultJson: string }
+          ).resultJson
+        )
+      ).toEqual({
+        markedReadCount: 1,
+        sampleArticleIds: ["article_recommended"],
+        limitedAudit: false
+      });
+      expect(
         db.prepare("select type from jobs where type = 'ranking_recalculate'").get()
       ).toEqual({ type: "ranking_recalculate" });
       expect(getArticleStateRow(db, "article_recent")).toMatchObject({
         favoritedAt: 3500
       });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("marks large scopes read with sampled audit and full ranking recalculation", async () => {
+    const db = createEmptyDatabase();
+    const feeds = new SqliteFeedRepository(db);
+    const articles = new SqliteArticleRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 9000 });
+
+    feeds.upsert({
+      id: "feed_reader_command_large",
+      title: "Reader Command Large",
+      feedUrl: "https://example.com/reader-command-large.xml",
+      now: 1000
+    });
+    for (let index = 0; index < 510; index += 1) {
+      const id = `article_command_large_${String(index).padStart(3, "0")}`;
+      articles.upsert({
+        id,
+        feedId: "feed_reader_command_large",
+        url: `https://example.com/${id}`,
+        title: id,
+        publishedAt: 2000 + index,
+        discoveredAt: 2000 + index,
+        dedupeKey: id,
+        now: 2000 + index
+      });
+    }
+
+    try {
+      const response = await postJson(app, "/api/reader/commands/mark-scope-read", {
+        scope: {
+          type: "article_list",
+          view: "latest",
+          clearWindow: "all"
+        }
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toMatchObject({
+        ok: true,
+        markedReadCount: 510
+      });
+      const result = JSON.parse(
+        (
+          db
+            .prepare("select result_json as resultJson from reader_command_events")
+            .get() as { resultJson: string }
+        ).resultJson
+      ) as { markedReadCount: number; sampleArticleIds: string[]; limitedAudit: boolean };
+      expect(result.markedReadCount).toBe(510);
+      expect(result.sampleArticleIds).toHaveLength(200);
+      expect(result.limitedAudit).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("article_command_large_509");
+      expect(
+        db
+          .prepare(
+            "select count(*) as count from jobs where type = 'ranking_recalculate' and payload_json is null"
+          )
+          .get()
+      ).toEqual({ count: 1 });
+      expect(countTable(db, "behavior_events")).toBe(0);
     } finally {
       await app.close();
       db.close();
@@ -5380,6 +5951,64 @@ describe("server API vertical slice", () => {
               impact: "positive"
             }
           ]
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("returns an interest family explanation when semantic rank has no cluster match", async () => {
+    const db = createFixtureDatabase();
+    insertRank(db, "article_recommended", 1.2, 7000, {
+      interestScore: 0.12,
+      sourceScore: 0.03,
+      freshnessScore: 0.04,
+      stateScore: 0.01
+    });
+    db.prepare(
+      "update article_rank_scores set semantic_score = ? where article_id = ? and rank_context = 'base'"
+    ).run(0.12, "article_recommended");
+    new SqliteRankingRepository(db).upsertExplanation({
+      articleId: "article_recommended",
+      rankContext: "base",
+      embeddingIndexId: null,
+      payloadJson: JSON.stringify({
+        components: {
+          primaryFamilyId: "family_product_ai",
+          primaryFamilyLabel: "产品 / AI",
+          primaryFamilyMaturity: 0.82,
+          primaryFamilyDominanceRatio: 0.24,
+          matchedFamilyCount: 2
+        }
+      }),
+      createdAt: 7000
+    });
+    const app = buildServer({ db, logger: false, now: () => 8000 });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          reasons: expect.arrayContaining([
+            expect.objectContaining({
+              type: "interest",
+              label: "Interest family match",
+              family: {
+                id: "family_product_ai",
+                label: "产品 / AI",
+                maturity: 0.82,
+                dominanceRatio: 0.24,
+                matchedFamilyCount: 2
+              }
+            })
+          ])
         }
       });
     } finally {
@@ -6719,14 +7348,11 @@ function createTempDir(): string {
 }
 
 function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
-  return async (url) => ({
-    ok: fixtures[url] !== undefined,
-    status: fixtures[url] === undefined ? 404 : 200,
-    statusText: fixtures[url] === undefined ? "Not Found" : "OK",
-    async text() {
-      return fixtures[url] ?? "";
-    }
-  });
+  return async (url) =>
+    new Response(fixtures[url] ?? "", {
+      status: fixtures[url] === undefined ? 404 : 200,
+      statusText: fixtures[url] === undefined ? "Not Found" : "OK"
+    });
 }
 
 function embeddingFetcherFixture(
@@ -6835,14 +7461,10 @@ function sequenceFetcher(url: string, responses: string[]): FeedFetcher {
         : undefined;
     requestCount += 1;
 
-    return {
-      ok: xml !== undefined,
+    return new Response(xml ?? "", {
       status: xml === undefined ? 404 : 200,
-      statusText: xml === undefined ? "Not Found" : "OK",
-      async text() {
-        return xml ?? "";
-      }
-    };
+      statusText: xml === undefined ? "Not Found" : "OK"
+    });
   };
 }
 

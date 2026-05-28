@@ -26,6 +26,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "欢迎使用邸报" })).toBeVisible();
     await page.getByRole("button", { name: "开始设置" }).click();
 
+    await page.getByRole("textbox", { name: "用户名" }).fill("e2e");
     await page.getByRole("textbox", { name: "访问密码" }).fill(accessPassword);
     await page.getByRole("button", { name: "完成设置" }).click();
 
@@ -39,12 +40,13 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await page.getByRole("button", { name: "添加此源" }).first().click();
 
     await expect(page.getByRole("heading", { name: "推荐能力" })).toBeVisible();
-    await page.getByRole("button", { name: "暂不配置，继续" }).click();
+    await page.getByRole("button", { name: "跳过，使用基础排序" }).click();
 
     await expect(page.getByRole("link", { name: /E2E Article Beta/ })).toBeVisible();
 
     await page.getByRole("button", { name: "退出" }).click();
     await expect(page.getByRole("heading", { name: "登录邸报" })).toBeVisible();
+    await page.getByRole("textbox", { name: "用户名" }).fill("e2e");
     await page.getByRole("textbox", { name: "访问密码" }).fill(accessPassword);
     await page.getByRole("button", { name: "登录" }).click();
 
@@ -150,10 +152,23 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByText(/Coverage \d+%/)).toBeVisible();
     await expect(page.getByRole("link", { name: /E2E Article Alpha/ })).toBeVisible();
     await page.getByRole("link", { name: /E2E Article Alpha/ }).click();
-    await expect(page.getByRole("button", { name: "查看完整理由" })).toBeVisible();
-    await page.getByRole("button", { name: "查看完整理由" }).click();
-    await expect(page.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
-    await page.getByTestId("reader-scroll-container").getByRole("button", { name: "关闭" }).click();
+    const recommendedReader = page.getByTestId("reader-scroll-container");
+    await expect(recommendedReader.getByRole("button", { name: "为什么推荐" })).toBeVisible();
+    await expect(recommendedReader.getByRole("heading", { name: "为什么推荐" })).toBeVisible();
+    await expect(recommendedReader.getByText("阅读过半后显示推荐解释。")).toBeVisible();
+    await expect(recommendedReader.getByText("与你近期的正向兴趣相似")).toHaveCount(0);
+    const scrollTopBeforeExplanation = await recommendedReader.evaluate(
+      (element) => element.scrollTop
+    );
+    await recommendedReader.getByRole("button", { name: "为什么推荐" }).click();
+    const explanationDialog = page.getByRole("dialog", { name: "为什么推荐" });
+    await expect(explanationDialog).toBeVisible();
+    await expect(explanationDialog).toContainText(/推荐|排序|稍后读|新鲜度/);
+    await expect
+      .poll(() => recommendedReader.evaluate((element) => element.scrollTop))
+      .toBe(scrollTopBeforeExplanation);
+    await explanationDialog.getByRole("button", { name: "关闭" }).click();
+    await expect(explanationDialog).toHaveCount(0);
 
     await page.getByRole("link", { name: "最新" }).click();
     await page.getByRole("button", { name: "打开来源" }).click();
@@ -353,6 +368,7 @@ function latestReadProgressEvent(articleTitle: string):
 async function loginDesktop(page: import("@playwright/test").Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "登录邸报" })).toBeVisible();
+  await page.getByRole("textbox", { name: "用户名" }).fill("e2e");
   await page.getByRole("textbox", { name: "访问密码" }).fill(accessPassword);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("link", { name: "最新" })).toBeVisible();

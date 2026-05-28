@@ -150,6 +150,8 @@ describe("db package", () => {
         "recommendation_maintenance_schedule_state",
         "embedding_usage_events",
         "interest_cluster_merge_candidates",
+        "interest_families",
+        "interest_cluster_family_members",
         "reader_command_events",
         "jobs"
       ]) {
@@ -169,6 +171,8 @@ describe("db package", () => {
       expect(hasColumn(db, "interest_cluster_labels", "label_diagnostics_json")).toBe(true);
       expect(hasIndex(db, "idx_interest_cluster_labels_source")).toBe(true);
       expect(hasIndex(db, "idx_interest_cluster_merge_candidates_status")).toBe(true);
+      expect(hasIndex(db, "idx_interest_families_index_polarity_weight")).toBe(true);
+      expect(hasIndex(db, "idx_interest_cluster_family_members_family")).toBe(true);
       expect(hasIndex(db, "idx_reader_command_events_created_at")).toBe(true);
       expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
     } finally {
@@ -205,7 +209,8 @@ describe("db package", () => {
         "013",
         "014",
         "015",
-        "016"
+        "016",
+        "017"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
@@ -221,6 +226,8 @@ describe("db package", () => {
       expect(hasColumn(db, "interest_cluster_evidence", "feed_title_snapshot")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
+      expect(hasTableOrView(db, "interest_families")).toBe(true);
+      expect(hasTableOrView(db, "interest_cluster_family_members")).toBe(true);
       expect(hasColumn(db, "embedding_providers", "text_max_chars")).toBe(true);
       expect(hasColumn(db, "embedding_providers", "requests_per_minute")).toBe(true);
       expect(hasColumn(db, "embedding_providers", "requests_per_day")).toBe(true);
@@ -361,9 +368,27 @@ describe("db package", () => {
           values ('job_cluster_auto_merge', 'interest_cluster_auto_merge', 'queued', 0, 1, 2000, 2000, 2000)
         `
       ).run();
+      db.prepare(
+        `
+          insert into jobs (
+            id,
+            type,
+            status,
+            attempts,
+            max_attempts,
+            run_after,
+            created_at,
+            updated_at
+          )
+          values ('job_interest_family_rebuild', 'interest_family_rebuild', 'queued', 0, 1, 2000, 2000, 2000)
+        `
+      ).run();
       expect(
         db.prepare("select count(*) as count from jobs where type like 'interest_cluster_%'").get()
       ).toEqual({ count: 3 });
+      expect(
+        db.prepare("select type from jobs where id = 'job_interest_family_rebuild'").get()
+      ).toEqual({ type: "interest_family_rebuild" });
     } finally {
       db.close();
     }
@@ -610,7 +635,8 @@ describe("db package", () => {
         "013",
         "014",
         "015",
-        "016"
+        "016",
+        "017"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -1493,17 +1519,16 @@ describe("db package", () => {
       expect(articles.countUnreadForScope({ ...searchScope, state: "read" })).toBe(0);
 
       const behaviorCountBefore = countTable(db, "behavior_events");
-      const affectedArticleIds = articles.listUnreadArticleIdsForScope(searchScope);
       const markedReadCount = commandEvents.transaction(() => {
-        const count = articles.markArticleIdsRead(affectedArticleIds, 12_000);
+        const result = articles.markScopeRead(searchScope, 12_000);
         commandEvents.record({
           id: "cmd_scope_read",
           commandType: "mark_scope_read",
           scope: searchScope,
-          result: { markedReadCount: count, affectedArticleIds },
+          result,
           createdAt: 12_000
         });
-        return count;
+        return result.markedReadCount;
       });
 
       expect(markedReadCount).toBe(1);

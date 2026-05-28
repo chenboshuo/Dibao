@@ -28,6 +28,7 @@ import {
   type FeedFolder,
   type FullContentBackfillResponse,
   type FullContentPreviewResponse,
+  type LatestReleaseStatus,
   type OpmlImportResponse,
   type RankExplanation,
   type RankExplanationReason,
@@ -36,6 +37,7 @@ import {
   type RecommendationStatus,
   type RecommendationClusterItem,
   type RecommendationClusterMergeCandidate,
+  type RecommendationFamilySummaryItem,
   type RecommendationTransparency,
   type RecommendationMaintenanceTask,
   type RecommendationMaintenanceTaskResponse,
@@ -58,7 +60,18 @@ import {
 } from "./articleListState.js";
 import styles from "./design-system/AppShell/AppShell.module.css";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
-import { defaultLocale, useI18n, type Dictionary, type NavigationItemKey } from "./i18n.js";
+import {
+  browserPreferredLocale,
+  useI18n,
+  type Dictionary,
+  type Locale,
+  type NavigationItemKey
+} from "./i18n.js";
+import {
+  configureClientTelemetry,
+  readStoredTelemetryPreference,
+  storeTelemetryPreference
+} from "./telemetry.js";
 
 const primaryNavigationItems: NavigationItemKey[] = [
   "recommended",
@@ -152,7 +165,7 @@ export type AppStage =
   | { type: "login" }
   | { type: "setup-status-loading" }
   | { type: "setup-sources" }
-  | { type: "setup-provider-placeholder" }
+  | { type: "setup-provider" }
   | { type: "reader" };
 
 export type ArticleActionIntent = "favorite" | "like" | "readLater" | "notInterested";
@@ -210,6 +223,22 @@ export function correctSourceSelection(
   return source;
 }
 
+function sameAppPage(left: AppPage, right: AppPage): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+
+  if (left.type === "reader" && right.type === "reader") {
+    return left.view === right.view;
+  }
+
+  if (left.type === "full-content-preview" && right.type === "full-content-preview") {
+    return left.feedId === right.feedId;
+  }
+
+  return true;
+}
+
 export function App() {
   const { t, setLocale } = useI18n();
   const initialRoute = useMemo(
@@ -232,6 +261,9 @@ export function App() {
   const [setupSourceError, setSetupSourceError] = useState<string | null>(null);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(() =>
+    readStoredTelemetryPreference()
+  );
   const [isSettingsLoading, setIsSettingsLoading] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -339,9 +371,13 @@ export function App() {
   const [pwaUpdateApply, setPwaUpdateApply] = useState<(() => void) | null>(null);
   const openedArticleIds = useRef(new Set<string>());
   const ignoredArticleIds = useRef(new Set<string>());
+  const ignoredArticleQueue = useRef<string[]>([]);
+  const isSendingIgnoredArticle = useRef(false);
+  const selectedArticleIdRef = useRef<string | null>(selectedArticleId);
   const articleStateById = useRef(new Map<string, ArticleState>());
   const locallyUpdatedArticleIds = useRef(new Set<string>());
   const articleRequestVersion = useRef(0);
+  const detailExplanationRequestVersion = useRef(0);
   const listExplanationRequestVersion = useRef(0);
   const hasLoadedSettingsForSession = useRef(false);
   const hasAppliedDefaultHomeViewForSession = useRef(false);
@@ -421,6 +457,7 @@ export function App() {
   }
 
   function clearSelectedArticle() {
+    detailExplanationRequestVersion.current += 1;
     setSelectedArticleId(null);
     setArticleDetail(null);
     setRankExplanation(null);
@@ -539,6 +576,7 @@ export function App() {
     setReadLaterSort(defaultReadLaterArticleSort);
     setSelectedArticleId(null);
     setArticleDetail(null);
+    detailExplanationRequestVersion.current += 1;
     setRankExplanation(null);
     setRecommendationStatus(null);
     setAllRecommendationClusters([]);
@@ -585,7 +623,7 @@ export function App() {
     setDeletingProviderId(null);
     setRebuildingIndexId(null);
     setEmbeddingError(null);
-    setLocale(defaultLocale);
+    setLocale(browserPreferredLocale());
     setOpmlSummary(null);
     setNextArticleCursor(null);
     setPendingArticleAction(null);
@@ -696,6 +734,8 @@ export function App() {
     (settings: AppSettings) => {
       setAppSettings(settings);
       setLocale(settings.ui.locale);
+      setTelemetryEnabled(settings.telemetry.enabled);
+      configureClientTelemetry(settings.telemetry.enabled);
     },
     [setLocale]
   );
@@ -703,6 +743,13 @@ export function App() {
   useEffect(() => {
     appPageRef.current = appPage;
   }, [appPage]);
+
+  useEffect(() => {
+    selectedArticleIdRef.current = selectedArticleId;
+    if (selectedArticleId) {
+      ignoredArticleQueue.current = [];
+    }
+  }, [selectedArticleId]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || hasLoadedSettingsForSession.current) {
@@ -752,14 +799,15 @@ export function App() {
     };
   }, [appStage.type, applySettings, t.errors.api]);
 
-  const loadEmbeddingSettings = useCallback(async () => {
+  const loadEmbeddingSettings = useCallback(async (options: { includeIndexes?: boolean } = {}) => {
     setIsEmbeddingLoading(true);
     setEmbeddingError(null);
 
     try {
+      const includeIndexes = options.includeIndexes ?? true;
       const [providers, indexes] = await Promise.all([
         dibaoApi.listEmbeddingProviders(),
-        dibaoApi.listEmbeddingIndexes()
+        includeIndexes ? dibaoApi.listEmbeddingIndexes() : Promise.resolve([])
       ]);
       setEmbeddingProviders(providers);
       setEmbeddingIndexes(indexes);
@@ -771,25 +819,36 @@ export function App() {
   }, [t.errors.api]);
 
   useEffect(() => {
-    if (appStage.type !== "reader" || appPage.type !== "settings") {
+    if (
+      (appStage.type !== "reader" || appPage.type !== "settings") &&
+      appStage.type !== "setup-provider"
+    ) {
       return;
     }
 
-    void loadEmbeddingSettings();
+    void loadEmbeddingSettings({ includeIndexes: false });
   }, [appPage.type, appStage.type, loadEmbeddingSettings]);
 
   const refreshArticleExplanation = useCallback(async (articleId: string) => {
+    const requestVersion = detailExplanationRequestVersion.current + 1;
+    detailExplanationRequestVersion.current = requestVersion;
     setIsExplanationLoading(true);
     setExplanationError(null);
 
     try {
       const explanation = await dibaoApi.getArticleExplanation(articleId);
-      setRankExplanation(explanation);
+      if (detailExplanationRequestVersion.current === requestVersion) {
+        setRankExplanation(explanation);
+      }
     } catch (error) {
-      setRankExplanation(null);
-      setExplanationError(userMessageForError(error, t.errors.api));
+      if (detailExplanationRequestVersion.current === requestVersion) {
+        setRankExplanation(null);
+        setExplanationError(userMessageForError(error, t.errors.api));
+      }
     } finally {
-      setIsExplanationLoading(false);
+      if (detailExplanationRequestVersion.current === requestVersion) {
+        setIsExplanationLoading(false);
+      }
     }
   }, [t.errors.api]);
 
@@ -1033,7 +1092,12 @@ export function App() {
       return;
     }
 
-    void Promise.all([loadFeedFolders(), loadFeeds(), loadFeedDiagnostics()]);
+    if (appPage.type === "feed-management") {
+      void Promise.all([loadFeedFolders(), loadFeeds(), loadFeedDiagnostics()]);
+      return;
+    }
+
+    void Promise.all([loadFeedFolders(), loadFeeds()]);
   }, [appPage.type, appStage.type, loadFeedDiagnostics, loadFeedFolders, loadFeeds]);
 
   useEffect(() => {
@@ -1041,10 +1105,11 @@ export function App() {
       return;
     }
 
-    void loadArticles(sourceSelection, appPage.view, unreadOnly, favoriteSort, readLaterSort, timeWindow);
+    void loadArticles(sourceSelection, currentArticleView, unreadOnly, favoriteSort, readLaterSort, timeWindow);
   }, [
-    appPage,
+    appPage.type,
     appStage.type,
+    currentArticleView,
     favoriteSort,
     loadArticles,
     readLaterSort,
@@ -1062,16 +1127,20 @@ export function App() {
   }, [appPage.type, appStage.type, hasSubmittedSearch, loadSearchArticles, submittedSearchForm]);
 
   useEffect(() => {
-    if (appStage.type !== "reader" || appPage.type !== "reader" || !supportsQuickFilters(appPage.view)) {
+    if (
+      appStage.type !== "reader" ||
+      appPage.type !== "reader" ||
+      !supportsQuickFilters(currentArticleView)
+    ) {
       return;
     }
 
-    persistReaderFilters(appPage.view, {
+    persistReaderFilters(currentArticleView, {
       sourceSelection,
       unreadOnly,
       timeWindow
     });
-  }, [appPage, appStage.type, sourceSelection, timeWindow, unreadOnly]);
+  }, [appPage.type, appStage.type, currentArticleView, sourceSelection, timeWindow, unreadOnly]);
 
   useEffect(() => {
     if (appStage.type !== "reader") {
@@ -1081,7 +1150,7 @@ export function App() {
       return;
     }
 
-    if (appPage.type === "reader" && appPage.view === "recommended") {
+    if (appPage.type === "reader" && currentArticleView === "recommended") {
       void loadRecommendationSummaryStatus();
       return;
     }
@@ -1094,7 +1163,13 @@ export function App() {
     setRecommendationStatus(null);
     setRecommendationStatusError(null);
     setIsRecommendationStatusLoading(false);
-  }, [appPage, appStage.type, loadRecommendationStatus, loadRecommendationSummaryStatus]);
+  }, [
+    appPage.type,
+    appStage.type,
+    currentArticleView,
+    loadRecommendationStatus,
+    loadRecommendationSummaryStatus
+  ]);
 
   useEffect(() => {
     if (appStage.type !== "reader" || appPage.type !== "algorithm-clusters") {
@@ -1120,7 +1195,7 @@ export function App() {
       ) {
         resetArticleListForPendingQuery();
       }
-      setAppPage(route.page);
+      setAppPage((current) => (sameAppPage(current, route.page) ? current : route.page));
       if (route.page.type === "search") {
         const nextSearchForm = searchFormFromLocation();
         setSearchForm(nextSearchForm);
@@ -1152,6 +1227,7 @@ export function App() {
     async function loadDetail(articleId: string) {
       setIsDetailLoading(true);
       setDetailError(null);
+      detailExplanationRequestVersion.current += 1;
       setRankExplanation(null);
       setExplanationError(null);
       setIsExplanationOpen(false);
@@ -1186,16 +1262,6 @@ export function App() {
             }
           }
         }
-        if (
-          !cancelled &&
-          shouldLoadDetailRankExplanation(
-            appPageRef.current,
-            currentArticleView,
-            submittedSearchForm.sort
-          )
-        ) {
-          await refreshArticleExplanation(articleId);
-        }
       } catch (error) {
         if (!cancelled) {
           setArticleDetail(null);
@@ -1209,6 +1275,7 @@ export function App() {
     }
 
     if (!selectedArticleId) {
+      detailExplanationRequestVersion.current += 1;
       setArticleDetail(null);
       setRankExplanation(null);
       setIsExplanationOpen(false);
@@ -1233,6 +1300,12 @@ export function App() {
     t.errors.api
   ]);
 
+  function handleTelemetryEnabledChange(enabled: boolean) {
+    setTelemetryEnabled(enabled);
+    storeTelemetryPreference(enabled);
+    configureClientTelemetry(enabled);
+  }
+
   async function handleAuthSubmit(mode: AuthMode, username: string, password: string) {
     if (!username.trim()) {
       setAuthError(t.auth.usernameRequired);
@@ -1249,7 +1322,7 @@ export function App() {
 
     try {
       if (mode === "setup") {
-        await dibaoApi.setupAuth(username, password);
+        await dibaoApi.setupAuth(username, password, telemetryEnabled);
         resetReaderState();
         setAppStage({ type: "setup-sources" });
       } else {
@@ -1329,7 +1402,7 @@ export function App() {
     const status = await dibaoApi.getSetupStatus();
     if (status.hasFeeds) {
       setSetupSourceError(null);
-      setAppStage({ type: "setup-provider-placeholder" });
+      setAppStage({ type: "setup-provider" });
       return;
     }
 
@@ -1519,6 +1592,7 @@ export function App() {
     setSourceSelection(nextSourceSelection);
 
     if (articleDetail && !nextFeeds.some((feed) => feed.id === articleDetail.feedId)) {
+      detailExplanationRequestVersion.current += 1;
       setSelectedArticleId(null);
       setArticleDetail(null);
       setRankExplanation(null);
@@ -1630,7 +1704,7 @@ export function App() {
     }
   }
 
-  async function handleActivateEmbeddingProvider(providerId: string) {
+  async function handleActivateEmbeddingProvider(providerId: string): Promise<boolean> {
     setActivatingProviderId(providerId);
     setEmbeddingError(null);
     setNotice(null);
@@ -1639,9 +1713,11 @@ export function App() {
       await dibaoApi.activateEmbeddingProvider(providerId);
       await loadEmbeddingSettings();
       setNotice({ type: "embeddingProviderActivated" });
+      return true;
     } catch (error) {
       setEmbeddingError(userMessageForError(error, t.errors.api));
       await loadEmbeddingSettings();
+      return false;
     } finally {
       setActivatingProviderId(null);
     }
@@ -1998,13 +2074,43 @@ export function App() {
     }
   }
 
-  async function handleIgnoreArticle(articleId: string) {
+  function handleIgnoreArticle(articleId: string) {
+    if (
+      ignoredArticleIds.current.has(articleId) ||
+      ignoredArticleQueue.current.includes(articleId)
+    ) {
+      return;
+    }
+
+    ignoredArticleQueue.current.push(articleId);
+    void drainIgnoredArticleQueue();
+  }
+
+  async function drainIgnoredArticleQueue() {
+    if (isSendingIgnoredArticle.current) {
+      return;
+    }
+
+    isSendingIgnoredArticle.current = true;
+    try {
+      while (ignoredArticleQueue.current.length > 0) {
+        const articleId = ignoredArticleQueue.current.shift();
+        if (articleId) {
+          await postIgnoredArticle(articleId);
+        }
+      }
+    } finally {
+      isSendingIgnoredArticle.current = false;
+    }
+  }
+
+  async function postIgnoredArticle(articleId: string) {
     const article = articles.find((candidate) => candidate.id === articleId);
     const interactionStatus = article ? articleInteractionStatusForState(article.state) : "unseen";
 
     if (
       !article ||
-      selectedArticleId === articleId ||
+      selectedArticleIdRef.current !== null ||
       openedArticleIds.current.has(articleId) ||
       ignoredArticleIds.current.has(articleId) ||
       interactionStatus !== "unseen"
@@ -2045,6 +2151,15 @@ export function App() {
       (articleDetail?.id === articleId ? articleDetail.state : null);
     if (previousState) {
       applyArticleState(articleId, optimisticReadProgressState(previousState, progress));
+    }
+    if (
+      progress >= 0.5 &&
+      articleId === selectedArticleId &&
+      shouldLoadDetailRankExplanation(appPage, currentArticleView, submittedSearchForm.sort) &&
+      rankExplanation?.articleId !== articleId &&
+      !isExplanationLoading
+    ) {
+      void refreshArticleExplanation(articleId);
     }
 
     if (options.keepalive) {
@@ -2099,6 +2214,13 @@ export function App() {
       return;
     }
 
+    if (
+      selectedArticleId &&
+      rankExplanation?.articleId !== selectedArticleId &&
+      !isExplanationLoading
+    ) {
+      void refreshArticleExplanation(selectedArticleId);
+    }
     setIsExplanationOpen(true);
   }
 
@@ -2247,7 +2369,9 @@ export function App() {
           error={authError}
           isSubmitting={isAuthSubmitting}
           mode={appStage.type === "login" ? "login" : "setup"}
+          onTelemetryEnabledChange={handleTelemetryEnabledChange}
           onSubmit={handleAuthSubmit}
+          telemetryEnabled={telemetryEnabled}
         />
       </main>
     );
@@ -2275,11 +2399,22 @@ export function App() {
     );
   }
 
-  if (appStage.type === "setup-provider-placeholder") {
+  if (appStage.type === "setup-provider") {
     return (
       <main className={styles.authShell}>
         {pwaStatusBanner}
-        <SetupProviderPlaceholderPanel onContinue={handleSetupProviderContinue} />
+        <SetupProviderPanel
+          activatingProviderId={activatingProviderId}
+          embeddingError={embeddingError}
+          embeddingProviders={embeddingProviders}
+          isEmbeddingLoading={isEmbeddingLoading}
+          isSavingEmbeddingProvider={isSavingEmbeddingProvider}
+          testingProviderId={testingProviderId}
+          onContinue={handleSetupProviderContinue}
+          onActivateEmbeddingProvider={handleActivateEmbeddingProvider}
+          onSaveEmbeddingProvider={handleSaveEmbeddingProvider}
+          onTestEmbeddingProvider={handleTestEmbeddingProvider}
+        />
       </main>
     );
   }
@@ -2453,7 +2588,9 @@ export function App() {
             rebuildingIndexId={rebuildingIndexId}
             testingProviderId={testingProviderId}
             onBackfillEmbeddingIndex={handleBackfillEmbeddingIndex}
-            onActivateEmbeddingProvider={handleActivateEmbeddingProvider}
+            onActivateEmbeddingProvider={async (providerId) => {
+              await handleActivateEmbeddingProvider(providerId);
+            }}
             onDeleteEmbeddingProvider={handleDeleteEmbeddingProvider}
             onChangePassword={handleChangePassword}
             onPreviewSettings={handlePreviewSettings}
@@ -2601,7 +2738,7 @@ export function App() {
               isIgnoreTelemetryEnabled={
                 appSettings.behavior.markScrolledArticlesIgnored &&
                 (currentArticleView === "latest" || currentArticleView === "recommended") &&
-                !(selectedArticleId && isMobileArticleHistoryEnabled())
+                selectedArticleId === null
               }
               isArticlesLoading={isArticlesLoading}
               isMarkingScopeRead={isMarkingScopeRead}
@@ -2756,7 +2893,9 @@ export function AuthGatePanel(props: {
   error?: string | null;
   isSubmitting: boolean;
   mode: AuthMode | "loading";
+  onTelemetryEnabledChange?: (enabled: boolean) => void;
   onSubmit?: (mode: AuthMode, username: string, password: string) => void;
+  telemetryEnabled?: boolean;
 }) {
   const { t } = useI18n();
   const [username, setUsername] = useState("");
@@ -2820,6 +2959,20 @@ export function AuthGatePanel(props: {
           type="password"
           value={password}
         />
+        {props.mode === "setup" ? (
+          <label className={styles.telemetrySwitch} htmlFor="auth-telemetry-enabled">
+            <input
+              checked={props.telemetryEnabled ?? true}
+              id="auth-telemetry-enabled"
+              onChange={(event) => props.onTelemetryEnabledChange?.(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              <strong>{t.auth.telemetryLabel}</strong>
+              <small>{t.auth.telemetryBody}</small>
+            </span>
+          </label>
+        ) : null}
         <button className={styles.primaryButton} disabled={props.isSubmitting} type="submit">
           {props.isSubmitting ? t.auth.submitting : submitLabel}
         </button>
@@ -3042,11 +3195,125 @@ export function FeedDiscoveryPanel(props: {
   );
 }
 
-export function SetupProviderPlaceholderPanel(props: { onContinue: () => void }) {
-  const { t } = useI18n();
+export function SetupProviderPanel(props: {
+  activatingProviderId: string | null;
+  embeddingError: string | null;
+  embeddingProviders: EmbeddingProvider[];
+  isEmbeddingLoading: boolean;
+  isSavingEmbeddingProvider: boolean;
+  testingProviderId: string | null;
+  onActivateEmbeddingProvider: (providerId: string) => Promise<boolean>;
+  onContinue: () => void;
+  onSaveEmbeddingProvider: (
+    providerId: string | null,
+    input: CreateEmbeddingProviderInput | UpdateEmbeddingProviderInput
+  ) => Promise<string | null>;
+  onTestEmbeddingProvider: (providerId: string) => Promise<void>;
+}) {
+  const { locale, t } = useI18n();
+  const initialProvider =
+    props.embeddingProviders.find((provider) => provider.enabled) ??
+    props.embeddingProviders[0] ??
+    null;
+  const [providerDraft, setProviderDraft] = useState<EmbeddingProviderDraft>(() =>
+    draftForEmbeddingProvider(initialProvider)
+  );
+  const [pendingProviderSelectionId, setPendingProviderSelectionId] = useState<string | null>(null);
+  const [providerLocalError, setProviderLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pendingProviderSelectionId) {
+      const pendingProvider = props.embeddingProviders.find(
+        (provider) => provider.id === pendingProviderSelectionId
+      );
+      if (pendingProvider) {
+        setProviderDraft(draftForEmbeddingProvider(pendingProvider));
+        setPendingProviderSelectionId(null);
+        setProviderLocalError(null);
+        return;
+      }
+    }
+
+    const selectedProvider = props.embeddingProviders.find(
+      (provider) => provider.id === providerDraft.providerId
+    );
+    if (selectedProvider) {
+      setProviderDraft(draftForEmbeddingProvider(selectedProvider));
+      setProviderLocalError(null);
+      return;
+    }
+
+    const activeProvider =
+      props.embeddingProviders.find((provider) => provider.enabled) ??
+      props.embeddingProviders[0] ??
+      null;
+    setProviderDraft(draftForEmbeddingProvider(activeProvider));
+    setProviderLocalError(null);
+  }, [pendingProviderSelectionId, props.embeddingProviders]);
+
+  async function handleProviderTestSubmit() {
+    const parsed = parseEmbeddingProviderDraft(providerDraft, t);
+
+    if (!parsed.ok) {
+      setProviderLocalError(parsed.error);
+      return;
+    }
+
+    setProviderLocalError(null);
+    const savedProviderId = await props.onSaveEmbeddingProvider(
+      providerDraft.providerId === newEmbeddingProviderId ? null : providerDraft.providerId,
+      {
+        ...parsed.input,
+        enabled: selectedProvider?.enabled ?? false
+      }
+    );
+    if (savedProviderId) {
+      setPendingProviderSelectionId(savedProviderId);
+      await props.onTestEmbeddingProvider(savedProviderId);
+    }
+  }
+
+  async function handleProviderEnableSubmit() {
+    if (!selectedProvider || !canFinalizeSelectedProvider) {
+      setProviderLocalError(t.setup.provider.testRequired);
+      return;
+    }
+
+    setProviderLocalError(null);
+    if (selectedProvider.enabled) {
+      props.onContinue();
+      return;
+    }
+
+    const activated = await props.onActivateEmbeddingProvider(selectedProvider.id);
+    if (activated) {
+      props.onContinue();
+    }
+  }
+
+  const selectedProvider =
+    providerDraft.providerId === newEmbeddingProviderId
+      ? null
+      : props.embeddingProviders.find((provider) => provider.id === providerDraft.providerId) ??
+        null;
+  const selectedProviderDraftMatches =
+    selectedProvider !== null && embeddingProviderDraftMatchesProvider(providerDraft, selectedProvider);
+  const canFinalizeSelectedProvider =
+    selectedProvider !== null &&
+    selectedProvider.lastTestStatus === "success" &&
+    selectedProviderDraftMatches;
+  const isActivatingSelectedProvider =
+    selectedProvider !== null && props.activatingProviderId === selectedProvider.id;
+  const isTestingSelectedProvider =
+    selectedProvider !== null && props.testingProviderId === selectedProvider.id;
+  const isPrimaryProviderActionBusy =
+    props.isSavingEmbeddingProvider || isTestingSelectedProvider || isActivatingSelectedProvider;
 
   return (
-    <section className={styles.authPanel} aria-labelledby="setup-provider-title">
+    <section
+      className={classNames(styles.authPanel, styles.setupProviderPanel)}
+      aria-labelledby="setup-provider-title"
+    >
       <div className={styles.brand}>
         <img alt="" className={styles.brandMark} src="/logo-64.png" />
         <span>
@@ -3058,14 +3325,302 @@ export function SetupProviderPlaceholderPanel(props: { onContinue: () => void })
         <p className={styles.kicker}>{t.setup.kicker}</p>
         <h1 id="setup-provider-title">{t.setup.provider.title}</h1>
         <p>{t.setup.provider.body}</p>
+        <a
+          className={styles.textLink}
+          href={providerRecommendationReadmeUrl(locale)}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {t.setup.provider.recommendationLink}
+        </a>
       </div>
+
+      {props.isEmbeddingLoading ? (
+        <p className={styles.settingsNotice}>{t.settings.sections.provider.loading}</p>
+      ) : null}
+      {props.embeddingError ? <p className={styles.errorText}>{props.embeddingError}</p> : null}
+      {providerLocalError ? <p className={styles.errorText}>{providerLocalError}</p> : null}
+
+      {props.embeddingProviders.length > 0 ? (
+        <div
+          aria-label={t.settings.sections.provider.profileListLabel}
+          className={styles.providerProfileList}
+        >
+          {props.embeddingProviders.map((provider) => (
+            <button
+              className={
+                provider.id === providerDraft.providerId
+                  ? styles.providerProfileCardActive
+                  : styles.providerProfileCard
+              }
+              key={provider.id}
+              onClick={() => {
+                setProviderDraft(draftForEmbeddingProvider(provider));
+                setProviderLocalError(null);
+              }}
+              type="button"
+            >
+              <span>
+                <strong>{provider.name}</strong>
+                <small>
+                  {provider.type} · {provider.model} / {provider.dimension}
+                </small>
+              </span>
+              <em>
+                {provider.enabled
+                  ? t.settings.sections.provider.currentBadge
+                  : t.settings.sections.provider.profileBadge}
+              </em>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className={styles.settingsGrid}>
+        <label className={styles.settingsField} htmlFor="setup-provider-select">
+          <span>{t.settings.sections.provider.providerLabel}</span>
+          <select
+            id="setup-provider-select"
+            onChange={(event) => {
+              const provider =
+                props.embeddingProviders.find(
+                  (candidate) => candidate.id === event.target.value
+                ) ?? null;
+              setProviderDraft(draftForEmbeddingProvider(provider));
+              setProviderLocalError(null);
+            }}
+            value={providerDraft.providerId}
+          >
+            <option value={newEmbeddingProviderId}>
+              {t.settings.sections.provider.newProvider}
+            </option>
+            {props.embeddingProviders.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className={styles.settingsField} htmlFor="setup-provider-type">
+          <span>{t.settings.sections.provider.typeLabel}</span>
+          <select
+            id="setup-provider-type"
+            onChange={(event) => {
+              const nextType =
+                event.target.value === "ollama"
+                  ? "ollama"
+                  : event.target.value === "gemini"
+                    ? "gemini"
+                    : "openai_compatible";
+              setProviderDraft(draftWithProviderType(providerDraft, nextType));
+              setProviderLocalError(null);
+            }}
+            value={providerDraft.type}
+          >
+            <option value="openai_compatible">
+              {t.settings.sections.provider.openaiCompatible}
+            </option>
+            <option value="gemini">{t.settings.sections.provider.gemini}</option>
+            <option value="ollama">{t.settings.sections.provider.ollama}</option>
+          </select>
+        </label>
+
+        <label className={styles.settingsField} htmlFor="setup-provider-name">
+          <span>{t.settings.sections.provider.nameLabel}</span>
+          <input
+            id="setup-provider-name"
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, name: event.target.value })
+            }
+            value={providerDraft.name}
+          />
+        </label>
+
+        <label className={styles.settingsField} htmlFor="setup-provider-base-url">
+          <span>{t.settings.sections.provider.baseUrlLabel}</span>
+          <input
+            id="setup-provider-base-url"
+            inputMode="url"
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, baseUrl: event.target.value })
+            }
+            placeholder={
+              providerDraft.type === "ollama"
+                ? t.settings.sections.provider.ollamaBaseUrlPlaceholder
+                : providerDraft.type === "gemini"
+                  ? t.settings.sections.provider.geminiBaseUrlPlaceholder
+                  : t.settings.sections.provider.baseUrlPlaceholder
+            }
+            type="url"
+            value={providerDraft.baseUrl}
+          />
+        </label>
+
+        <label className={styles.settingsField} htmlFor="setup-provider-model">
+          <span>{t.settings.sections.provider.modelLabel}</span>
+          <input
+            id="setup-provider-model"
+            onChange={(event) =>
+              setProviderDraft({ ...providerDraft, model: event.target.value })
+            }
+            placeholder={
+              providerDraft.type === "ollama"
+                ? t.settings.sections.provider.ollamaModelPlaceholder
+                : providerDraft.type === "gemini"
+                  ? t.settings.sections.provider.geminiModelPlaceholder
+                  : t.settings.sections.provider.modelPlaceholder
+            }
+            value={providerDraft.model}
+          />
+        </label>
+
+        <NumberSettingField
+          id="setup-provider-dimension"
+          label={t.settings.sections.provider.dimensionLabel}
+          max={20000}
+          min={1}
+          onChange={(value) => setProviderDraft({ ...providerDraft, dimension: value })}
+          step={1}
+          value={providerDraft.dimension}
+        />
+
+        <NumberSettingField
+          id="setup-provider-text-max-chars"
+          label={t.settings.sections.provider.textMaxCharsLabel}
+          max={200000}
+          min={1000}
+          onChange={(value) => setProviderDraft({ ...providerDraft, textMaxChars: value })}
+          step={500}
+          value={providerDraft.textMaxChars}
+        />
+
+        <NumberSettingField
+          id="setup-provider-qpm"
+          label={t.settings.sections.provider.requestsPerMinuteLabel}
+          max={1000000}
+          min={1}
+          onChange={(value) =>
+            setProviderDraft({ ...providerDraft, requestsPerMinute: value })
+          }
+          placeholder={t.settings.sections.provider.unlimitedPlaceholder}
+          step={1}
+          value={providerDraft.requestsPerMinute}
+        />
+
+        <NumberSettingField
+          id="setup-provider-qpd"
+          label={t.settings.sections.provider.requestsPerDayLabel}
+          max={100000000}
+          min={1}
+          onChange={(value) => setProviderDraft({ ...providerDraft, requestsPerDay: value })}
+          placeholder={t.settings.sections.provider.unlimitedPlaceholder}
+          step={1}
+          value={providerDraft.requestsPerDay}
+        />
+
+        {providerDraft.type !== "ollama" ? (
+          <label className={styles.settingsField} htmlFor="setup-provider-api-key">
+            <span>{t.settings.sections.provider.apiKeyLabel}</span>
+            <input
+              autoComplete="off"
+              id="setup-provider-api-key"
+              onChange={(event) =>
+                setProviderDraft({ ...providerDraft, apiKey: event.target.value })
+              }
+              placeholder={
+                selectedProvider?.hasApiKey
+                  ? t.settings.sections.provider.apiKeyRetainPlaceholder
+                  : t.settings.sections.provider.apiKeyPlaceholder
+              }
+              type="password"
+              value={providerDraft.apiKey}
+            />
+          </label>
+        ) : (
+          <p className={styles.managementHint}>
+            {t.settings.sections.provider.ollamaApiKeyHint}
+          </p>
+        )}
+
+        <label className={styles.settingsField} htmlFor="setup-provider-quality">
+          <span>{t.settings.sections.provider.qualityTierLabel}</span>
+          <select
+            id="setup-provider-quality"
+            onChange={(event) =>
+              setProviderDraft({
+                ...providerDraft,
+                qualityTier: event.target.value as EmbeddingProviderDraft["qualityTier"]
+              })
+            }
+            value={providerDraft.qualityTier}
+          >
+            <option value="basic">{t.settings.sections.provider.quality.basic}</option>
+            <option value="recommended">
+              {t.settings.sections.provider.quality.recommended}
+            </option>
+            <option value="best_quality">
+              {t.settings.sections.provider.quality.bestQuality}
+            </option>
+          </select>
+        </label>
+      </div>
+
+      <p className={styles.providerWarning}>{t.settings.sections.provider.modelHint}</p>
+      <p className={styles.providerWarning}>{t.settings.sections.provider.rateLimitHint}</p>
+
       <div className={styles.setupStatusBox}>
         <strong>{t.setup.provider.currentTitle}</strong>
         <p>{t.setup.provider.currentBody}</p>
       </div>
-      <button className={styles.primaryButton} onClick={props.onContinue} type="button">
-        {t.setup.provider.continue}
-      </button>
+
+      {selectedProvider ? (
+        <div className={styles.setupStatusBox}>
+          <strong>{t.settings.sections.provider.connectionStatusTitle}</strong>
+          <p>
+            {selectedProvider.lastTestStatus === "success"
+              ? t.settings.sections.provider.lastTestSuccess(
+                  selectedProvider.lastTestAt ?? t.feedManagement.na
+                )
+              : selectedProvider.lastTestStatus === "failed"
+                ? t.settings.sections.provider.lastTestFailed(
+                    selectedProvider.lastTestError ?? t.feedManagement.na
+                  )
+                : t.settings.sections.provider.lastTestUnknown}
+          </p>
+          {selectedProvider.lastTestStatus === "success" && !selectedProviderDraftMatches ? (
+            <p>{t.setup.provider.testStale}</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={styles.managementActions}>
+        <button
+          className={styles.primaryButton}
+          disabled={isPrimaryProviderActionBusy}
+          onClick={() =>
+            void (canFinalizeSelectedProvider
+              ? handleProviderEnableSubmit()
+              : handleProviderTestSubmit())
+          }
+          type="button"
+        >
+          {isActivatingSelectedProvider
+            ? t.settings.sections.provider.activating
+            : props.isSavingEmbeddingProvider
+              ? t.setup.provider.saving
+              : isTestingSelectedProvider
+                ? t.settings.sections.provider.testing
+                : canFinalizeSelectedProvider
+                  ? selectedProvider?.enabled
+                    ? t.setup.provider.useProviderAndContinue
+                    : t.setup.provider.enableAndContinue
+                  : t.setup.provider.saveAndTest}
+        </button>
+        <button className={styles.secondaryButton} onClick={props.onContinue} type="button">
+          {t.setup.provider.continue}
+        </button>
+      </div>
     </section>
   );
 }
@@ -3173,6 +3728,7 @@ type SettingsDraft = {
   defaultHomeView: AppSettings["ui"]["defaultHomeView"];
   markScrolledArticlesIgnored: boolean;
   removeReadLaterOnReadComplete: boolean;
+  telemetryEnabled: boolean;
   fontSize: string;
   lineHeight: string;
   paragraphGap: string;
@@ -3181,7 +3737,15 @@ type SettingsDraft = {
   keepFavorites: boolean;
   keepReadLater: boolean;
   cocoonLevel: string;
+  maxPositiveInterestClusters: string;
+  maxNegativeInterestClusters: string;
 };
+
+const interestClusterLimitPresets = [
+  { maxPositiveInterestClusters: 24, maxNegativeInterestClusters: 16 },
+  { maxPositiveInterestClusters: 48, maxNegativeInterestClusters: 32 },
+  { maxPositiveInterestClusters: 96, maxNegativeInterestClusters: 64 }
+] as const;
 
 type SupportedEmbeddingProviderType = Extract<
   EmbeddingProviderType,
@@ -3240,6 +3804,10 @@ export function SettingsWorkspace(props: {
     props.embeddingProviders[0] ??
     null;
   const [draft, setDraft] = useState<SettingsDraft>(() => draftForSettings(props.settings));
+  const [lastInterestClusterPresetIndex, setLastInterestClusterPresetIndex] = useState(() =>
+    presetIndexForInterestClusterLimits(props.settings.ranking) ??
+    closestInterestClusterPresetIndex(props.settings.ranking)
+  );
   const [providerDraft, setProviderDraft] = useState<EmbeddingProviderDraft>(() =>
     draftForEmbeddingProvider(initialProvider)
   );
@@ -3255,9 +3823,23 @@ export function SettingsWorkspace(props: {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordNotice, setPasswordNotice] = useState<string | null>(null);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [latestRelease, setLatestRelease] = useState<LatestReleaseStatus | null>(null);
+  const [latestReleaseError, setLatestReleaseError] = useState<string | null>(null);
+  const [isLoadingLatestRelease, setIsLoadingLatestRelease] = useState(false);
+  const [isCheckingLatestRelease, setIsCheckingLatestRelease] = useState(false);
+  const savedSettingsRef = useRef(props.settings);
+  const hasUnsavedSettingsDraftRef = useRef(false);
 
   useEffect(() => {
-    setDraft(draftForSettings(props.settings));
+    if (!hasUnsavedSettingsDraftRef.current) {
+      savedSettingsRef.current = props.settings;
+    }
+    const nextDraft = draftForSettings(props.settings);
+    setDraft(nextDraft);
+    setLastInterestClusterPresetIndex(
+      presetIndexForInterestClusterLimits(props.settings.ranking) ??
+        closestInterestClusterPresetIndex(props.settings.ranking)
+    );
   }, [props.settings]);
 
   useEffect(() => {
@@ -3290,7 +3872,38 @@ export function SettingsWorkspace(props: {
     setProviderLocalError(null);
   }, [pendingProviderSelectionId, props.embeddingProviders]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLatestRelease() {
+      setIsLoadingLatestRelease(true);
+      setLatestReleaseError(null);
+
+      try {
+        const result = await dibaoApi.getLatestRelease();
+        if (!cancelled) {
+          setLatestRelease(result);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLatestReleaseError(userMessageForError(error, t.errors.api));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingLatestRelease(false);
+        }
+      }
+    }
+
+    void loadLatestRelease();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [t.errors.api]);
+
   function applyDraft(nextDraft: SettingsDraft) {
+    hasUnsavedSettingsDraftRef.current = true;
     setDraft(nextDraft);
     setLocalError(null);
 
@@ -3309,7 +3922,19 @@ export function SettingsWorkspace(props: {
       return;
     }
 
+    if (
+      retentionSettingsRequireCleanupConfirmation(
+        savedSettingsRef.current.retention,
+        parsed.settings.retention
+      ) &&
+      !window.confirm(t.settings.sections.retention.cleanupConfirm)
+    ) {
+      return;
+    }
+
     await props.onSaveSettings(parsed.input);
+    savedSettingsRef.current = parsed.settings;
+    hasUnsavedSettingsDraftRef.current = false;
   }
 
   async function handleProviderSubmit() {
@@ -3366,6 +3991,19 @@ export function SettingsWorkspace(props: {
     }
   }
 
+  async function handleCheckLatestRelease() {
+    setIsCheckingLatestRelease(true);
+    setLatestReleaseError(null);
+
+    try {
+      setLatestRelease(await dibaoApi.checkLatestRelease());
+    } catch (error) {
+      setLatestReleaseError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsCheckingLatestRelease(false);
+    }
+  }
+
   const selectedProvider =
     providerDraft.providerId === newEmbeddingProviderId
       ? null
@@ -3383,6 +4021,9 @@ export function SettingsWorkspace(props: {
   const canActivateSelectedProvider = selectedProvider !== null && !selectedProvider.enabled;
   const isActivatingSelectedProvider =
     selectedProvider !== null && props.activatingProviderId === selectedProvider.id;
+  const exactInterestClusterPresetIndex = presetIndexForInterestClusterLimitDraft(draft);
+  const interestClusterPresetIndex =
+    exactInterestClusterPresetIndex ?? lastInterestClusterPresetIndex;
 
   return (
     <form
@@ -3577,6 +4218,75 @@ export function SettingsWorkspace(props: {
             value={draft.cocoonLevel}
           />
           <p className={styles.managementHint}>{t.settings.sections.behavior.cocoonLevelHint}</p>
+          <div className={styles.settingsSubsection}>
+            <div>
+              <h4>{t.settings.sections.behavior.interestClusterLimits.title}</h4>
+              <p>{t.settings.sections.behavior.interestClusterLimits.body}</p>
+              <p>{t.settings.sections.behavior.interestClusterLimits.embeddingCostHint}</p>
+            </div>
+            <label className={styles.settingsField} htmlFor="settings-interest-cluster-preset">
+              <span>{t.settings.sections.behavior.interestClusterLimits.performancePreset}</span>
+              <div className={styles.settingsRangeRow}>
+                <input
+                  id="settings-interest-cluster-preset"
+                  max={2}
+                  min={0}
+                  onChange={(event) => {
+                    const presetIndex = interestClusterPresetIndexFromSliderValue(
+                      event.target.value
+                    );
+                    const preset = interestClusterLimitPresets[presetIndex];
+                    setLastInterestClusterPresetIndex(presetIndex);
+                    applyDraft({
+                      ...draft,
+                      maxPositiveInterestClusters: String(preset.maxPositiveInterestClusters),
+                      maxNegativeInterestClusters: String(preset.maxNegativeInterestClusters)
+                    });
+                  }}
+                  step={1}
+                  type="range"
+                  value={interestClusterPresetIndex}
+                />
+                <strong>
+                  {t.settings.sections.behavior.interestClusterLimits.presets[
+                    interestClusterPresetIndex
+                  ] ?? t.settings.sections.behavior.interestClusterLimits.customPreset}
+                </strong>
+              </div>
+              <div className={styles.settingsPresetScale} aria-hidden="true">
+                {t.settings.sections.behavior.interestClusterLimits.presets.map((label) => (
+                  <span key={label}>{label}</span>
+                ))}
+              </div>
+            </label>
+            <div className={styles.settingsGrid}>
+              <NumberSettingField
+                id="settings-max-positive-interest-clusters"
+                label={t.settings.sections.behavior.interestClusterLimits.positiveLabel}
+                max={192}
+                min={8}
+                onChange={(value) =>
+                  applyDraft({ ...draft, maxPositiveInterestClusters: value })
+                }
+                step={1}
+                value={draft.maxPositiveInterestClusters}
+              />
+              <NumberSettingField
+                id="settings-max-negative-interest-clusters"
+                label={t.settings.sections.behavior.interestClusterLimits.negativeLabel}
+                max={128}
+                min={4}
+                onChange={(value) =>
+                  applyDraft({ ...draft, maxNegativeInterestClusters: value })
+                }
+                step={1}
+                value={draft.maxNegativeInterestClusters}
+              />
+            </div>
+            <p className={styles.managementHint}>
+              {t.settings.sections.behavior.interestClusterLimits.fieldHint}
+            </p>
+          </div>
         </section>
 
         <section className={classNames(styles.settingsSection, "settings-card", "reader-settings-card")} aria-labelledby="settings-reader-title">
@@ -4107,9 +4817,141 @@ export function SettingsWorkspace(props: {
             )}
           </div>
         </section>
+
+        <section className={classNames(styles.settingsSection, "settings-card", "about-settings-card")} aria-labelledby="settings-about-title">
+          <div>
+            <h3 id="settings-about-title">{t.settings.sections.about.title}</h3>
+            <p>{t.settings.sections.about.body}</p>
+          </div>
+          <label className={styles.settingsInlineStatus} htmlFor="settings-telemetry-enabled">
+            <span>
+              <strong>{t.settings.sections.about.telemetryLabel}</strong>
+              <small>{t.settings.sections.about.telemetryBody}</small>
+            </span>
+            <input
+              checked={draft.telemetryEnabled}
+              id="settings-telemetry-enabled"
+              onChange={(event) =>
+                applyDraft({
+                  ...draft,
+                  telemetryEnabled: event.target.checked
+                })
+              }
+              type="checkbox"
+            />
+          </label>
+          <dl className={styles.aboutList}>
+            <div>
+              <dt>{t.settings.sections.about.version}</dt>
+              <dd>{t.common.version(dibaoVersion)}</dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.latestVersion}</dt>
+              <dd>
+                <div className={styles.latestReleaseStatus}>
+                  <span>
+                    {latestReleaseText(
+                      latestRelease,
+                      isLoadingLatestRelease,
+                      latestReleaseError,
+                      t
+                    )}
+                  </span>
+                  {latestRelease?.updateAvailable && latestRelease.releaseUrl ? (
+                    <a href={latestRelease.releaseUrl} rel="noreferrer" target="_blank">
+                      {t.settings.sections.about.releaseLink}
+                    </a>
+                  ) : null}
+                  <button
+                    className={styles.secondaryButton}
+                    disabled={isCheckingLatestRelease}
+                    onClick={() => void handleCheckLatestRelease()}
+                    type="button"
+                  >
+                    {isCheckingLatestRelease
+                      ? t.settings.sections.about.checkingRelease
+                      : t.settings.sections.about.checkRelease}
+                  </button>
+                  <small>
+                    {latestRelease?.checkedAt
+                      ? t.settings.sections.about.latestCheckedAt(
+                          formatDate(latestRelease.checkedAt)
+                        )
+                      : t.settings.sections.about.latestNeverChecked}
+                  </small>
+                </div>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.author}</dt>
+              <dd>{t.settings.sections.about.authorName}</dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.xAccount}</dt>
+              <dd>
+                <a href="https://x.com/JeffreyCalm" rel="noreferrer" target="_blank">
+                  @JeffreyCalm
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.blog}</dt>
+              <dd>
+                <a href="https://1q43.blog" rel="noreferrer" target="_blank">
+                  1q43.blog
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.homepage}</dt>
+              <dd>
+                <a href="https://dibao.app" rel="noreferrer" target="_blank">
+                  dibao.app
+                </a>
+              </dd>
+            </div>
+            <div>
+              <dt>{t.settings.sections.about.github}</dt>
+              <dd>
+                <a href="https://github.com/Pls-1q43/Dibao" rel="noreferrer" target="_blank">
+                  Pls-1q43/Dibao
+                </a>
+              </dd>
+            </div>
+          </dl>
+        </section>
       </div>
     </form>
   );
+}
+
+function latestReleaseText(
+  latestRelease: LatestReleaseStatus | null,
+  isLoading: boolean,
+  error: string | null,
+  t: Dictionary
+): string {
+  if (isLoading && latestRelease === null) {
+    return t.settings.sections.about.latestLoading;
+  }
+  if (error) {
+    return error;
+  }
+  if (!latestRelease) {
+    return t.settings.sections.about.latestUnknown;
+  }
+  if (latestRelease.status === "error" && latestRelease.error) {
+    return t.settings.sections.about.latestError(latestRelease.error);
+  }
+  if (!latestRelease.latestVersion) {
+    return latestRelease.checkedAt
+      ? t.settings.sections.about.latestUnavailable
+      : t.settings.sections.about.latestUnknown;
+  }
+  if (latestRelease.updateAvailable) {
+    return t.settings.sections.about.latestUpdateAvailable(latestRelease.latestVersion);
+  }
+  return t.settings.sections.about.latestCurrent(latestRelease.latestVersion);
 }
 
 export function AlgorithmTransparencyPage(props: {
@@ -4305,6 +5147,8 @@ export function AlgorithmTransparencyPage(props: {
             </div>
           ) : null}
         </section>
+
+        <FamilySummaryPanel families={props.status?.clusters.families ?? null} />
 
         <section className={classNames(styles.settingsSection, "algorithm-card")}>
           <div>
@@ -4661,6 +5505,87 @@ function ClusterLabelLexiconPanel(props: {
   );
 }
 
+function FamilySummaryPanel(props: {
+  families: RecommendationStatus["clusters"]["families"] | null;
+}) {
+  const { t } = useI18n();
+  const families = props.families?.topFamilies ?? [];
+
+  return (
+    <section className={classNames(styles.settingsSection, "algorithm-card")}>
+      <div>
+        <h3>{t.algorithmTransparency.sections.topicFamilies}</h3>
+        <p>
+          {props.families
+            ? t.algorithmTransparency.families.summary(
+                props.families.positive,
+                props.families.negative,
+                t.algorithmTransparency.families.risk[props.families.concentrationRisk]
+              )
+            : t.algorithmTransparency.families.empty}
+        </p>
+      </div>
+      {families.length > 0 ? (
+        <div className={styles.algorithmFamilyList}>
+          {families.slice(0, 6).map((family) => (
+            <FamilySummaryRow family={family} key={family.id} />
+          ))}
+        </div>
+      ) : (
+        <p>{t.algorithmTransparency.families.empty}</p>
+      )}
+    </section>
+  );
+}
+
+function FamilySummaryRow(props: { family: RecommendationFamilySummaryItem }) {
+  const { t } = useI18n();
+  return (
+    <div className={styles.algorithmFamilyRow}>
+      <div>
+        <strong>{props.family.displayLabel}</strong>
+        <p>
+          {t.algorithmTransparency.families.rowMeta(
+            props.family.clusterCount,
+            props.family.supportArticleCount,
+            props.family.sourceCount,
+            formatPercent(props.family.dominanceRatio),
+            formatPercent(props.family.maturity)
+          )}
+        </p>
+      </div>
+      <span className={styles.algorithmFamilyPill}>
+        {t.algorithmTransparency.families.risk[props.family.diagnostics.concentrationRisk]}
+      </span>
+    </div>
+  );
+}
+
+function groupClustersByFamily(
+  clusters: RecommendationClusterItem[],
+  fallbackLabels: { positive: string; negative: string }
+): Array<{
+  id: string;
+  label: string;
+  clusters: RecommendationClusterItem[];
+}> {
+  const groups = new Map<string, { id: string; label: string; clusters: RecommendationClusterItem[] }>();
+  clusters.forEach((cluster, index) => {
+    const id = cluster.family?.id ?? `ungrouped:${cluster.polarity}`;
+    const label =
+      cluster.family?.displayLabel ??
+      (cluster.polarity === "positive" ? fallbackLabels.positive : fallbackLabels.negative);
+    const group = groups.get(id) ?? { id, label, clusters: [] };
+    group.clusters.push({ ...cluster, displayIndex: cluster.displayIndex ?? index + 1 });
+    groups.set(id, group);
+  });
+  return Array.from(groups.values()).sort(
+    (left, right) =>
+      right.clusters.length - left.clusters.length ||
+      left.label.localeCompare(right.label)
+  );
+}
+
 function AlgorithmClustersPage(props: {
   clusters: RecommendationClusterItem[];
   error: string | null;
@@ -4671,6 +5596,10 @@ function AlgorithmClustersPage(props: {
   updatingClusterLabelId: string | null;
 }) {
   const { t } = useI18n();
+  const familyGroups = groupClustersByFamily(props.clusters, {
+    positive: t.algorithmTransparency.families.positiveFallback,
+    negative: t.algorithmTransparency.families.negativeFallback
+  });
 
   return (
     <section
@@ -4696,16 +5625,29 @@ function AlgorithmClustersPage(props: {
             <p className={styles.settingsNotice}>{t.recommendationStatus.loading}</p>
           ) : null}
           {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
-          {!props.isLoading && !props.error && props.clusters.length > 0 ? (
-            <div className={styles.algorithmClusterGrid}>
-              {props.clusters.map((cluster, index) => (
-                <ClusterCard
-                  cluster={cluster}
-                  index={index}
-                  key={cluster.id}
-                  onUpdateLabel={props.onUpdateClusterLabel}
-                  updating={props.updatingClusterLabelId === cluster.id}
-                />
+          {!props.isLoading && !props.error && familyGroups.length > 0 ? (
+            <div className={styles.algorithmFamilyList}>
+              {familyGroups.map((group, groupIndex) => (
+                <details
+                  className={styles.algorithmFamilyGroup}
+                  key={group.id}
+                  open={groupIndex < 3}
+                >
+                  <summary>
+                    {group.label} · {t.algorithmTransparency.families.clusterCount(group.clusters.length)}
+                  </summary>
+                  <div className={styles.algorithmClusterGrid}>
+                    {group.clusters.map((cluster) => (
+                      <ClusterCard
+                        cluster={cluster}
+                        index={cluster.displayIndex ?? props.clusters.indexOf(cluster) + 1}
+                        key={cluster.id}
+                        onUpdateLabel={props.onUpdateClusterLabel}
+                        updating={props.updatingClusterLabelId === cluster.id}
+                      />
+                    ))}
+                  </div>
+                </details>
               ))}
             </div>
           ) : null}
@@ -4764,6 +5706,12 @@ function ClusterCard(props: {
           : t.algorithmTransparency.clusters.negative}
       </span>
       <strong>{clusterDisplayName(props.cluster, props.index, t)}</strong>
+      {props.cluster.family ? (
+        <p>
+          {t.algorithmTransparency.families.clusterFamily}:{" "}
+          {props.cluster.family.displayLabel}
+        </p>
+      ) : null}
       <p>
         {t.algorithmTransparency.clusters.sourceLabel}:{" "}
         {t.algorithmTransparency.clusters.source[source]} ·{" "}
@@ -5826,6 +6774,7 @@ function RecommendationStatusBar(props: {
         ? t.recommendationStatus.loading
         : t.recommendationStatus.fallback;
   const metrics = props.status ? recommendationStatusMetrics(props.status, t, formatDate) : [];
+  const showWarmupNotice = props.status ? hasProfileWarmupWarning(props.status) : false;
 
   return (
     <section className={styles.recommendationStatusBar} aria-live="polite">
@@ -5833,6 +6782,11 @@ function RecommendationStatusBar(props: {
         <span className={styles.recommendationStatusLabel}>{t.recommendationStatus.title}</span>
         <strong>{statusText}</strong>
       </div>
+      {showWarmupNotice ? (
+        <p className={styles.recommendationStatusNotice}>
+          {t.recommendationStatus.warmupNotice}
+        </p>
+      ) : null}
       {metrics.length > 0 ? (
         <dl className={styles.recommendationStatusMetrics}>
           {metrics.map((metric) => (
@@ -5844,6 +6798,10 @@ function RecommendationStatusBar(props: {
       ) : null}
     </section>
   );
+}
+
+function hasProfileWarmupWarning(status: RecommendationStatus): boolean {
+  return status.warnings.some((warning) => warning.code === "PROFILE_WARMUP");
 }
 
 function useArticleListIgnoreTelemetry(props: {
@@ -6018,6 +6976,7 @@ function ArticleDetailPanel(props: {
   );
   const sourceNotice = props.article ? contentSourceNotice(props.article, t) : null;
   const showReaderActions = useReaderActionVisibility(readerPanelRef, props.article?.id ?? null);
+  const canExplainDetail = shouldLoadRankExplanation(props.articleView);
 
   useReaderReadProgress({
     article: props.article,
@@ -6070,6 +7029,8 @@ function ArticleDetailPanel(props: {
             <ArticleActionControls
               actionError={props.actionError}
               article={props.article}
+              canExplain={canExplainDetail}
+              onExplain={props.onOpenExplanation}
               onAction={(intent) => props.onArticleAction(props.article as ArticleDetail, intent)}
               pendingAction={props.pendingAction}
               placement="top"
@@ -6203,8 +7164,10 @@ function shortError(value: string): string {
 export function ArticleActionControls(props: {
   actionError: string | null;
   article: Pick<ArticleDetail, "id" | "state">;
+  canExplain?: boolean;
   hidden?: boolean;
   onAction: (intent: ArticleActionIntent) => void;
+  onExplain?: () => void;
   pendingAction: ArticleActionIntent | null;
   placement?: "top" | "bottom";
 }) {
@@ -6269,6 +7232,17 @@ export function ArticleActionControls(props: {
           onClick={() => props.onAction("notInterested")}
           selected={state.notInterested}
         />
+        {props.canExplain && props.onExplain ? (
+          <button
+            aria-label={t.explanation.title}
+            className={classNames(styles.actionButton, styles.actionExplain)}
+            onClick={props.onExplain}
+            title={t.explanation.title}
+            type="button"
+          >
+            <ActionIcon name="sparkle" />
+          </button>
+        ) : null}
       </div>
       {props.actionError ? <p className={styles.actionError}>{props.actionError}</p> : null}
     </div>
@@ -6278,6 +7252,7 @@ export function ArticleActionControls(props: {
 export function RankExplanationPanel(props: {
   error: string | null;
   explanation: RankExplanation | null;
+  idleMessage?: string | null;
   isLoading: boolean;
 }) {
   const { t, formatDate } = useI18n();
@@ -6316,6 +7291,9 @@ export function RankExplanationPanel(props: {
           <p className={styles.explanationMeta}>{t.explanation.empty}</p>
         )
       ) : null}
+      {!props.isLoading && !props.error && !props.explanation && props.idleMessage ? (
+        <p className={styles.explanationMeta}>{props.idleMessage}</p>
+      ) : null}
     </section>
   );
 }
@@ -6345,15 +7323,12 @@ export function ArticleExplanationEntry(props: {
   return (
     <>
       <section className={styles.reasonInline} aria-label={t.explanation.title}>
-        <div>
-          <h3>
-            <ActionIcon name="sparkle" /> {t.explanation.entryTitle}
-          </h3>
-          <p>{t.explanation.teaser}</p>
-        </div>
-        <button className={styles.primaryButton} onClick={props.onOpen} type="button">
-          {t.explanation.open}
-        </button>
+        <RankExplanationPanel
+          error={props.error}
+          explanation={props.explanation}
+          idleMessage={t.explanation.lazy}
+          isLoading={props.isLoading}
+        />
       </section>
 
       <button
@@ -6914,6 +7889,7 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
     defaultHomeView: settings.ui.defaultHomeView,
     markScrolledArticlesIgnored: settings.behavior.markScrolledArticlesIgnored,
     removeReadLaterOnReadComplete: settings.behavior.removeReadLaterOnReadComplete,
+    telemetryEnabled: settings.telemetry.enabled,
     fontSize: String(settings.reader.fontSize),
     lineHeight: String(settings.reader.lineHeight),
     paragraphGap: String(settings.reader.paragraphGap),
@@ -6921,8 +7897,69 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
     retentionDays: String(settings.retention.retentionDays),
     keepFavorites: settings.retention.keepFavorites,
     keepReadLater: settings.retention.keepReadLater,
-    cocoonLevel: String(settings.ranking.cocoonLevel)
+    cocoonLevel: String(settings.ranking.cocoonLevel),
+    maxPositiveInterestClusters: String(settings.ranking.maxPositiveInterestClusters),
+    maxNegativeInterestClusters: String(settings.ranking.maxNegativeInterestClusters)
   };
+}
+
+function presetIndexForInterestClusterLimits(
+  ranking: Pick<
+    AppSettings["ranking"],
+    "maxPositiveInterestClusters" | "maxNegativeInterestClusters"
+  >
+): number | null {
+  const index = interestClusterLimitPresets.findIndex(
+    (preset) =>
+      preset.maxPositiveInterestClusters === ranking.maxPositiveInterestClusters &&
+      preset.maxNegativeInterestClusters === ranking.maxNegativeInterestClusters
+  );
+  return index >= 0 ? index : null;
+}
+
+function presetIndexForInterestClusterLimitDraft(draft: SettingsDraft): number | null {
+  const maxPositiveInterestClusters = Number(draft.maxPositiveInterestClusters);
+  const maxNegativeInterestClusters = Number(draft.maxNegativeInterestClusters);
+  if (
+    !Number.isInteger(maxPositiveInterestClusters) ||
+    !Number.isInteger(maxNegativeInterestClusters)
+  ) {
+    return null;
+  }
+  return presetIndexForInterestClusterLimits({
+    maxPositiveInterestClusters,
+    maxNegativeInterestClusters
+  });
+}
+
+function interestClusterPresetIndexFromSliderValue(value: string): 0 | 1 | 2 {
+  if (value === "2") {
+    return 2;
+  }
+  if (value === "1") {
+    return 1;
+  }
+  return 0;
+}
+
+function closestInterestClusterPresetIndex(
+  ranking: Pick<
+    AppSettings["ranking"],
+    "maxPositiveInterestClusters" | "maxNegativeInterestClusters"
+  >
+): number {
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  interestClusterLimitPresets.forEach((preset, index) => {
+    const distance =
+      Math.abs(preset.maxPositiveInterestClusters - ranking.maxPositiveInterestClusters) +
+      Math.abs(preset.maxNegativeInterestClusters - ranking.maxNegativeInterestClusters);
+    if (distance < closestDistance) {
+      closestIndex = index;
+      closestDistance = distance;
+    }
+  });
+  return closestIndex;
 }
 
 function draftForEmbeddingProvider(provider: EmbeddingProvider | null): EmbeddingProviderDraft {
@@ -6983,6 +8020,36 @@ function draftWithProviderType(
   };
 }
 
+function embeddingProviderDraftMatchesProvider(
+  draft: EmbeddingProviderDraft,
+  provider: EmbeddingProvider
+): boolean {
+  return (
+    draft.providerId === provider.id &&
+    draft.type === supportedProviderType(provider.type) &&
+    draft.name.trim() === provider.name &&
+    draft.baseUrl.trim() === provider.baseUrl &&
+    draft.model.trim() === provider.model &&
+    Number(draft.dimension) === provider.dimension &&
+    Number(draft.textMaxChars) === provider.textMaxChars &&
+    optionalNumberDraftMatches(draft.requestsPerMinute, provider.requestsPerMinute) &&
+    optionalNumberDraftMatches(draft.requestsPerDay, provider.requestsPerDay) &&
+    draft.apiKey.trim() === "" &&
+    draft.qualityTier === provider.qualityTier
+  );
+}
+
+function optionalNumberDraftMatches(
+  draft: string,
+  value: number | null | undefined
+): boolean {
+  if (draft.trim() === "") {
+    return value === null || value === undefined;
+  }
+
+  return Number(draft) === value;
+}
+
 function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {
   if (type === "ollama") {
     return {
@@ -7017,6 +8084,18 @@ function supportedProviderType(
   type: EmbeddingProviderType | undefined
 ): SupportedEmbeddingProviderType {
   return type === "ollama" || type === "gemini" ? type : "openai_compatible";
+}
+
+function providerRecommendationReadmeUrl(locale: Locale): string {
+  if (locale === "en-US") {
+    return "https://github.com/Pls-1q43/Dibao/tree/main?tab=readme-ov-file#%E6%8E%A8%E8%8D%90-provider";
+  }
+
+  if (locale === "ja-JP") {
+    return "https://github.com/Pls-1q43/Dibao/blob/main/README.ja.md";
+  }
+
+  return "https://github.com/Pls-1q43/Dibao/tree/main?tab=readme-ov-file#%E6%8E%A8%E8%8D%90-provider";
 }
 
 function parseSettingsDraft(
@@ -7054,6 +8133,24 @@ function parseSettingsDraft(
   if (cocoonLevel === null) {
     return { ok: false, error: t.settings.errors.cocoonLevel };
   }
+  const maxPositiveInterestClusters = parseNumberDraft(
+    draft.maxPositiveInterestClusters,
+    8,
+    192,
+    true
+  );
+  if (maxPositiveInterestClusters === null) {
+    return { ok: false, error: t.settings.errors.maxPositiveInterestClusters };
+  }
+  const maxNegativeInterestClusters = parseNumberDraft(
+    draft.maxNegativeInterestClusters,
+    4,
+    128,
+    true
+  );
+  if (maxNegativeInterestClusters === null) {
+    return { ok: false, error: t.settings.errors.maxNegativeInterestClusters };
+  }
 
   const settings: AppSettings = {
     ...current,
@@ -7073,6 +8170,10 @@ function parseSettingsDraft(
       markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored,
       removeReadLaterOnReadComplete: draft.removeReadLaterOnReadComplete
     },
+    telemetry: {
+      ...current.telemetry,
+      enabled: draft.telemetryEnabled
+    },
     retention: {
       ...current.retention,
       retentionDays,
@@ -7081,7 +8182,9 @@ function parseSettingsDraft(
     },
     ranking: {
       ...current.ranking,
-      cocoonLevel
+      cocoonLevel,
+      maxPositiveInterestClusters,
+      maxNegativeInterestClusters
     }
   };
 
@@ -7103,16 +8206,37 @@ function parseSettingsDraft(
         markScrolledArticlesIgnored: draft.markScrolledArticlesIgnored,
         removeReadLaterOnReadComplete: draft.removeReadLaterOnReadComplete
       },
+      telemetry: {
+        enabled: draft.telemetryEnabled
+      },
       retention: {
         retentionDays,
         keepFavorites: draft.keepFavorites,
         keepReadLater: draft.keepReadLater
       },
       ranking: {
-        cocoonLevel
+        cocoonLevel,
+        maxPositiveInterestClusters,
+        maxNegativeInterestClusters
       }
     }
   };
+}
+
+function retentionSettingsRequireCleanupConfirmation(
+  before: AppSettings["retention"],
+  after: AppSettings["retention"]
+): boolean {
+  if (after.retentionDays === 0) {
+    return false;
+  }
+
+  return (
+    before.retentionDays === 0 ||
+    after.retentionDays < before.retentionDays ||
+    (before.keepFavorites && !after.keepFavorites) ||
+    (before.keepReadLater && !after.keepReadLater)
+  );
 }
 
 function parseEmbeddingProviderDraft(
@@ -7613,14 +8737,6 @@ function shouldLetBrowserHandleLinkClick(event: MouseEvent<HTMLAnchorElement>): 
   );
 }
 
-function isMobileArticleHistoryEnabled(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(max-width: 767px)").matches
-  );
-}
-
 function classNames(...values: Array<string | null | undefined | false>): string {
   return values.filter(Boolean).join(" ");
 }
@@ -7918,6 +9034,11 @@ function maintenanceTasks(t: Dictionary): Array<{
       ...copy.cluster_merge_diagnostics
     },
     {
+      key: "interest_family_rebuild",
+      scheduleKey: "interest_family_daily",
+      ...copy.interest_family_rebuild
+    },
+    {
       key: "cluster_auto_merge",
       scheduleKey: "cluster_auto_merge_daily",
       ...copy.cluster_auto_merge
@@ -8116,6 +9237,12 @@ function explanationReasonText(reason: RankExplanationReason, t: Dictionary): st
           )
         );
       }
+      if (reason.family) {
+        return t.explanation.reasons.interestFamily(reason.family.label);
+      }
+      if (reason.recentIntent) {
+        return t.explanation.reasons.recentIntent;
+      }
       return t.explanation.reasons.interest;
     case "source":
       return reason.impact === "negative"
@@ -8133,6 +9260,8 @@ function explanationReasonText(reason: RankExplanationReason, t: Dictionary): st
       return t.explanation.reasons.negative;
     case "penalty":
       return t.explanation.reasons.penalty;
+    case "exploration":
+      return t.explanation.reasons.exploration;
   }
 }
 

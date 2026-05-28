@@ -67,7 +67,8 @@ export type JobType =
   | "recommendation_backfill"
   | "interest_cluster_label_rebuild"
   | "interest_cluster_merge_diagnostics"
-  | "interest_cluster_auto_merge";
+  | "interest_cluster_auto_merge"
+  | "interest_family_rebuild";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -297,10 +298,18 @@ export type MarkScopeReadCommandInput = {
   now?: number;
 };
 
+export type MarkScopeReadAuditResult = {
+  markedReadCount: number;
+  sampleArticleIds: string[];
+  limitedAudit: boolean;
+};
+
 export type MarkScopeReadCommandResult = {
   commandId: string;
   markedReadCount: number;
   affectedArticleIds?: string[];
+  sampleArticleIds?: string[];
+  limitedAudit?: boolean;
 };
 
 export type MarkScopeReadCommandPreview = {
@@ -319,7 +328,7 @@ export type RecordReaderCommandEventInput = {
   id: string;
   commandType: ReaderCommandType;
   scope: ArticleScope;
-  result: Omit<MarkScopeReadCommandResult, "commandId">;
+  result: MarkScopeReadAuditResult;
   createdAt: number;
 };
 
@@ -553,6 +562,39 @@ export type InterestClusterMergeCandidateRow = {
   decidedAt: number | null;
 };
 
+export type InterestFamilyRow = {
+  id: string;
+  embeddingIndexId: string;
+  polarity: InterestClusterPolarity;
+  displayLabel: string;
+  centroidVectorBlob: Buffer;
+  weight: number;
+  clusterCount: number;
+  supportArticleCount: number;
+  supportEventCount: number;
+  sourceCount: number;
+  strongSignalCount: number;
+  topSourceShare: number;
+  maturity: number;
+  dominanceRatio: number;
+  labelTermsJson: string | null;
+  representativeClusterIdsJson: string | null;
+  diagnosticsJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type InterestClusterFamilyMemberRow = {
+  clusterId: string;
+  familyId: string;
+  embeddingIndexId: string;
+  polarity: InterestClusterPolarity;
+  membershipConfidence: number;
+  centroidSimilarity: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type EmbeddingUsageWindow = {
   requestCount: number;
   itemCount: number;
@@ -686,6 +728,11 @@ export type FeedStatsInput = {
 export type BehaviorEventCountRow = {
   eventType: BehaviorEventType;
   count: number;
+};
+
+export type ProfileSignalCountRow = {
+  signalCount: number;
+  articleCount: number;
 };
 
 export type ClusterCountRow = {

@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
@@ -20,10 +18,14 @@ RUN npm ci
 
 COPY . .
 
-RUN npm run build
+RUN --mount=type=secret,id=dibao_sentry_config,target=/app/config/sentry.json,required=false npm run build
 RUN npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
+
+LABEL org.opencontainers.image.licenses="BUSL-1.1" \
+  com.dibao.license.change-license="Apache-2.0" \
+  com.dibao.license.change-date="2030-05-28"
 
 ENV NODE_ENV=production \
   DIBAO_HOST=0.0.0.0 \
@@ -44,6 +46,7 @@ COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/apps/server/package.json ./apps/server/package.json
 COPY --from=builder --chown=node:node /app/apps/server/dist ./apps/server/dist
 COPY --from=builder --chown=node:node /app/apps/web/dist ./apps/web/dist
+COPY --from=builder --chown=node:node /app/.dibao ./.dibao
 COPY --from=builder --chown=node:node /app/packages ./packages
 
 USER node

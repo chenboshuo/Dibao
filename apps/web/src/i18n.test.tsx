@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   AlgorithmTransparencyPage,
@@ -11,7 +12,7 @@ import {
   pageForNavigationItem,
   RankExplanationPanel,
   SettingsWorkspace,
-  SetupProviderPlaceholderPanel,
+  SetupProviderPanel,
   SetupSourcesPanel,
   SetupWelcomePanel,
   correctSourceSelection,
@@ -26,10 +27,11 @@ import {
   unreadCountWithKnownLocalStates,
   unreadCountAfterStateChange
 } from "./articleListState.js";
-import { defaultAppSettings, type ArticleListItem } from "./api.js";
+import { defaultAppSettings, type ArticleListItem, type EmbeddingProvider } from "./api.js";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
 import {
   DibaoI18nProvider,
+  browserPreferredLocale,
   createI18n,
   defaultLocale,
   dictionaries,
@@ -37,6 +39,10 @@ import {
 } from "./i18n.js";
 
 describe("web i18n", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("keeps dictionary key structure aligned across locales", () => {
     const [baseLocale, ...otherLocales] = supportedLocales;
     const baseShape = dictionaryShape(dictionaries[baseLocale]);
@@ -52,6 +58,16 @@ describe("web i18n", () => {
     expect(i18n.locale).toBe(defaultLocale);
     expect(i18n.t.errors.api.requestFailed).toBe("请求失败，请稍后重试。");
     expect(i18n.formatDate("2026-05-14T08:00:00.000Z")).not.toBe("2026-05-14T08:00:00.000Z");
+  });
+
+  it("chooses the initial locale from browser languages when available", () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", {
+      languages: ["ja-JP", "en-US"],
+      language: "ja-JP"
+    });
+
+    expect(browserPreferredLocale()).toBe("ja-JP");
   });
 
   it("renders App auth loading with dictionary copy for a non-default locale", () => {
@@ -202,6 +218,24 @@ describe("web i18n", () => {
     ).toBe(11);
   });
 
+  it("keeps non-unseen article states from rendering the unread strip", () => {
+    const css = readFileSync(
+      new URL("./design-system/AppShell/AppShell.module.css", import.meta.url),
+      "utf8"
+    );
+    const subtleStripRule = css.slice(
+      css.indexOf(".articleItemRead,"),
+      css.indexOf("--article-strip-background: var(--color-line-subtle);")
+    );
+
+    for (const status of ["opened", "reading", "saved", "seen", "read"]) {
+      expect(subtleStripRule).toContain(`.articleItem[data-interaction-status="${status}"]`);
+      expect(subtleStripRule).toContain(
+        `.articleItemActive[data-interaction-status="${status}"]`
+      );
+    }
+  });
+
   it("renders setup and login auth gate copy from the dictionary", () => {
     const setupHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
@@ -226,7 +260,7 @@ describe("web i18n", () => {
     expect(loginHtml).toContain("Invalid password");
   });
 
-  it("renders first-run wizard copy without provider configuration fields", () => {
+  it("renders first-run wizard with provider configuration and skip fallback", () => {
     const welcomeHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
         <SetupWelcomePanel onStart={() => undefined} />
@@ -252,7 +286,85 @@ describe("web i18n", () => {
     );
     const providerHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
-        <SetupProviderPlaceholderPanel onContinue={() => undefined} />
+        <SetupProviderPanel
+          activatingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
+          onContinue={() => undefined}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
+      </DibaoI18nProvider>
+    );
+    const providerEnglishHtml = renderToStaticMarkup(
+      <DibaoI18nProvider locale="en-US">
+        <SetupProviderPanel
+          activatingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
+          onContinue={() => undefined}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
+      </DibaoI18nProvider>
+    );
+    const providerJapaneseHtml = renderToStaticMarkup(
+      <DibaoI18nProvider locale="ja-JP">
+        <SetupProviderPanel
+          activatingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
+          onContinue={() => undefined}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
+      </DibaoI18nProvider>
+    );
+    const testedProvider: EmbeddingProvider = {
+      id: "provider_tested",
+      type: "openai_compatible",
+      name: "Test Provider",
+      baseUrl: "https://example.com/v1",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+      textMaxChars: 8000,
+      requestsPerMinute: null,
+      requestsPerDay: null,
+      enabled: false,
+      qualityTier: "recommended",
+      hasApiKey: true,
+      lastTestStatus: "success",
+      lastTestError: null,
+      lastTestAt: "2026-05-28T06:44:11.354Z",
+      createdAt: "2026-05-28T06:44:11.354Z",
+      updatedAt: "2026-05-28T06:44:11.354Z"
+    };
+    const testedProviderHtml = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <SetupProviderPanel
+          activatingProviderId={null}
+          embeddingError={null}
+          embeddingProviders={[testedProvider]}
+          isEmbeddingLoading={false}
+          isSavingEmbeddingProvider={false}
+          testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
+          onContinue={() => undefined}
+          onSaveEmbeddingProvider={() => Promise.resolve(null)}
+          onTestEmbeddingProvider={() => Promise.resolve()}
+        />
       </DibaoI18nProvider>
     );
 
@@ -262,12 +374,23 @@ describe("web i18n", () => {
     expect(sourcesHtml).toContain("导入 OPML 文件");
     expect(sourcesHtml).toContain("网站或 RSS / Atom URL");
     expect(providerHtml).toContain("推荐能力");
-    expect(providerHtml).toContain("当前使用基础排序");
-    expect(providerHtml).toContain("暂不配置，继续");
-    expect(providerHtml).not.toContain("API Key");
-    expect(providerHtml).not.toContain("Provider URL");
-    expect(providerHtml).not.toContain("Model");
-    expect(providerHtml).not.toContain("测试连接");
+    expect(providerHtml).toContain("查看这里选择合适的（免费）Provider。");
+    expect(providerHtml).toContain("tree/main");
+    expect(providerHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
+    expect(providerHtml).toContain("跳过，使用基础排序");
+    expect(providerHtml).toContain("保存配置并测试连接");
+    expect(providerHtml).toContain("API Key");
+    expect(providerHtml).toContain("Base URL");
+    expect(providerHtml).toContain("模型");
+    expect(providerHtml).toContain("切片长度");
+    expect(testedProviderHtml).toContain("启用 Provider 并继续");
+    expect(testedProviderHtml).not.toContain("保存配置并测试连接</button>");
+    expect(testedProviderHtml).not.toContain("删除");
+    expect(providerEnglishHtml).toContain("tree/main");
+    expect(providerEnglishHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
+    expect(providerJapaneseHtml).toContain("README.ja.md");
+    expect(providerJapaneseHtml).toContain("blob/main");
+    expect(providerJapaneseHtml).not.toContain("%E3%81%8A%E3%81%99%E3%81%99%E3%82%81-provider");
   });
 
   it("renders OPML, folder, and pagination copy from the dictionary", () => {
@@ -426,7 +549,12 @@ describe("web i18n", () => {
             },
             lastProfileUpdate: "2026-05-14T08:09:00.000Z",
             lastRankingUpdate: "2026-05-14T08:11:00.000Z",
-            warnings: []
+            warnings: [
+              {
+                code: "PROFILE_WARMUP",
+                message: "The recommendation profile still has limited behavior and interest signals."
+              }
+            ]
           }}
           recommendationStatusError={null}
           readerCommandError={null}
@@ -447,6 +575,9 @@ describe("web i18n", () => {
     expect(html).toContain("行为 3");
     expect(html).toContain("Coverage 50%");
     expect(html).toContain("兴趣簇 +1 / -0");
+    expect(html).toContain(
+      "当前用户行为正在积累中，推荐可能不准确，建议在“最新”视图中当做普通 RSS 阅读器正常使用。"
+    );
   });
 
   it("renders article summaries as plain text in the list", () => {
@@ -959,12 +1090,27 @@ describe("web i18n", () => {
     expect(html).toContain("查看算法透明说明");
     expect(html).toContain("稍后读中的文章读完后，自动移出稍后读");
     expect(html).toContain("type=\"range\"");
+    expect(html).toContain("兴趣簇上限");
+    expect(html).toContain("低配 VPS：24 / 16");
+    expect(html).toContain("中配 NAS：48 / 32");
+    expect(html).toContain("正向兴趣簇");
+    expect(html).toContain("负向兴趣簇");
+    expect(html).toContain("不会按比例增加外部 Embedding 调用");
     expect(html).toContain("字号");
     expect(html).toContain("行高");
     expect(html).toContain("段距");
     expect(html).toContain("阅读宽度");
     expect(html).toContain("保留天数");
     expect(html).toContain("retention.retentionDays");
+    expect(html).toContain("关于");
+    expect(html).toContain("v0.1.0");
+    expect(html).toContain("评论尸");
+    expect(html).toContain("https://x.com/JeffreyCalm");
+    expect(html).toContain("https://1q43.blog");
+    expect(html).toContain("https://dibao.app");
+    expect(html).toContain("https://github.com/Pls-1q43/Dibao");
+    expect(html).toContain("控制是否向开发者发送用于优化邸报的错误、性能和体验反馈数据。");
+    expect(html).not.toContain("反馈遥测");
     expect(html).toContain("智能能力");
     expect(html).toContain("当前未启用 Provider");
     expect(html).toContain("保存配置档");
@@ -979,6 +1125,7 @@ describe("web i18n", () => {
     expect(html).toContain("QPD");
     expect(html).toContain("新的向量空间");
     expect(html).toContain("测试连接");
+    expect(html.indexOf("智能能力")).toBeLessThan(html.indexOf("关于"));
   });
 
   it("renders provider connection and embedding job status separately", () => {
@@ -1146,6 +1293,11 @@ describe("web i18n", () => {
                 type: "source",
                 label: "Fixture Feed",
                 impact: "positive"
+              },
+              {
+                type: "exploration",
+                label: "Break-cocoon exploration",
+                impact: "neutral"
               }
             ]
           }}
@@ -1158,6 +1310,7 @@ describe("web i18n", () => {
     expect(html).toContain("新鲜度");
     expect(html).toContain("文章较新");
     expect(html).toContain("来源 Fixture Feed");
+    expect(html).toContain("本文由破茧算法打捞，你可在设置页调整算法信息茧房水平。");
   });
 
   it("renders sorting notes for non-personalized article detail views", () => {
@@ -1193,7 +1346,7 @@ describe("web i18n", () => {
     expect(favoriteHtml).toContain("收藏视图默认按收藏时间排序");
   });
 
-  it("renders personalized explanation entry as a popover trigger", () => {
+  it("renders personalized explanation entry inline on desktop", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>
         <ArticleExplanationEntry
@@ -1211,16 +1364,79 @@ describe("web i18n", () => {
             ]
           }}
           isLoading={false}
-          isOpen
+          isOpen={false}
           onClose={() => undefined}
           onOpen={() => undefined}
         />
       </DibaoI18nProvider>
     );
 
-    expect(html).toContain("查看完整理由");
     expect(html).toContain("与你近期的正向兴趣相似");
-    expect(html).toContain("关闭");
+    expect(html).not.toContain(">查看完整理由</button>");
+    expect(html).not.toContain("关闭");
+  });
+
+  it("renders interest family and recent intent explanation copy", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="recommended"
+          error={null}
+          explanation={{
+            articleId: "article_fixture",
+            generatedAt: "2026-05-14T08:10:00.000Z",
+            reasons: [
+              {
+                type: "interest",
+                label: "Interest family match",
+                impact: "positive",
+                family: {
+                  id: "family_product_ai",
+                  label: "产品 / AI",
+                  maturity: 0.82,
+                  dominanceRatio: 0.24,
+                  matchedFamilyCount: 2
+                }
+              },
+              {
+                type: "interest",
+                label: "Recent interest trend",
+                impact: "positive",
+                recentIntent: {
+                  polarity: "positive"
+                }
+              }
+            ]
+          }}
+          isLoading={false}
+          isOpen={false}
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("与你的兴趣主题「产品 / AI」相近");
+    expect(html).toContain("与你近期的阅读趋势相近");
+  });
+
+  it("renders lazy personalized explanation copy before reasons are loaded", () => {
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleExplanationEntry
+          articleView="recommended"
+          error={null}
+          explanation={null}
+          isLoading={false}
+          isOpen={false}
+          onClose={() => undefined}
+          onOpen={() => undefined}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("阅读过半后显示推荐解释");
+    expect(html).not.toContain("与你近期的正向兴趣相似");
   });
 });
 

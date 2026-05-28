@@ -8,6 +8,7 @@ import type {
 } from "@dibao/db";
 import { ArticleActionService } from "./article-action-service.js";
 import {
+  HIGH_VOLUME_PROFILE_RANKING_DELAY_MS,
   ProfileEventProcessJobService,
   parseProfileEventProcessPayload
 } from "./profile-event-job-service.js";
@@ -51,7 +52,7 @@ describe("ArticleActionService", () => {
         processEvent: (eventId: string) => ({
           articleIds: ["article_1"],
           feedStatsChanged: true,
-          profileChanged: eventId === "event_profile"
+          profileChanged: eventId === "event_profile" || eventId === "event_open_profile"
         })
       },
       rankingJobs,
@@ -74,16 +75,26 @@ describe("ArticleActionService", () => {
       articleId: "article_1",
       actionType: "read_progress"
     });
+    const openProfileJob = service.enqueueEvent({
+      eventId: "event_open_profile",
+      articleId: "article_1",
+      actionType: "open"
+    });
 
-    expect(jobs.enqueued).toHaveLength(2);
+    expect(jobs.enqueued).toHaveLength(3);
     expect(parseProfileEventProcessPayload(profileJob.payloadJson)).toMatchObject({
       eventId: "event_profile"
     });
 
     service.handleProfileEventProcessJob(profileJob);
     service.handleProfileEventProcessJob(passiveJob);
+    service.handleProfileEventProcessJob(openProfileJob);
 
-    expect(rankingJobs.enqueueAllCount).toBe(1);
+    expect(rankingJobs.enqueueAllCount).toBe(2);
+    expect(rankingJobs.enqueueAllOptions).toEqual([
+      { delayMs: 0 },
+      { delayMs: HIGH_VOLUME_PROFILE_RANKING_DELAY_MS }
+    ]);
     expect(rankingJobs.articleJobs).toEqual([]);
   });
 
@@ -161,9 +172,11 @@ function fixedActionRepository(
 function createRankingCallRecorder() {
   return {
     enqueueAllCount: 0,
+    enqueueAllOptions: [] as Array<{ delayMs?: number }>,
     articleJobs: [] as string[][],
-    enqueueAll() {
+    enqueueAll(options: { delayMs?: number } = {}) {
       this.enqueueAllCount += 1;
+      this.enqueueAllOptions.push(options);
       return {} as never;
     },
     enqueueArticles(articleIds: string[]) {

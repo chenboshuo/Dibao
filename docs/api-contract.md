@@ -230,7 +230,15 @@ type ArticleDetail = ArticleListItem & {
 type RankExplanation = {
   articleId: string;
   reasons: Array<{
-    type: "interest" | "source" | "freshness" | "state" | "fallback" | "negative" | "penalty";
+    type:
+      | "interest"
+      | "source"
+      | "freshness"
+      | "state"
+      | "fallback"
+      | "negative"
+      | "penalty"
+      | "exploration";
     label: string;
     impact: "positive" | "negative" | "neutral";
     cluster?: {
@@ -1234,9 +1242,11 @@ state
 fallback
 negative
 penalty
+exploration
 ```
 
 前端 UI 应按 `type` 和 `impact` 本地化展示文案；`label` 只作为可读提示或来源名，不应作为最终 UI 文案。
+当 `type = "exploration"` 时，表示文章由较低信息茧房水平下的探索/破茧机制打捞进入推荐位置。
 
 ## Search
 
@@ -1315,7 +1325,7 @@ cursor
       "removeReadLaterOnReadComplete": false
     },
     "retention": {
-      "retentionDays": 60,
+      "retentionDays": 0,
       "keepFavorites": true,
       "keepReadLater": true
     },
@@ -1353,6 +1363,7 @@ cursor
 - 任意未知字段、不可写字段、类型错误或越界值返回 `VALIDATION_ERROR`。
 - API 字段 `retention.retentionDays` 持久化到 storage key `retention.articleDays`。
 - `retention.retentionDays = 0` 表示永久保留普通文章，后台 retention cleanup 不会清理旧文章。
+- 当 `retention.retentionDays` 从永久保留改为正数、或被调小、或收藏/稍后读保留开关从 `true` 改为 `false` 时，API 会 enqueue 一个 deduped `retention_cleanup` job；保存设置请求不会同步删除文章。
 - `ui.defaultHomeView` 可为 `recommended` 或 `latest`，控制进入 reader 后默认打开的首页视图。
 - `retention.keepFavorites` 和 `retention.keepReadLater` 控制 retention cleanup 是否永久保留收藏/稍后读文章，默认均为 `true`。
 - `behavior.markScrolledArticlesIgnored` 控制最新 / 推荐列表中“滚过未打开文章 -> 已忽略”的自动行为记录。
@@ -1391,6 +1402,8 @@ cursor
     "ok": true,
     "rankingRecalculateQueued": true,
     "rankingRecalculateJobId": "job_rank_...",
+    "retentionCleanupQueued": true,
+    "retentionCleanupJobId": "job_...",
     "settings": {
       "ui": {
         "locale": "en-US",
@@ -2249,6 +2262,8 @@ limit=1..100
 - active provider/index 存在，且 pending jobs > 0 或 `coverageRatio < 1`：`embedding`。
 - active provider/index 存在，coverage 已完成且无 provider/index/job 异常：`personalized`。
 - profile/behavior 信号仍少时，`mode` 仍可为 `personalized`，并通过 `PROFILE_WARMUP` warning 表示画像仍处于冷启动。
+
+`PROFILE_WARMUP` 表示当前实例的画像信号还在积累中。判定只统计会支撑画像的有效行为：`like`、`favorite`、`read_later`、`hide`、`not_interested`、`unlike`、`read_complete`，以及 `progress >= 0.5` 的 `read_progress`。`open`、`impression`、`progress < 0.5`、`quick_bounce`、`mark_read` / `mark_unread`、取消收藏/取消稍后读、以及批量清理产生的 read state 变化不解除 warmup。当前阈值为：有效画像信号至少 8 个、覆盖至少 5 篇文章、且 active index 下正向兴趣簇至少 2 个；任一不足都会返回 `PROFILE_WARMUP`。
 
 `warnings[].code` 至少可能包含：
 

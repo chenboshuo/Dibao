@@ -6,6 +6,7 @@ import {
   FTRL_TRAIN_JOB_TYPE,
   INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE,
   INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE,
+  INTEREST_FAMILY_REBUILD_JOB_TYPE,
   KEYWORD_PROFILE_REBUILD_JOB_TYPE,
   RECENT_INTENT_REBUILD_JOB_TYPE,
   type RecommendationMaintenanceResult,
@@ -28,6 +29,7 @@ export type RecommendationMaintenanceSchedulerService = Pick<
   | "enqueueClusterLabelRebuild"
   | "enqueueClusterMergeDiagnostics"
   | "enqueueClusterAutoMerge"
+  | "enqueueInterestFamilyRebuild"
   | "enqueueRecalculate"
   | "enqueueEvaluation"
   | "recordScheduleEnqueue"
@@ -184,6 +186,13 @@ export class RecommendationMaintenanceScheduler {
         enqueued
       );
     }
+    if (this.isDue("interest_family_daily", ONE_DAY_MS)) {
+      this.enqueue(
+        "interest_family_daily",
+        () => this.options.maintenance.enqueueInterestFamilyRebuild(),
+        enqueued
+      );
+    }
     if (settings.clusterAutoMergeEnabled && this.isDue("cluster_auto_merge_daily", ONE_DAY_MS)) {
       this.enqueue(
         "cluster_auto_merge_daily",
@@ -334,6 +343,7 @@ const ALL_TASK_KEYS = [
   "ftrl_train_daily",
   "cluster_label_daily",
   "cluster_merge_diagnostics_daily",
+  "interest_family_daily",
   "cluster_auto_merge_daily",
   "ranking_recalculate_hourly",
   "ranking_recalculate_daily",
@@ -349,7 +359,10 @@ const MAINTENANCE_OUTPUT_TASK_KEYS = [
   "duplicate_hourly",
   "duplicate_daily",
   "ftrl_train_periodic",
-  "ftrl_train_daily"
+  "ftrl_train_daily",
+  "cluster_label_daily",
+  "cluster_merge_diagnostics_daily",
+  "interest_family_daily"
 ] as const;
 
 export function maintenanceJobTypeForTaskKey(taskKey: string): string | null {
@@ -370,6 +383,8 @@ export function maintenanceJobTypeForTaskKey(taskKey: string): string | null {
       return "interest_cluster_label_rebuild";
     case "cluster_merge_diagnostics_daily":
       return INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE;
+    case "interest_family_daily":
+      return INTEREST_FAMILY_REBUILD_JOB_TYPE;
     case "cluster_auto_merge_daily":
       return INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE;
     default:

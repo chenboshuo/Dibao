@@ -18,6 +18,8 @@ export const USERNAME_MIN_LENGTH = 1;
 export const USERNAME_MAX_LENGTH = 128;
 export const SESSION_TOKEN_BYTES = 32;
 export const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+export const DEFAULT_AUTH_MAX_FAILED_ATTEMPTS = 5;
+export const DEFAULT_AUTH_LOCKOUT_MS = 15 * 60 * 1000;
 
 export type AuthSessionStatus = {
   setupCompleted: boolean;
@@ -51,13 +53,29 @@ export type AuthServiceOptions = {
   sessions: SessionRepository;
   settings: AppSettingsRepository;
   now?: () => number;
+  maxFailedLoginAttempts?: number;
+  loginLockoutMs?: number;
 };
 
 export class AuthService {
   private readonly now: () => number;
+  private readonly maxFailedLoginAttempts: number;
+  private readonly loginLockoutMs: number;
+  private readonly loginFailures = new Map<
+    string,
+    { firstFailedAt: number; failedAttempts: number; lockedUntil: number | null }
+  >();
 
   constructor(private readonly options: AuthServiceOptions) {
     this.now = options.now ?? Date.now;
+    this.maxFailedLoginAttempts = normalizeNonNegativeInteger(
+      options.maxFailedLoginAttempts ?? readNonNegativeIntegerEnv("DIBAO_AUTH_MAX_FAILED_ATTEMPTS"),
+      DEFAULT_AUTH_MAX_FAILED_ATTEMPTS
+    );
+    this.loginLockoutMs = normalizeNonNegativeInteger(
+      options.loginLockoutMs ?? readNonNegativeIntegerEnv("DIBAO_AUTH_LOCKOUT_MS"),
+      DEFAULT_AUTH_LOCKOUT_MS
+    );
   }
 
   async setup(
@@ -95,20 +113,24 @@ export class AuthService {
     const normalizedUsername = normalizeUsername(username);
     validateUsernameLengthForLogin(normalizedUsername);
     validatePasswordLengthForLogin(password);
+    this.assertLoginAllowed(normalizedUsername, meta);
 
     const credential = this.options.credentials.findCredentialByUsername(normalizedUsername);
     if (!credential) {
       if (!this.options.credentials.hasCredential()) {
         throw new AuthServiceError(409, "CONFLICT", "Setup has not been completed");
       }
+      this.recordFailedLogin(normalizedUsername, meta);
       throw new AuthServiceError(401, "UNAUTHORIZED", "Invalid username or password");
     }
 
     const ok = await verifyPassword(password, credential.passwordHash);
     if (!ok) {
+      this.recordFailedLogin(normalizedUsername, meta);
       throw new AuthServiceError(401, "UNAUTHORIZED", "Invalid username or password");
     }
 
+    this.clearFailedLogin(normalizedUsername, meta);
     return this.createSession(meta, this.now());
   }
 
@@ -193,6 +215,61 @@ export class AuthService {
       token,
       expiresAt
     };
+  }
+
+  private assertLoginAllowed(username: string, meta: AuthRequestMeta): void {
+    if (!this.loginRateLimitEnabled()) {
+      return;
+    }
+
+    const state = this.loginFailures.get(this.loginFailureKey(username, meta));
+    const now = this.now();
+    if (!state) {
+      return;
+    }
+    if (state.lockedUntil !== null && state.lockedUntil > now) {
+      throw new AuthServiceError(429, "RATE_LIMITED", "Too many failed login attempts", {
+        retryAfterMs: state.lockedUntil - now
+      });
+    }
+    if (now - state.firstFailedAt > this.loginLockoutMs) {
+      this.loginFailures.delete(this.loginFailureKey(username, meta));
+    }
+  }
+
+  private recordFailedLogin(username: string, meta: AuthRequestMeta): void {
+    if (!this.loginRateLimitEnabled()) {
+      return;
+    }
+
+    const key = this.loginFailureKey(username, meta);
+    const now = this.now();
+    const state = this.loginFailures.get(key);
+    const next =
+      state && now - state.firstFailedAt <= this.loginLockoutMs
+        ? {
+            firstFailedAt: state.firstFailedAt,
+            failedAttempts: state.failedAttempts + 1,
+            lockedUntil: state.lockedUntil
+          }
+        : { firstFailedAt: now, failedAttempts: 1, lockedUntil: null };
+
+    if (next.failedAttempts >= this.maxFailedLoginAttempts) {
+      next.lockedUntil = now + this.loginLockoutMs;
+    }
+    this.loginFailures.set(key, next);
+  }
+
+  private clearFailedLogin(username: string, meta: AuthRequestMeta): void {
+    this.loginFailures.delete(this.loginFailureKey(username, meta));
+  }
+
+  private loginFailureKey(username: string, meta: AuthRequestMeta): string {
+    return `${username}:${hashMetadata(meta.ip ?? "unknown")}`;
+  }
+
+  private loginRateLimitEnabled(): boolean {
+    return this.maxFailedLoginAttempts > 0 && this.loginLockoutMs > 0;
   }
 }
 
@@ -342,4 +419,17 @@ function normalizeUserAgent(value: string | null | undefined): string | null {
 
 function hashMetadata(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
+}
+
+function readNonNegativeIntegerEnv(name: string): number | undefined {
+  const value = process.env[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
 }

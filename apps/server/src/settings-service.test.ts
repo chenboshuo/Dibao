@@ -38,7 +38,7 @@ describe("settings service", () => {
     expect(service.getSettings().retention.retentionDays).toBe(0);
 
     settings.setJson(RETENTION_ARTICLE_DAYS_SETTING_KEY, "invalid");
-    expect(service.getSettings().retention.retentionDays).toBe(60);
+    expect(service.getSettings().retention.retentionDays).toBe(0);
 
     settings.delete(RETENTION_ARTICLE_DAYS_SETTING_KEY);
     const invalidEnvService = new SettingsService({
@@ -47,7 +47,7 @@ describe("settings service", () => {
         DIBAO_ARTICLE_RETENTION_DAYS: "invalid"
       }
     });
-    expect(invalidEnvService.getSettings().retention.retentionDays).toBe(60);
+    expect(invalidEnvService.getSettings().retention.retentionDays).toBe(0);
   });
 
   it("strictly rejects unknown and unwritable settings fields", () => {
@@ -83,6 +83,9 @@ describe("settings service", () => {
         keepFavorites: true,
         keepReadLater: true
       },
+      telemetry: {
+        enabled: true
+      },
       ranking: {
         localLearningEnabled: true,
         localLearningShadowMode: false
@@ -97,6 +100,9 @@ describe("settings service", () => {
         retention: {
           keepFavorites: false,
           keepReadLater: false
+        },
+        telemetry: {
+          enabled: false
         }
       }).settings
     ).toMatchObject({
@@ -106,7 +112,47 @@ describe("settings service", () => {
       retention: {
         keepFavorites: false,
         keepReadLater: false
+      },
+      telemetry: {
+        enabled: false
       }
     });
+  });
+
+  it("persists configurable interest cluster limits and validates bounds", () => {
+    const settings = new MemorySettingsRepository();
+    const service = new SettingsService({ settings });
+
+    expect(service.getSettings().ranking).toMatchObject({
+      maxPositiveInterestClusters: 24,
+      maxNegativeInterestClusters: 16
+    });
+
+    expect(
+      service.updateSettings({
+        ranking: {
+          maxPositiveInterestClusters: 48,
+          maxNegativeInterestClusters: 32
+        }
+      }).settings.ranking
+    ).toMatchObject({
+      maxPositiveInterestClusters: 48,
+      maxNegativeInterestClusters: 32
+    });
+
+    expect(() =>
+      service.updateSettings({
+        ranking: {
+          maxPositiveInterestClusters: 7
+        }
+      })
+    ).toThrow(SettingsServiceError);
+    expect(() =>
+      service.updateSettings({
+        ranking: {
+          maxNegativeInterestClusters: 129
+        }
+      })
+    ).toThrow(SettingsServiceError);
   });
 });

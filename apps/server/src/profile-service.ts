@@ -44,6 +44,10 @@ export type ProfileServiceOptions = {
   profiles: ProfileRepository;
   now?: () => number;
   clusterIdFactory?: () => string;
+  getClusterLimits?: () => {
+    maxPositiveInterestClusters: number;
+    maxNegativeInterestClusters: number;
+  };
 };
 
 type ProfileSnapshot = {
@@ -117,6 +121,7 @@ const SOURCE_EVENT_WEIGHTS: Record<SourceEventKey, SourceEventWeight> = {
 
 const FEED_STATS_CLEAR_SIGNAL_TARGET = 10;
 const FEED_STATS_OPEN_ONLY_CONFIDENCE = 0.1;
+const NEW_CLUSTER_PROTECTION_MS = 24 * 60 * 60 * 1000;
 
 export class ProfileService {
   private readonly now: () => number;
@@ -227,17 +232,22 @@ export class ProfileService {
       return false;
     }
 
+    if (event.embeddingContentHash !== event.contentHash) {
+      return false;
+    }
+
     const snapshot = parseSnapshot(this.options.profiles.getTopicSnapshot(event.articleId));
+    if (snapshotHasProcessedEvent(snapshot, event.embeddingIndexId, event.id)) {
+      return false;
+    }
+
     const bucket = snapshotBucket(snapshot, event.embeddingIndexId, event.embeddingContentHash);
 
     if (bucket.processedEventIds?.includes(event.id)) {
       return false;
     }
 
-    const staleForCurrentContent = event.createdAt < event.articleUpdatedAt;
-    const impact = staleForCurrentContent
-      ? { polarity: "stats_only" as const, profileWeight: 0 }
-      : impactForEvent(event, bucket);
+    const impact = impactForEvent(event, bucket);
 
     bucket.processedEventIds = [...(bucket.processedEventIds ?? []), event.id];
     if (event.eventType === "read_progress") {
@@ -290,7 +300,13 @@ export class ProfileService {
       if (!forceCreate) {
         return;
       }
-      const cluster = this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+      const cluster = this.createCluster(
+        event.embeddingIndexId,
+        polarity,
+        vector,
+        newClusterWeightFor(eventWeight, polarity),
+        now
+      );
       this.recordClusterEvidence(event, cluster.id, "live_event", 1, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
       return;
@@ -323,8 +339,42 @@ export class ProfileService {
       return;
     }
 
-    if (forceCreate || (polarity === "positive" && best.similarity >= thresholds.create)) {
-      const cluster = this.createCluster(event.embeddingIndexId, polarity, vector, eventWeight, now);
+    if (best.similarity >= thresholds.create) {
+      const learningRate = clamp(eventWeight / 36, 0.02, 0.1);
+      const merged = mergeCentroid(best.centroid, vector, learningRate);
+      const dampenedWeight = eventWeight * 0.65;
+      this.options.profiles.updateCluster({
+        id: best.cluster.id,
+        centroidVectorBlob: toVectorBlob(merged),
+        weight: clamp(
+          best.cluster.weight + dampenedWeight,
+          profileAlgorithmDefaults.minClusterWeight,
+          profileAlgorithmDefaults.maxClusterWeight
+        ),
+        sampleCount: best.cluster.sampleCount + 1,
+        lastMatchedAt: now,
+        now
+      });
+      this.recordClusterEvidence(
+        event,
+        best.cluster.id,
+        "live_event",
+        best.similarity,
+        dampenedWeight,
+        now
+      );
+      this.compactAndTrimClusters(event.embeddingIndexId, polarity);
+      return;
+    }
+
+    if (forceCreate) {
+      const cluster = this.createCluster(
+        event.embeddingIndexId,
+        polarity,
+        vector,
+        newClusterWeightFor(eventWeight, polarity),
+        now
+      );
       this.recordClusterEvidence(event, cluster.id, "live_event", 1, eventWeight, now);
       this.compactAndTrimClusters(event.embeddingIndexId, polarity);
     }
@@ -467,10 +517,8 @@ export class ProfileService {
   }
 
   private trimClusters(embeddingIndexId: string, polarity: InterestClusterPolarity): number {
-    const max =
-      polarity === "positive"
-        ? profileAlgorithmDefaults.maxPositiveClusters
-        : profileAlgorithmDefaults.maxNegativeClusters;
+    const limits = this.clusterLimits();
+    const max = polarity === "positive" ? limits.positive : limits.negative;
     const clusters = this.options.profiles.listClusters({ embeddingIndexId, polarity });
     let deleted = 0;
 
@@ -499,13 +547,37 @@ export class ProfileService {
     }
 
     const remaining = this.options.profiles.listClusters({ embeddingIndexId, polarity });
-    for (const cluster of remaining.slice(max)) {
+    const deletionCandidates = [
+      ...remaining.filter((cluster) => !this.isProtectedNewCluster(cluster, now)).reverse(),
+      ...remaining.filter((cluster) => this.isProtectedNewCluster(cluster, now)).reverse()
+    ];
+    let deletedFromRemaining = 0;
+
+    for (const cluster of deletionCandidates) {
+      if (remaining.length - deletedFromRemaining <= max) {
+        break;
+      }
       if (this.options.profiles.deleteCluster(cluster.id)) {
         deleted += 1;
+        deletedFromRemaining += 1;
       }
     }
 
     return deleted;
+  }
+
+  private clusterLimits(): { positive: number; negative: number } {
+    const configured = this.options.getClusterLimits?.();
+    return {
+      positive:
+        configured?.maxPositiveInterestClusters ?? profileAlgorithmDefaults.maxPositiveClusters,
+      negative:
+        configured?.maxNegativeInterestClusters ?? profileAlgorithmDefaults.maxNegativeClusters
+    };
+  }
+
+  private isProtectedNewCluster(cluster: InterestClusterRow, now: number): boolean {
+    return now - cluster.createdAt <= NEW_CLUSTER_PROTECTION_MS && cluster.sampleCount <= 1;
   }
 
   private recalculateFeedStats(feedId: string): void {
@@ -607,6 +679,11 @@ function impactForEvent(
     default:
       return { polarity: "stats_only", profileWeight: 0 };
   }
+}
+
+function newClusterWeightFor(eventWeight: number, polarity: InterestClusterPolarity): number {
+  const multiplier = polarity === "positive" ? 0.7 : 0.85;
+  return eventWeight * multiplier;
 }
 
 function sourceEventKeyFor(
@@ -795,6 +872,21 @@ function snapshotBucket(
   snapshot.profileV0[embeddingIndexId] ??= {};
   snapshot.profileV0[embeddingIndexId][contentHash] ??= {};
   return snapshot.profileV0[embeddingIndexId][contentHash];
+}
+
+function snapshotHasProcessedEvent(
+  snapshot: ProfileSnapshot,
+  embeddingIndexId: string,
+  eventId: string
+): boolean {
+  const indexSnapshot = snapshot.profileV0?.[embeddingIndexId];
+  if (!indexSnapshot) {
+    return false;
+  }
+
+  return Object.values(indexSnapshot).some((bucket) =>
+    bucket.processedEventIds?.includes(eventId)
+  );
 }
 
 function bestClusterMatch(vector: number[], clusters: InterestClusterRow[]) {

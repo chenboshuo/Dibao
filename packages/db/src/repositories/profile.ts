@@ -7,6 +7,7 @@ import type {
   InterestClusterEvidenceRow,
   InterestClusterPolarity,
   InterestClusterRow,
+  ProfileSignalCountRow,
   ProfileBehaviorEventRow,
   UpdateInterestClusterInput,
   UpsertInterestClusterInput
@@ -47,6 +48,7 @@ type InterestClusterDbRow = {
 export interface ProfileRepository {
   countBehaviorEvents(): BehaviorEventCountRow[];
   countClusters(input?: { embeddingIndexId?: string }): ClusterCountRow;
+  countProfileSignals(): ProfileSignalCountRow;
   deleteCluster(id: string): boolean;
   findEventForIndex(eventId: string, embeddingIndexId: string | null): ProfileBehaviorEventRow | null;
   getLastProfileUpdate(input?: { embeddingIndexId?: string }): number | null;
@@ -101,6 +103,45 @@ export class SqliteProfileRepository implements ProfileRepository {
         `
       )
       .all() as BehaviorEventCountRow[];
+  }
+
+  countProfileSignals(): ProfileSignalCountRow {
+    const row = this.db
+      .prepare(
+        `
+          select
+            count(*) as signalCount,
+            count(distinct be.article_id) as articleCount
+          from behavior_events be
+          left join article_states s on s.article_id = be.article_id
+          where be.event_type in (
+            'like',
+            'favorite',
+            'read_later',
+            'hide',
+            'not_interested',
+            'unlike',
+            'read_complete'
+          )
+            or (
+              be.event_type = 'read_progress'
+              and coalesce(
+                case
+                  when be.metadata_json is not null and json_valid(be.metadata_json)
+                  then json_extract(be.metadata_json, '$.progress')
+                end,
+                s.reading_progress,
+                0
+              ) >= 0.5
+            )
+        `
+      )
+      .get() as ProfileSignalCountRow | undefined;
+
+    return {
+      signalCount: row?.signalCount ?? 0,
+      articleCount: row?.articleCount ?? 0
+    };
   }
 
   countClusters(input: { embeddingIndexId?: string } = {}): ClusterCountRow {

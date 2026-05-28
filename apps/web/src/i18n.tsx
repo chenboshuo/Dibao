@@ -98,6 +98,8 @@ export const zhCN = {
     setupSubmit: "完成设置",
     loginSubmit: "登录",
     submitting: "处理中",
+    telemetryLabel: "反馈数据以帮助开发者更好地优化邸报",
+    telemetryBody: "默认开启，仅用于错误诊断、性能分析和体验改进，可在设置中关闭。",
     logout: "退出",
     logoutTitle: "退出登录",
     usernameRequired: "请输入用户名。",
@@ -124,10 +126,17 @@ export const zhCN = {
     },
     provider: {
       title: "推荐能力",
-      body: "当前先使用基础排序。Embedding provider 会在后续设置中配置，本轮不会发送正文到外部服务。",
-      currentTitle: "当前使用基础排序",
-      currentBody: "你仍然可以阅读、收藏、稍后读，并让基础排序使用这些行为信号。",
-      continue: "暂不配置，继续"
+      body: "配置 embedding provider 后，邸报会用文章语义和你的阅读行为生成更贴近个人的信息流。",
+      recommendationLink: "查看这里选择合适的（免费）Provider。",
+      currentTitle: "跳过也是可选项",
+      currentBody: "暂不配置时，邸报仍可阅读、收藏、稍后读，并使用基础排序。",
+      saveAndTest: "保存配置并测试连接",
+      enableAndContinue: "启用 Provider 并继续",
+      useProviderAndContinue: "继续使用此 Provider",
+      saving: "保存中",
+      testRequired: "请先保存配置并通过连接测试，再启用 Provider。",
+      testStale: "配置已修改，请重新测试连接后再启用。",
+      continue: "跳过，使用基础排序"
     }
   },
   feeds: {
@@ -346,7 +355,30 @@ export const zhCN = {
         markScrolledArticlesIgnored: "滚过未打开文章后，将其标记为已忽略并移出未读",
         removeReadLaterOnReadComplete: "稍后读中的文章读完后，自动移出稍后读",
         cocoonLevel: "信息茧房水平",
-        cocoonLevelHint: "1 表示更开放、更分散、更探索；10 表示更贴合、更稳定、更少扰动。所有级别都只在订阅源内排序，并始终尊重去重和明确负反馈。"
+        cocoonLevelHint: "1 表示更开放、更分散、更探索；10 表示更贴合、更稳定、更少扰动。所有级别都只在订阅源内排序，并始终尊重去重和明确负反馈。",
+        interestClusterLimits: {
+          title: "兴趣簇上限",
+          body: "兴趣簇并非越高越好。对于每日 Inbox 入站文章较少、订阅源比较集中的用户，更少的兴趣簇可能会带来更稳定的推荐效果。",
+          embeddingCostHint:
+            "提高兴趣簇上限主要增加本地排序和向量相似度计算开销，不会按比例增加外部 Embedding 调用。",
+          performancePreset: "性能档",
+          presets: [
+            "低配 VPS：24 / 16",
+            "中配 NAS：48 / 32",
+            "高性能服务器或本地计算机：96 / 64"
+          ],
+          customPreset: "自定义",
+          positiveLabel: "正向兴趣簇",
+          negativeLabel: "负向兴趣簇",
+          fieldHint:
+            "正向簇用于识别你更可能想读的主题；负向簇用于压低你主动隐藏或标记不感兴趣的主题。"
+        }
+      },
+      telemetry: {
+        title: "反馈遥测",
+        body: "控制是否向开发者发送用于优化邸报的错误、性能和体验反馈数据。",
+        enabledLabel: "反馈数据以帮助开发者更好地优化邸报",
+        enabledBody: "默认开启。关闭后，前端和服务端会停止发送新的 Sentry 遥测事件。"
       },
       reader: {
         title: "阅读",
@@ -364,7 +396,34 @@ export const zhCN = {
         keepReadLater: "保留稍后读文章",
         enabled: "已开启",
         disabled: "已关闭",
+        cleanupConfirm:
+          "会删除超过期限的历史文章，且无法恢复。清理会进入后台队列，不会在保存设置时同步执行。确定继续吗？",
         mappingHint: "API 字段 retention.retentionDays 会保存到 storage key retention.articleDays。"
+      },
+      about: {
+        title: "关于",
+        body: "版本、作者与项目链接。",
+        version: "当前版本",
+        latestVersion: "最新版本",
+        latestLoading: "正在检查最新版本",
+        latestUnknown: "尚未检查",
+        latestUnavailable: "GitHub 暂无 Release",
+        latestCurrent: (version: string) => `已是最新：${version}`,
+        latestUpdateAvailable: (version: string) => `发现新版本：${version}`,
+        latestError: (message: string) => `检查失败：${message}`,
+        latestCheckedAt: (value: string) => `上次检查：${value}`,
+        latestNeverChecked: "尚无检查记录",
+        checkRelease: "检查更新",
+        checkingRelease: "检查中",
+        releaseLink: "查看 Release",
+        author: "作者",
+        authorName: "评论尸",
+        telemetryLabel: "反馈数据",
+        telemetryBody: "控制是否向开发者发送用于优化邸报的错误、性能和体验反馈数据。",
+        xAccount: "X 账号",
+        blog: "作者博客",
+        homepage: "项目主页",
+        github: "项目 GitHub"
       },
       provider: {
         title: "智能能力",
@@ -490,7 +549,9 @@ export const zhCN = {
       paragraphGap: "段距必须是 0.6 到 1.6。",
       readerWidth: "阅读宽度必须是 560 到 860。",
       retentionDays: "保留天数必须是 0 到 3650 的整数，0 表示永久。",
-      cocoonLevel: "信息茧房水平必须是 1 到 10 的整数。"
+      cocoonLevel: "信息茧房水平必须是 1 到 10 的整数。",
+      maxPositiveInterestClusters: "正向兴趣簇上限必须是 8 到 192 之间的整数。",
+      maxNegativeInterestClusters: "负向兴趣簇上限必须是 4 到 128 之间的整数。"
     },
     units: {
       px: "px",
@@ -607,6 +668,7 @@ export const zhCN = {
     sections: {
       currentStatus: "当前推荐状态",
       currentClusters: "当前兴趣簇",
+      topicFamilies: "主题组概览",
       maintenance: "算法状态维护",
       mergeCandidates: "可能重复的兴趣簇",
       labelLexicon: "标签词典",
@@ -702,6 +764,28 @@ export const zhCN = {
       allSummary: (count: number) => `完整显示 ${count} 个兴趣簇，按权重从高到低排序。`,
       back: "返回算法透明说明"
     },
+    families: {
+      empty: "还没有生成主题组；下一次推荐维护会自动补齐。",
+      summary: (positive: number, negative: number, risk: string) =>
+        `正向主题组 ${positive} 个 · 负向主题组 ${negative} 个 · 集中度风险 ${risk}`,
+      rowMeta: (
+        clusterCount: number,
+        supportArticleCount: number,
+        sourceCount: number,
+        dominance: string,
+        maturity: string
+      ) =>
+        `${clusterCount} 个簇 · ${supportArticleCount} 篇文章 · ${sourceCount} 个来源 · 占比 ${dominance} · 成熟度 ${maturity}`,
+      clusterFamily: "所属主题",
+      clusterCount: (count: number) => `${count} 个簇`,
+      positiveFallback: "正向主题",
+      negativeFallback: "负向主题",
+      risk: {
+        low: "低",
+        medium: "中",
+        high: "高"
+      }
+    },
     mergeCandidates: {
       title: "可能重复的兴趣簇",
       body: "诊断只比较同一 polarity 的 active index 兴趣簇；合并会改变画像，因此默认需要手动确认。",
@@ -772,6 +856,11 @@ export const zhCN = {
         cluster_merge_diagnostics: {
           label: "重建兴趣簇重复诊断",
           description: "只生成可能重复的兴趣簇候选，不修改画像和排序。",
+          remoteUse: "不会调用 provider"
+        },
+        interest_family_rebuild: {
+          label: "重建主题组",
+          description: "把相近兴趣簇自动归入内部主题组，用于推荐多样性和诊断。",
           remoteUse: "不会调用 provider"
         },
         cluster_auto_merge: {
@@ -1015,6 +1104,8 @@ export const zhCN = {
     title: "推荐状态",
     loading: "正在读取推荐状态",
     fallback: "推荐状态暂不可用，当前列表仍可阅读。",
+    warmupNotice:
+      "当前用户行为正在积累中，推荐可能不准确，建议在“最新”视图中当做普通 RSS 阅读器正常使用。",
     modes: {
       baseline: "基础排序中",
       personalized: "个性化推荐中",
@@ -1071,6 +1162,7 @@ export const zhCN = {
     entryTitle: "推荐解释",
     open: "查看完整理由",
     teaser: "只展示可理解的理由，不暴露内部原始分数。",
+    lazy: "阅读过半后显示推荐解释。",
     sortLabel: "当前排序说明",
     sortTitle: "当前视图排序",
     loading: "正在生成推荐解释",
@@ -1089,11 +1181,14 @@ export const zhCN = {
       state: "状态",
       fallback: "基础排序",
       negative: "负向",
-      penalty: "过滤"
+      penalty: "过滤",
+      exploration: "破茧"
     },
     reasons: {
       interest: "与你近期的正向兴趣相似，因此排序更靠前。",
       interestCluster: (summary: string) => `与你近期的正向兴趣相似，因此排序更靠前。${summary}`,
+      interestFamily: (label: string) => `与你的兴趣主题「${label}」相近，因此排序更靠前。`,
+      recentIntent: "与你近期的阅读趋势相近，因此排序更靠前。",
       sourcePositive: (label: string) => `来源 ${label} 对排序有正向影响。`,
       sourceNegative: (label: string) => `来源 ${label} 当前权重偏低。`,
       freshness: "文章较新，获得新鲜度加分。",
@@ -1101,7 +1196,8 @@ export const zhCN = {
       stateNegative: "忽略、读完等状态降低了排序优先级。",
       fallback: "当前使用基础排序，暂时没有更强的推荐信号。",
       negative: "近期负向行为降低了排序。",
-      penalty: "隐藏或不感兴趣会显著降低排序。"
+      penalty: "隐藏或不感兴趣会显著降低排序。",
+      exploration: "本文由破茧算法打捞，你可在设置页调整算法信息茧房水平。"
     }
   },
   actions: {
@@ -1265,6 +1361,8 @@ export const enUS = {
     setupSubmit: "Finish setup",
     loginSubmit: "Log in",
     submitting: "Please wait",
+    telemetryLabel: "Share feedback data to help improve Dibao",
+    telemetryBody: "On by default. Used for error diagnostics, performance analysis, and product quality improvements. You can turn it off in Settings.",
     logout: "Log out",
     logoutTitle: "Log out",
     usernameRequired: "Enter your username.",
@@ -1291,10 +1389,17 @@ export const enUS = {
     },
     provider: {
       title: "Personalization",
-      body: "Dibao will use baseline ranking for now. You can add an embedding provider later in Settings; this step does not send article text to any external service.",
-      currentTitle: "Baseline ranking is active",
-      currentBody: "You can still read, favorite, and save articles for later. Dibao will use those signals for baseline ranking.",
-      continue: "Skip for now and continue"
+      body: "Set up an embedding provider so Dibao can use article semantics and your reading signals for a more personal feed.",
+      recommendationLink: "See this guide to choose a suitable free provider.",
+      currentTitle: "Skipping is still available",
+      currentBody: "If you skip this step, Dibao remains usable for reading, favorites, read-later, and baseline ranking.",
+      saveAndTest: "Save profile and test connection",
+      enableAndContinue: "Enable provider and continue",
+      useProviderAndContinue: "Continue with this provider",
+      saving: "Saving",
+      testRequired: "Save the profile and pass the connection test before enabling the provider.",
+      testStale: "The profile has changed. Test the connection again before enabling.",
+      continue: "Skip and use baseline ranking"
     }
   },
   feeds: {
@@ -1514,7 +1619,30 @@ export const enUS = {
         markScrolledArticlesIgnored: "Mark unopened articles you scroll past as ignored and remove them from unread",
         removeReadLaterOnReadComplete: "Remove Read Later articles after you finish them",
         cocoonLevel: "Cocoon level",
-        cocoonLevelHint: "1 is broader and more exploratory; 10 stays closer to your established interests. Every level only ranks articles from your subscribed feeds and still respects deduping and explicit negative feedback."
+        cocoonLevelHint: "1 is broader and more exploratory; 10 stays closer to your established interests. Every level only ranks articles from your subscribed feeds and still respects deduping and explicit negative feedback.",
+        interestClusterLimits: {
+          title: "Interest cluster limits",
+          body: "More interest clusters are not always better. If your Inbox has fewer daily articles or focused feeds, fewer clusters can make recommendations steadier.",
+          embeddingCostHint:
+            "Raising this limit mainly increases local ranking and vector-similarity work. It does not increase external embedding calls proportionally.",
+          performancePreset: "Performance tier",
+          presets: [
+            "Low-end VPS: 24 / 16",
+            "Mid-range NAS: 48 / 32",
+            "Fast server or local machine: 96 / 64"
+          ],
+          customPreset: "Custom",
+          positiveLabel: "Positive interest clusters",
+          negativeLabel: "Negative interest clusters",
+          fieldHint:
+            "Positive clusters identify topics you are more likely to read; negative clusters push down topics you hide or mark not interested."
+        }
+      },
+      telemetry: {
+        title: "Feedback telemetry",
+        body: "Control whether Dibao sends error, performance, and experience feedback data to help developers improve the app.",
+        enabledLabel: "Share feedback data to help improve Dibao",
+        enabledBody: "On by default. Turning this off stops new Sentry telemetry events from the browser and server."
       },
       reader: {
         title: "Reading",
@@ -1532,7 +1660,35 @@ export const enUS = {
         keepReadLater: "Keep Read Later articles",
         enabled: "On",
         disabled: "Off",
+        cleanupConfirm:
+          "Historical articles older than the retention window will be deleted and cannot be restored. Cleanup will be queued in the background and will not run synchronously while saving settings. Continue?",
         mappingHint: "API field retention.retentionDays is stored as storage key retention.articleDays."
+      },
+      about: {
+        title: "About",
+        body: "Version, author, and project links.",
+        version: "Current version",
+        latestVersion: "Latest version",
+        latestLoading: "Checking latest version",
+        latestUnknown: "Not checked yet",
+        latestUnavailable: "No GitHub Release found",
+        latestCurrent: (version: string) => `Up to date: ${version}`,
+        latestUpdateAvailable: (version: string) => `New version available: ${version}`,
+        latestError: (message: string) => `Check failed: ${message}`,
+        latestCheckedAt: (value: string) => `Last checked: ${value}`,
+        latestNeverChecked: "No check recorded yet",
+        checkRelease: "Check for updates",
+        checkingRelease: "Checking",
+        releaseLink: "View Release",
+        author: "Author",
+        authorName: "Pls",
+        telemetryLabel: "Feedback data",
+        telemetryBody:
+          "Control whether Dibao sends error, performance, and experience feedback data to help developers improve the app.",
+        xAccount: "X account",
+        blog: "Author blog",
+        homepage: "Project homepage",
+        github: "Project GitHub"
       },
       provider: {
         title: "Intelligence",
@@ -1658,7 +1814,11 @@ export const enUS = {
       paragraphGap: "Paragraph gap must be between 0.6 and 1.6.",
       readerWidth: "Reader width must be between 560 and 860.",
       retentionDays: "Retention days must be an integer between 0 and 3650; 0 means forever.",
-      cocoonLevel: "Cocoon level must be an integer from 1 to 10."
+      cocoonLevel: "Cocoon level must be an integer from 1 to 10.",
+      maxPositiveInterestClusters:
+        "Positive interest cluster limit must be an integer from 8 to 192.",
+      maxNegativeInterestClusters:
+        "Negative interest cluster limit must be an integer from 4 to 128."
     },
     units: {
       px: "px",
@@ -1764,6 +1924,7 @@ export const enUS = {
     sections: {
       currentStatus: "Current personalization status",
       currentClusters: "Current interest clusters",
+      topicFamilies: "Topic group overview",
       maintenance: "Algorithm maintenance",
       mergeCandidates: "Possible duplicate clusters",
       labelLexicon: "Label lexicon",
@@ -1859,6 +2020,28 @@ export const enUS = {
       allSummary: (count: number) => `Showing all ${count} interest clusters, sorted by weight.`,
       back: "Back to transparency"
     },
+    families: {
+      empty: "No topic groups have been generated yet; the next recommendation maintenance run will fill this in.",
+      summary: (positive: number, negative: number, risk: string) =>
+        `${positive} positive topic groups · ${negative} negative topic groups · concentration risk ${risk}`,
+      rowMeta: (
+        clusterCount: number,
+        supportArticleCount: number,
+        sourceCount: number,
+        dominance: string,
+        maturity: string
+      ) =>
+        `${clusterCount} clusters · ${supportArticleCount} articles · ${sourceCount} sources · share ${dominance} · maturity ${maturity}`,
+      clusterFamily: "Topic group",
+      clusterCount: (count: number) => `${count} clusters`,
+      positiveFallback: "Positive topic",
+      negativeFallback: "Negative topic",
+      risk: {
+        low: "Low",
+        medium: "Medium",
+        high: "High"
+      }
+    },
     mergeCandidates: {
       title: "Possible duplicate clusters",
       body: "Diagnostics only compare same-polarity clusters in the active index. Merge changes the profile, so it requires confirmation by default.",
@@ -1929,6 +2112,11 @@ export const enUS = {
         cluster_merge_diagnostics: {
           label: "Rebuild cluster merge diagnostics",
           description: "Generates possible duplicate-cluster candidates without changing the profile or ranking.",
+          remoteUse: "Does not call provider"
+        },
+        interest_family_rebuild: {
+          label: "Rebuild topic groups",
+          description: "Groups nearby interest clusters into internal topic groups for diversity and diagnostics.",
           remoteUse: "Does not call provider"
         },
         cluster_auto_merge: {
@@ -2172,6 +2360,8 @@ export const enUS = {
     title: "Personalization status",
     loading: "Loading personalization status",
     fallback: "Personalization status is unavailable; the list is still readable.",
+    warmupNotice:
+      "Your reading behavior is still accumulating, so recommendations may be inaccurate. Use Latest as a regular RSS reader for now.",
     modes: {
       baseline: "Baseline ranking",
       personalized: "Personalized ranking is on",
@@ -2229,6 +2419,7 @@ export const enUS = {
     entryTitle: "Why this article",
     open: "View reasons",
     teaser: "Shows the main signals without exposing raw internal scores.",
+    lazy: "Reasons appear after you pass the halfway point.",
     sortLabel: "Sorting note",
     sortTitle: "How this view is sorted",
     loading: "Loading reasons",
@@ -2247,12 +2438,16 @@ export const enUS = {
       state: "State",
       fallback: "Baseline",
       negative: "Negative",
-      penalty: "Filter"
+      penalty: "Filter",
+      exploration: "Discovery"
     },
     reasons: {
       interest: "This is similar to recent positive interests, so it ranks higher.",
       interestCluster: (summary: string) =>
         `This is similar to recent positive interests, so it ranks higher. ${summary}`,
+      interestFamily: (label: string) =>
+        `This is close to your interest topic "${label}", so it ranks higher.`,
+      recentIntent: "This matches your recent reading direction, so it ranks higher.",
       sourcePositive: (label: string) => `Source ${label} is helping this rank higher.`,
       sourceNegative: (label: string) => `Source ${label} currently has a lower weight.`,
       freshness: "The article is recent and receives a freshness boost.",
@@ -2260,7 +2455,9 @@ export const enUS = {
       stateNegative: "Ignored, finished, and similar states lowered its priority.",
       fallback: "Baseline ranking is active and no stronger signal is available yet.",
       negative: "Recent negative behavior lowered the rank.",
-      penalty: "Hidden or not interested state strongly lowers the rank."
+      penalty: "Hidden or not interested state strongly lowers the rank.",
+      exploration:
+        "This article was surfaced to broaden your feed. You can adjust the algorithm cocoon level in Settings."
     }
   },
   actions: {
@@ -2416,6 +2613,8 @@ export const jaJP = {
     setupSubmit: "設定を完了",
     loginSubmit: "ログイン",
     submitting: "処理中",
+    telemetryLabel: "邸報の改善に役立つフィードバックデータを共有する",
+    telemetryBody: "既定でオンです。エラー診断、パフォーマンス分析、使い勝手の改善に使われます。設定でいつでもオフにできます。",
     logout: "ログアウト",
     logoutTitle: "ログアウト",
     usernameRequired: "ユーザー名を入力してください。",
@@ -2442,10 +2641,17 @@ export const jaJP = {
     },
     provider: {
       title: "おすすめ機能",
-      body: "今は基本の並び替えを使用します。Embedding provider は後ほど設定できます。この手順では記事本文を外部サービスへ送信しません。",
-      currentTitle: "基本の並び替えを使用中",
-      currentBody: "読む、お気に入り、あとで読む、といった操作は引き続き利用でき、基本の並び替えにも反映されます。",
-      continue: "今は設定せずに進む"
+      body: "Embedding provider を設定すると、記事の意味と読書行動を使って、より自分向けのフィードを作れます。",
+      recommendationLink: "こちらを見て、適した無料 Provider を選んでください。",
+      currentTitle: "スキップも選べます",
+      currentBody: "ここで設定しなくても、閲覧、お気に入り、あとで読む、基本の並び替えは利用できます。",
+      saveAndTest: "プロファイルを保存して接続テスト",
+      enableAndContinue: "Provider を有効化して続行",
+      useProviderAndContinue: "この Provider で続行",
+      saving: "保存中",
+      testRequired: "Provider を有効化する前に、プロファイルを保存して接続テストを成功させてください。",
+      testStale: "プロファイルが変更されています。有効化する前に接続テストをやり直してください。",
+      continue: "スキップして基本の並び替えを使う"
     }
   },
   feeds: {
@@ -2665,7 +2871,30 @@ export const jaJP = {
         markScrolledArticlesIgnored: "開かずに通過した記事を無視済みにし、未読から外す",
         removeReadLaterOnReadComplete: "あとで読むの記事を読み終えたら、あとで読むから外す",
         cocoonLevel: "パーソナライズ度",
-        cocoonLevelHint: "1 はより開かれた分散的な探索、10 はより個人に合わせた安定的で控えめな変化です。どのレベルでも購読フィード内だけで並び替え、重複排除と明示的な低評価を尊重します。"
+        cocoonLevelHint: "1 はより開かれた分散的な探索、10 はより個人に合わせた安定的で控えめな変化です。どのレベルでも購読フィード内だけで並び替え、重複排除と明示的な低評価を尊重します。",
+        interestClusterLimits: {
+          title: "興味クラスタの上限",
+          body: "興味クラスタは多ければよいとは限りません。毎日の Inbox 記事が少ない場合や購読フィードが集中している場合は、少なめのクラスタのほうがおすすめが安定することがあります。",
+          embeddingCostHint:
+            "上限を上げると主にローカルの並び替えとベクトル類似度計算の負荷が増えます。外部 Embedding 呼び出しが比例して増えるわけではありません。",
+          performancePreset: "性能プリセット",
+          presets: [
+            "低スペック VPS：24 / 16",
+            "中程度の NAS：48 / 32",
+            "高性能サーバーまたはローカル PC：96 / 64"
+          ],
+          customPreset: "カスタム",
+          positiveLabel: "正方向の興味クラスタ",
+          negativeLabel: "負方向の興味クラスタ",
+          fieldHint:
+            "正方向クラスタは読みたい可能性が高いテーマを見つけ、負方向クラスタは非表示や興味なしにしたテーマを下げます。"
+        }
+      },
+      telemetry: {
+        title: "フィードバック送信",
+        body: "邸報の改善に役立てるため、エラー、パフォーマンス、利用体験に関するフィードバックデータを送信するかを管理します。",
+        enabledLabel: "邸報の改善に役立つフィードバックデータを共有する",
+        enabledBody: "既定でオンです。オフにすると、ブラウザーとサーバーから新しい Sentry テレメトリーイベントを送信しません。"
       },
       reader: {
         title: "読書",
@@ -2683,7 +2912,35 @@ export const jaJP = {
         keepReadLater: "あとで読む記事を保持",
         enabled: "オン",
         disabled: "オフ",
+        cleanupConfirm:
+          "保持期間を過ぎた過去の記事は削除され、復元できません。整理はバックグラウンドキューに入り、設定保存中に同期実行されません。続行しますか？",
         mappingHint: "API フィールド retention.retentionDays は storage key retention.articleDays に保存されます。"
+      },
+      about: {
+        title: "このアプリについて",
+        body: "バージョン、作者、プロジェクトリンクです。",
+        version: "現在のバージョン",
+        latestVersion: "最新バージョン",
+        latestLoading: "最新バージョンを確認中",
+        latestUnknown: "まだ確認していません",
+        latestUnavailable: "GitHub Release はまだありません",
+        latestCurrent: (version: string) => `最新です：${version}`,
+        latestUpdateAvailable: (version: string) => `新しいバージョンがあります：${version}`,
+        latestError: (message: string) => `確認に失敗しました：${message}`,
+        latestCheckedAt: (value: string) => `前回確認：${value}`,
+        latestNeverChecked: "確認履歴はまだありません",
+        checkRelease: "更新を確認",
+        checkingRelease: "確認中",
+        releaseLink: "Release を表示",
+        author: "作者",
+        authorName: "Pls",
+        telemetryLabel: "フィードバックデータ",
+        telemetryBody:
+          "邸報の改善に使うエラー、パフォーマンス、利用体験のフィードバックデータを開発者へ送信するかを管理します。",
+        xAccount: "X アカウント",
+        blog: "作者ブログ",
+        homepage: "プロジェクトサイト",
+        github: "プロジェクト GitHub"
       },
       provider: {
         title: "インテリジェンス",
@@ -2809,7 +3066,11 @@ export const jaJP = {
       paragraphGap: "段落間隔は 0.6 から 1.6 の範囲で指定してください。",
       readerWidth: "本文幅は 560 から 860 の範囲で指定してください。",
       retentionDays: "保持日数は 0 から 3650 までの整数で入力してください。0 は永続保持です。",
-      cocoonLevel: "パーソナライズ度は 1 から 10 までの整数で入力してください。"
+      cocoonLevel: "パーソナライズ度は 1 から 10 までの整数で入力してください。",
+      maxPositiveInterestClusters:
+        "正方向の興味クラスタ上限は 8 から 192 までの整数で入力してください。",
+      maxNegativeInterestClusters:
+        "負方向の興味クラスタ上限は 4 から 128 までの整数で入力してください。"
     },
     units: {
       px: "px",
@@ -2915,6 +3176,7 @@ export const jaJP = {
     sections: {
       currentStatus: "現在のおすすめ状態",
       currentClusters: "現在の興味クラスター",
+      topicFamilies: "テーマグループ概要",
       maintenance: "アルゴリズムのメンテナンス",
       mergeCandidates: "重複候補のクラスター",
       labelLexicon: "ラベル辞書",
@@ -3010,6 +3272,28 @@ export const jaJP = {
       allSummary: (count: number) => `${count} 件の興味クラスターを重み順に表示しています。`,
       back: "透明性ページに戻る"
     },
+    families: {
+      empty: "テーマグループはまだ生成されていません。次回のおすすめメンテナンスで自動的に作成されます。",
+      summary: (positive: number, negative: number, risk: string) =>
+        `ポジティブテーマ ${positive} 件 · ネガティブテーマ ${negative} 件 · 集中リスク ${risk}`,
+      rowMeta: (
+        clusterCount: number,
+        supportArticleCount: number,
+        sourceCount: number,
+        dominance: string,
+        maturity: string
+      ) =>
+        `${clusterCount} クラスター · ${supportArticleCount} 記事 · ${sourceCount} ソース · 比率 ${dominance} · 成熟度 ${maturity}`,
+      clusterFamily: "所属テーマ",
+      clusterCount: (count: number) => `${count} クラスター`,
+      positiveFallback: "ポジティブテーマ",
+      negativeFallback: "ネガティブテーマ",
+      risk: {
+        low: "低",
+        medium: "中",
+        high: "高"
+      }
+    },
     mergeCandidates: {
       title: "重複候補のクラスター",
       body: "診断は active index 内の同じ polarity のクラスターだけを比較します。マージはプロファイルを変更するため、既定では確認が必要です。",
@@ -3080,6 +3364,11 @@ export const jaJP = {
         cluster_merge_diagnostics: {
           label: "クラスター重複診断を再構築",
           description: "重複している可能性がある興味クラスター候補だけを生成します。プロファイルやランキングは変更しません。",
+          remoteUse: "provider は呼び出しません"
+        },
+        interest_family_rebuild: {
+          label: "テーマグループを再構築",
+          description: "近い興味クラスターを内部テーマグループにまとめ、多様性と診断に使います。",
           remoteUse: "provider は呼び出しません"
         },
         cluster_auto_merge: {
@@ -3323,6 +3612,8 @@ export const jaJP = {
     title: "おすすめ状態",
     loading: "おすすめ状態を読み込んでいます",
     fallback: "おすすめ状態を取得できません。記事一覧は引き続き読めます。",
+    warmupNotice:
+      "現在はユーザー行動を蓄積している段階です。おすすめはまだ正確でない可能性があるため、しばらくは「最新」ビューを通常の RSS リーダーとしてお使いください。",
     modes: {
       baseline: "基本の並び替え",
       personalized: "パーソナライズおすすめが有効",
@@ -3380,6 +3671,7 @@ export const jaJP = {
     entryTitle: "おすすめの説明",
     open: "詳しい理由を見る",
     teaser: "内部の生スコアではなく、理解しやすい理由だけを表示します。",
+    lazy: "半分以上読み進めるとおすすめ理由を表示します。",
     sortLabel: "現在の並び順メモ",
     sortTitle: "現在のビューの並び順",
     loading: "おすすめ理由を生成しています",
@@ -3398,12 +3690,16 @@ export const jaJP = {
       state: "状態",
       fallback: "基本",
       negative: "ネガティブ",
-      penalty: "フィルター"
+      penalty: "フィルター",
+      exploration: "発見"
     },
     reasons: {
       interest: "最近のポジティブな興味に近いため、順位が上がっています。",
       interestCluster: (summary: string) =>
         `最近のポジティブな興味に近いため、順位が上がっています。${summary}`,
+      interestFamily: (label: string) =>
+        `興味トピック「${label}」に近いため、順位が上がっています。`,
+      recentIntent: "最近の読書傾向に近いため、順位が上がっています。",
       sourcePositive: (label: string) => `ソース ${label} が順位を上げています。`,
       sourceNegative: (label: string) => `ソース ${label} は現在重みが低めです。`,
       freshness: "新しい記事のため、新鮮度による加点があります。",
@@ -3411,7 +3707,9 @@ export const jaJP = {
       stateNegative: "無視、読了などの状態が優先度を下げました。",
       fallback: "基本の並び替えが有効で、まだ強い信号はありません。",
       negative: "最近のネガティブ行動が順位を下げました。",
-      penalty: "非表示または興味なしの状態は順位を大きく下げます。"
+      penalty: "非表示または興味なしの状態は順位を大きく下げます。",
+      exploration:
+        "この記事はフィードの偏りを広げるために表示されています。設定でアルゴリズムの情報偏りレベルを調整できます。"
     }
   },
   actions: {
@@ -3497,7 +3795,7 @@ const defaultI18n = createI18n(defaultLocale);
 const I18nContext = createContext<I18nValue>(defaultI18n);
 
 export function DibaoI18nProvider(props: DibaoI18nProviderProps) {
-  const [locale, setLocale] = useState<Locale>(props.locale ?? defaultLocale);
+  const [locale, setLocale] = useState<Locale>(() => props.locale ?? browserPreferredLocale());
   const value = useMemo(() => createI18n(locale, {}, setLocale), [locale]);
 
   useEffect(() => {
@@ -3520,6 +3818,33 @@ export function DibaoI18nProvider(props: DibaoI18nProviderProps) {
 
 export function useI18n(): I18nValue {
   return useContext(I18nContext);
+}
+
+export function browserPreferredLocale(): Locale {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return defaultLocale;
+  }
+
+  const languages = navigator.languages?.length
+    ? navigator.languages
+    : navigator.language
+      ? [navigator.language]
+      : [];
+
+  for (const language of languages) {
+    const normalized = language.toLowerCase();
+    if (normalized === "zh-cn" || normalized.startsWith("zh")) {
+      return "zh-CN";
+    }
+    if (normalized === "ja-jp" || normalized.startsWith("ja")) {
+      return "ja-JP";
+    }
+    if (normalized === "en-us" || normalized.startsWith("en")) {
+      return "en-US";
+    }
+  }
+
+  return defaultLocale;
 }
 
 export function createI18n(
