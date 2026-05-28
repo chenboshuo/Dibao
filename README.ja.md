@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Pls-1q43/dibao"><img alt="GitHub repository" src="https://img.shields.io/badge/GitHub-Pls--1q43%2Fdibao-111827?logo=github" /></a>
+  <a href="https://github.com/Pls-1q43/Dibao"><img alt="GitHub repository" src="https://img.shields.io/badge/GitHub-Pls--1q43%2FDibao-111827?logo=github" /></a>
   <a href="./compose.yaml"><img alt="Docker Compose" src="https://img.shields.io/badge/Docker_Compose-ready-2563eb?logo=docker&logoColor=white" /></a>
   <a href="./docs/release-notes-v0.1.0.md"><img alt="Release notes" src="https://img.shields.io/badge/release_notes-v0.1.0-2f6f5e" /></a>
 </p>
@@ -107,7 +107,7 @@ docker compose up -d
 現在のリポジトリからビルドする場合：
 
 ```bash
-git clone https://github.com/Pls-1q43/dibao.git
+git clone https://github.com/Pls-1q43/Dibao.git
 cd dibao
 docker compose up --build -d
 ```
