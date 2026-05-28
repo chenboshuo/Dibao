@@ -1487,17 +1487,6 @@ export function App() {
     setAppStage({ type: "reader" });
   }
 
-  async function handleSetupSaveEmbeddingProvider(
-    providerId: string | null,
-    input: CreateEmbeddingProviderInput | UpdateEmbeddingProviderInput
-  ): Promise<string | null> {
-    const savedProviderId = await handleSaveEmbeddingProvider(providerId, {
-      ...input,
-      enabled: true
-    });
-    return savedProviderId;
-  }
-
   async function handleRefreshFeed(feed: Feed) {
     setRefreshingFeedId(feed.id);
     setFeedError(null);
@@ -1715,7 +1704,7 @@ export function App() {
     }
   }
 
-  async function handleActivateEmbeddingProvider(providerId: string) {
+  async function handleActivateEmbeddingProvider(providerId: string): Promise<boolean> {
     setActivatingProviderId(providerId);
     setEmbeddingError(null);
     setNotice(null);
@@ -1724,9 +1713,11 @@ export function App() {
       await dibaoApi.activateEmbeddingProvider(providerId);
       await loadEmbeddingSettings();
       setNotice({ type: "embeddingProviderActivated" });
+      return true;
     } catch (error) {
       setEmbeddingError(userMessageForError(error, t.errors.api));
       await loadEmbeddingSettings();
+      return false;
     } finally {
       setActivatingProviderId(null);
     }
@@ -2413,6 +2404,7 @@ export function App() {
       <main className={styles.authShell}>
         {pwaStatusBanner}
         <SetupProviderPanel
+          activatingProviderId={activatingProviderId}
           deletingProviderId={deletingProviderId}
           embeddingError={embeddingError}
           embeddingProviders={embeddingProviders}
@@ -2421,7 +2413,8 @@ export function App() {
           testingProviderId={testingProviderId}
           onContinue={handleSetupProviderContinue}
           onDeleteEmbeddingProvider={handleDeleteEmbeddingProvider}
-          onSaveEmbeddingProvider={handleSetupSaveEmbeddingProvider}
+          onActivateEmbeddingProvider={handleActivateEmbeddingProvider}
+          onSaveEmbeddingProvider={handleSaveEmbeddingProvider}
           onTestEmbeddingProvider={handleTestEmbeddingProvider}
         />
       </main>
@@ -2597,7 +2590,9 @@ export function App() {
             rebuildingIndexId={rebuildingIndexId}
             testingProviderId={testingProviderId}
             onBackfillEmbeddingIndex={handleBackfillEmbeddingIndex}
-            onActivateEmbeddingProvider={handleActivateEmbeddingProvider}
+            onActivateEmbeddingProvider={async (providerId) => {
+              await handleActivateEmbeddingProvider(providerId);
+            }}
             onDeleteEmbeddingProvider={handleDeleteEmbeddingProvider}
             onChangePassword={handleChangePassword}
             onPreviewSettings={handlePreviewSettings}
@@ -3203,12 +3198,14 @@ export function FeedDiscoveryPanel(props: {
 }
 
 export function SetupProviderPanel(props: {
+  activatingProviderId: string | null;
   deletingProviderId: string | null;
   embeddingError: string | null;
   embeddingProviders: EmbeddingProvider[];
   isEmbeddingLoading: boolean;
   isSavingEmbeddingProvider: boolean;
   testingProviderId: string | null;
+  onActivateEmbeddingProvider: (providerId: string) => Promise<boolean>;
   onContinue: () => void;
   onDeleteEmbeddingProvider: (providerId: string) => Promise<void>;
   onSaveEmbeddingProvider: (
@@ -3258,7 +3255,7 @@ export function SetupProviderPanel(props: {
     setProviderLocalError(null);
   }, [pendingProviderSelectionId, props.embeddingProviders]);
 
-  async function handleProviderSubmit() {
+  async function handleProviderTestSubmit() {
     const parsed = parseEmbeddingProviderDraft(providerDraft, t);
 
     if (!parsed.ok) {
@@ -3269,10 +3266,26 @@ export function SetupProviderPanel(props: {
     setProviderLocalError(null);
     const savedProviderId = await props.onSaveEmbeddingProvider(
       providerDraft.providerId === newEmbeddingProviderId ? null : providerDraft.providerId,
-      parsed.input
+      {
+        ...parsed.input,
+        enabled: selectedProvider?.enabled ?? false
+      }
     );
     if (savedProviderId) {
       setPendingProviderSelectionId(savedProviderId);
+      await props.onTestEmbeddingProvider(savedProviderId);
+    }
+  }
+
+  async function handleProviderEnableSubmit() {
+    if (!selectedProvider || !canEnableSelectedProvider) {
+      setProviderLocalError(t.setup.provider.testRequired);
+      return;
+    }
+
+    setProviderLocalError(null);
+    const activated = await props.onActivateEmbeddingProvider(selectedProvider.id);
+    if (activated) {
       props.onContinue();
     }
   }
@@ -3282,6 +3295,17 @@ export function SetupProviderPanel(props: {
       ? null
       : props.embeddingProviders.find((provider) => provider.id === providerDraft.providerId) ??
         null;
+  const selectedProviderDraftMatches =
+    selectedProvider !== null && embeddingProviderDraftMatchesProvider(providerDraft, selectedProvider);
+  const canEnableSelectedProvider =
+    selectedProvider !== null &&
+    !selectedProvider.enabled &&
+    selectedProvider.lastTestStatus === "success" &&
+    selectedProviderDraftMatches;
+  const isActivatingSelectedProvider =
+    selectedProvider !== null && props.activatingProviderId === selectedProvider.id;
+  const isTestingSelectedProvider =
+    selectedProvider !== null && props.testingProviderId === selectedProvider.id;
 
   return (
     <section
@@ -3548,28 +3572,63 @@ export function SetupProviderPanel(props: {
         <p>{t.setup.provider.currentBody}</p>
       </div>
 
+      {selectedProvider ? (
+        <div className={styles.setupStatusBox}>
+          <strong>{t.settings.sections.provider.connectionStatusTitle}</strong>
+          <p>
+            {selectedProvider.lastTestStatus === "success"
+              ? t.settings.sections.provider.lastTestSuccess(
+                  selectedProvider.lastTestAt ?? t.feedManagement.na
+                )
+              : selectedProvider.lastTestStatus === "failed"
+                ? t.settings.sections.provider.lastTestFailed(
+                    selectedProvider.lastTestError ?? t.feedManagement.na
+                  )
+                : t.settings.sections.provider.lastTestUnknown}
+          </p>
+          {selectedProvider.lastTestStatus === "success" && !selectedProviderDraftMatches ? (
+            <p>{t.setup.provider.testStale}</p>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className={styles.managementActions}>
         <button
           className={styles.primaryButton}
-          disabled={props.isSavingEmbeddingProvider}
-          onClick={() => void handleProviderSubmit()}
+          disabled={props.isSavingEmbeddingProvider || isTestingSelectedProvider}
+          onClick={() => void handleProviderTestSubmit()}
           type="button"
         >
           {props.isSavingEmbeddingProvider
             ? t.setup.provider.saving
+            : isTestingSelectedProvider
+              ? t.settings.sections.provider.testing
+              : t.setup.provider.saveAndTest}
+        </button>
+        <button
+          className={styles.primaryButton}
+          disabled={
+            !canEnableSelectedProvider ||
+            isActivatingSelectedProvider ||
+            props.isSavingEmbeddingProvider ||
+            isTestingSelectedProvider
+          }
+          onClick={() => void handleProviderEnableSubmit()}
+          type="button"
+        >
+          {isActivatingSelectedProvider
+            ? t.settings.sections.provider.activating
             : t.setup.provider.saveAndContinue}
         </button>
         <button
           className={styles.secondaryButton}
-          disabled={!selectedProvider || props.testingProviderId === selectedProvider.id}
+          disabled={!selectedProvider || isTestingSelectedProvider}
           onClick={() =>
             selectedProvider ? void props.onTestEmbeddingProvider(selectedProvider.id) : undefined
           }
           type="button"
         >
-          {selectedProvider && props.testingProviderId === selectedProvider.id
-            ? t.settings.sections.provider.testing
-            : t.settings.sections.provider.test}
+          {isTestingSelectedProvider ? t.settings.sections.provider.testing : t.settings.sections.provider.test}
         </button>
         <button className={styles.secondaryButton} onClick={props.onContinue} type="button">
           {t.setup.provider.continue}
@@ -7984,6 +8043,36 @@ function draftWithProviderType(
         : draft.textMaxChars,
     apiKey: type === "ollama" ? "" : draft.apiKey
   };
+}
+
+function embeddingProviderDraftMatchesProvider(
+  draft: EmbeddingProviderDraft,
+  provider: EmbeddingProvider
+): boolean {
+  return (
+    draft.providerId === provider.id &&
+    draft.type === supportedProviderType(provider.type) &&
+    draft.name.trim() === provider.name &&
+    draft.baseUrl.trim() === provider.baseUrl &&
+    draft.model.trim() === provider.model &&
+    Number(draft.dimension) === provider.dimension &&
+    Number(draft.textMaxChars) === provider.textMaxChars &&
+    optionalNumberDraftMatches(draft.requestsPerMinute, provider.requestsPerMinute) &&
+    optionalNumberDraftMatches(draft.requestsPerDay, provider.requestsPerDay) &&
+    draft.apiKey.trim() === "" &&
+    draft.qualityTier === provider.qualityTier
+  );
+}
+
+function optionalNumberDraftMatches(
+  draft: string,
+  value: number | null | undefined
+): boolean {
+  if (draft.trim() === "") {
+    return value === null || value === undefined;
+  }
+
+  return Number(draft) === value;
 }
 
 function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {

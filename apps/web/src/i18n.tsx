@@ -130,8 +130,11 @@ export const zhCN = {
       recommendationLink: "查看这里选择合适的（免费）Provider。",
       currentTitle: "跳过也是可选项",
       currentBody: "暂不配置时，邸报仍可阅读、收藏、稍后读，并使用基础排序。",
+      saveAndTest: "保存配置并测试连接",
       saveAndContinue: "保存并启用",
       saving: "保存中",
+      testRequired: "请先保存配置并通过连接测试，再启用 Provider。",
+      testStale: "配置已修改，请重新测试连接后再启用。",
       continue: "跳过，使用基础排序"
     }
   },
@@ -1389,8 +1392,11 @@ export const enUS = {
       recommendationLink: "See this guide to choose a suitable free provider.",
       currentTitle: "Skipping is still available",
       currentBody: "If you skip this step, Dibao remains usable for reading, favorites, read-later, and baseline ranking.",
+      saveAndTest: "Save profile and test connection",
       saveAndContinue: "Save and enable",
       saving: "Saving",
+      testRequired: "Save the profile and pass the connection test before enabling the provider.",
+      testStale: "The profile has changed. Test the connection again before enabling.",
       continue: "Skip and use baseline ranking"
     }
   },
@@ -2637,8 +2643,11 @@ export const jaJP = {
       recommendationLink: "こちらを見て、適した無料 Provider を選んでください。",
       currentTitle: "スキップも選べます",
       currentBody: "ここで設定しなくても、閲覧、お気に入り、あとで読む、基本の並び替えは利用できます。",
+      saveAndTest: "プロファイルを保存して接続テスト",
       saveAndContinue: "保存して有効化",
       saving: "保存中",
+      testRequired: "Provider を有効化する前に、プロファイルを保存して接続テストを成功させてください。",
+      testStale: "プロファイルが変更されています。有効化する前に接続テストをやり直してください。",
       continue: "スキップして基本の並び替えを使う"
     }
   },

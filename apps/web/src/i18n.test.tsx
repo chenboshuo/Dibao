@@ -287,12 +287,14 @@ describe("web i18n", () => {
     const providerHtml = renderToStaticMarkup(
       <DibaoI18nProvider>
         <SetupProviderPanel
+          activatingProviderId={null}
           deletingProviderId={null}
           embeddingError={null}
           embeddingProviders={[]}
           isEmbeddingLoading={false}
           isSavingEmbeddingProvider={false}
           testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
           onContinue={() => undefined}
           onDeleteEmbeddingProvider={() => Promise.resolve()}
           onSaveEmbeddingProvider={() => Promise.resolve(null)}
@@ -303,12 +305,14 @@ describe("web i18n", () => {
     const providerEnglishHtml = renderToStaticMarkup(
       <DibaoI18nProvider locale="en-US">
         <SetupProviderPanel
+          activatingProviderId={null}
           deletingProviderId={null}
           embeddingError={null}
           embeddingProviders={[]}
           isEmbeddingLoading={false}
           isSavingEmbeddingProvider={false}
           testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
           onContinue={() => undefined}
           onDeleteEmbeddingProvider={() => Promise.resolve()}
           onSaveEmbeddingProvider={() => Promise.resolve(null)}
@@ -319,12 +323,14 @@ describe("web i18n", () => {
     const providerJapaneseHtml = renderToStaticMarkup(
       <DibaoI18nProvider locale="ja-JP">
         <SetupProviderPanel
+          activatingProviderId={null}
           deletingProviderId={null}
           embeddingError={null}
           embeddingProviders={[]}
           isEmbeddingLoading={false}
           isSavingEmbeddingProvider={false}
           testingProviderId={null}
+          onActivateEmbeddingProvider={() => Promise.resolve(true)}
           onContinue={() => undefined}
           onDeleteEmbeddingProvider={() => Promise.resolve()}
           onSaveEmbeddingProvider={() => Promise.resolve(null)}
@@ -343,6 +349,7 @@ describe("web i18n", () => {
     expect(providerHtml).toContain("tree/main");
     expect(providerHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
     expect(providerHtml).toContain("跳过，使用基础排序");
+    expect(providerHtml).toContain("保存配置并测试连接");
     expect(providerHtml).toContain("保存并启用");
     expect(providerHtml).toContain("API Key");
     expect(providerHtml).toContain("Base URL");
