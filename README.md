@@ -36,6 +36,7 @@
 
 - [它解决什么问题](#它解决什么问题)
 - [你会得到什么](#你会得到什么)
+- [支持项目](#支持项目)
 - [快速安装](#快速安装)
 - [推荐 Provider](#推荐-provider)
 - [备份与升级](#备份与升级)
@@ -67,6 +68,14 @@
 | 想在手机上用 | 支持 PWA 安装到主屏幕；离线时能打开应用壳。 |
 
 当前不做：多用户团队协作、官方托管、社交关注、评论转发、平台外内容推荐、云同步、离线全文文章库。
+
+### 支持项目
+
+如果邸报对你有帮助，欢迎使用微信扫码赞赏，支持项目继续维护。
+
+<p align="center">
+  <img src="./docs/assets/wechat-donation.jpg" alt="微信赞赏码" width="320" />
+</p>
 
 ### 快速安装
 
@@ -115,9 +124,9 @@ docker compose up --build -d
 | 你的部署方式 | 推荐选择 | 原因与参数 |
 | --- | --- | --- |
 | 本地 MacBook、Mac mini、Windows 台式机 / 笔记本 | **Ollama 本地模型** | 本地电脑通常比小 VPS 更适合跑 embedding：不花 API 钱，阅读数据不出本机，首次索引慢一点也可以接受。推荐模型：`bge-m3`；Dimension：`1024`。 |
-| 家用 NAS 或低功耗小主机 | **优先外部 provider** | 如果 CPU 较弱、内存紧张，embedding 会拖慢设备。建议直接用硅基流动或 Gemini；如果设备接近桌面级 CPU 且内存充足，再考虑 Ollama。 |
+| 家用 NAS 或低功耗小主机 | **优先外部 provider** | 如果 CPU 较弱、内存紧张，embedding 会拖慢设备。建议直接用[硅基流动](https://cloud.siliconflow.cn/i/4wjbYmMH)或 Gemini；如果设备接近桌面级 CPU 且内存充足，再考虑 Ollama。 |
 | VPS >= `4 vCPU / 8GB RAM` | **可以用 Ollama CPU** | 可接受后台慢慢生成 embedding 的话，用 `bge-m3`；如果文章很多或机器还跑别的服务，仍建议外部 provider。 |
-| VPS < `4 vCPU / 8GB RAM` | **硅基流动或 Gemini** | 1-2 vCPU、1-4GB RAM 的 VPS 更适合把 embedding 交给 API，避免首次 backfill 和后续刷新挤占服务器资源。 |
+| VPS < `4 vCPU / 8GB RAM` | **[硅基流动](https://cloud.siliconflow.cn/i/4wjbYmMH)或 Gemini** | 1-2 vCPU、1-4GB RAM 的 VPS 更适合把 embedding 交给 API，避免首次 backfill 和后续刷新挤占服务器资源。 |
 
 本地 Ollama 推荐配置：
 
@@ -138,7 +147,7 @@ ollama pull bge-m3
 
 | Provider | 适合谁 | 邸报里怎么填 |
 | --- | --- | --- |
-| 硅基流动 SiliconFlow | 国内访问更方便，支持 OpenAI-compatible API。优先推荐 `BAAI/bge-m3`：免费，没有日额度上限，按 RPM / TPM 限速；当前 L0 级别为 2,000 RPM、500,000 TPM。 | 类型：`OpenAI-compatible`<br>Base URL：`https://api.siliconflow.cn/v1`<br>Model：`BAAI/bge-m3`<br>Dimension：`1024`<br>API Key：硅基流动控制台创建 |
+| [硅基流动 SiliconFlow](https://cloud.siliconflow.cn/i/4wjbYmMH) | 国内访问更方便，支持 OpenAI-compatible API。优先推荐 `BAAI/bge-m3`：免费，没有日额度上限，按 RPM / TPM 限速；当前 L0 级别为 2,000 RPM、500,000 TPM。 | 类型：`OpenAI-compatible`<br>Base URL：`https://api.siliconflow.cn/v1`<br>Model：`BAAI/bge-m3`<br>Dimension：`1024`<br>API Key：硅基流动控制台创建 |
 | Gemini | 有 Google AI Studio / Gemini API key，想用 Google 免费层。Gemini embedding 也是免费的，免费层适合日常个人 RSS；按每天约 1,000 次请求规划更稳妥。 | 类型：`OpenAI-compatible`<br>Base URL：`https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model：`gemini-embedding-001`<br>Dimension：`768`<br>API Key：Google AI Studio 创建 |
 
 配置入口：`设置` -> `推荐 provider` -> 选择 `OpenAI-compatible` -> 填入 Base URL、Model、Dimension、API Key -> `测试连接`。

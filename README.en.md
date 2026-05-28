@@ -32,6 +32,7 @@ Quick links:
 
 - [Why Dibao](#why-dibao)
 - [What You Get](#what-you-get)
+- [Support Dibao](#support-dibao)
 - [Quick Install](#quick-install)
 - [Recommended Providers](#recommended-providers)
 - [Backup And Upgrade](#backup-and-upgrade)
@@ -63,6 +64,12 @@ Chronological RSS is honest, but it can become impossible to scan. Platform feed
 | Read on mobile | Installable PWA with app-shell caching. |
 
 Dibao does not provide multi-user teams, hosted sync, social following, comments, platform-wide recommendations, or offline full-article storage.
+
+### Support Dibao
+
+If Dibao is useful to you, you can support ongoing development through Stripe:
+
+[Support Dibao on Stripe](https://buy.stripe.com/4gM3cugQ01Zp6hBeiTdfG00)
 
 ### Quick Install
 
@@ -109,9 +116,9 @@ Dibao works without an AI provider, but embeddings make recommendations more per
 | Deployment | Recommendation |
 | --- | --- |
 | Local MacBook, Mac mini, or Windows desktop/laptop | Use local Ollama first. It keeps reading data on the machine and avoids API cost. Recommended model: `bge-m3`; dimension: `1024`. |
-| Home NAS or low-power mini PC | Prefer SiliconFlow or Gemini unless the CPU is close to desktop-class and memory is comfortable. |
+| Home NAS or low-power mini PC | Prefer [SiliconFlow](https://cloud.siliconflow.cn/i/4wjbYmMH) or Gemini unless the CPU is close to desktop-class and memory is comfortable. |
 | VPS with at least `4 vCPU / 8GB RAM` | Ollama CPU can work for background embedding. Use `bge-m3`, and expect initial indexing to take time. |
-| VPS below `4 vCPU / 8GB RAM` | Use SiliconFlow or Gemini. Small VPS instances should not spend their limited CPU/RAM on embedding backfill. |
+| VPS below `4 vCPU / 8GB RAM` | Use [SiliconFlow](https://cloud.siliconflow.cn/i/4wjbYmMH) or Gemini. Small VPS instances should not spend their limited CPU/RAM on embedding backfill. |
 
 Local Ollama settings:
 
@@ -132,7 +139,7 @@ External low-cost providers:
 
 | Provider | Settings |
 | --- | --- |
-| SiliconFlow | Recommended model: `BAAI/bge-m3`. It is free, has no daily quota, and is rate-limited by RPM / TPM. Current L0 limits are 2,000 RPM and 500,000 TPM.<br>Type: `OpenAI-compatible`<br>Base URL: `https://api.siliconflow.cn/v1`<br>Model: `BAAI/bge-m3`<br>Dimension: `1024` |
+| [SiliconFlow](https://cloud.siliconflow.cn/i/4wjbYmMH) | Recommended model: `BAAI/bge-m3`. It is free, has no daily quota, and is rate-limited by RPM / TPM. Current L0 limits are 2,000 RPM and 500,000 TPM.<br>Type: `OpenAI-compatible`<br>Base URL: `https://api.siliconflow.cn/v1`<br>Model: `BAAI/bge-m3`<br>Dimension: `1024` |
 | Gemini | Gemini embedding is also free and works well for a small personal RSS setup. Plan around the free tier's roughly 1,000 requests per day.<br>Type: `OpenAI-compatible`<br>Base URL: `https://generativelanguage.googleapis.com/v1beta/openai/`<br>Model: `gemini-embedding-001`<br>Dimension: `768` |
 
 Free tiers, pricing, and regional availability can change. Check [Ollama bge-m3](https://ollama.com/library/bge-m3), the current [SiliconFlow embeddings docs](https://docs.siliconflow.cn/cn/api-reference/embeddings/create-embeddings), and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) before depending on a provider for heavy use.
