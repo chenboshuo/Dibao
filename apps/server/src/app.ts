@@ -124,6 +124,7 @@ import {
   type RecommendationClusterFamily
 } from "./interest-family-service.js";
 import { JobRunner } from "./job-runner.js";
+import { LatestReleaseService } from "./latest-release-service.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import {
   DEFAULT_PROFILE_DECAY_INTERVAL_MS,
@@ -339,6 +340,7 @@ type BuildServerOptions = {
   jobRetryDelayMs?: number;
   embeddingFetcher?: typeof fetch;
   fullContentFetcher?: typeof fetch;
+  latestReleaseFetcher?: typeof fetch;
   webDistDir?: string | false;
 };
 
@@ -388,6 +390,16 @@ export function buildServer(options: BuildServerOptions = {}) {
   const settingsService = new SettingsService({
     settings,
     now: options.now
+  });
+  const existingCredential = credentials.findCredential();
+  if (existingCredential) {
+    settingsService.ensureInstallationCompletedAt(existingCredential.createdAt);
+  }
+  const latestReleaseService = new LatestReleaseService({
+    settings,
+    now: options.now,
+    fetcher: options.latestReleaseFetcher,
+    getInstallationCompletedAt: () => settingsService.ensureInstallationCompletedAt()
   });
   const profileService = new ProfileService({
     embeddings,
@@ -881,6 +893,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
     try {
       const session = await authService.setup(parsed.username, parsed.password, requestMeta(request));
+      settingsService.markInstallationCompleted();
       if (parsed.telemetryEnabled !== undefined) {
         const result = settingsService.updateSettings({
           telemetry: {
@@ -1189,6 +1202,14 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.get("/api/settings", async () => ({
     data: settingsService.getSettings()
+  }));
+
+  app.get("/api/system/latest-release", async () => ({
+    data: await latestReleaseService.getLatestRelease()
+  }));
+
+  app.post("/api/system/latest-release/check", async () => ({
+    data: await latestReleaseService.refresh()
   }));
 
   app.patch<{ Body: unknown }>("/api/settings", async (request, reply) => {

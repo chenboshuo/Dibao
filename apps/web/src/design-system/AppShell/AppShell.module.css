@@ -1764,6 +1764,31 @@
   text-decoration: none;
 }
 
+.latestReleaseStatus {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.latestReleaseStatus span,
+.latestReleaseStatus small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.latestReleaseStatus small {
+  width: 100%;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.latestReleaseStatus .secondaryButton {
+  min-height: 30px;
+  padding-inline: var(--space-3);
+  font-size: var(--text-xs);
+}
+
 .settingsIndexStatus {
   min-width: 0;
   display: grid;

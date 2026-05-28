@@ -13,6 +13,7 @@ export const UI_DEFAULT_HOME_VIEW_SETTING_KEY = "ui.defaultHomeView";
 export const READER_SETTINGS_KEY = "reader.settings";
 export const BEHAVIOR_SETTINGS_KEY = "behavior.settings";
 export const TELEMETRY_SETTINGS_KEY = "telemetry.settings";
+export const INSTALLATION_COMPLETED_AT_SETTING_KEY = "app.installationCompletedAt";
 export const RECOMMENDATION_SETTINGS_KEY = "recommendation.settings";
 export const RECOMMENDATION_MAINTENANCE_SETTINGS_KEY = "recommendation.maintenanceSettings";
 
@@ -326,6 +327,29 @@ export class SettingsService {
       ok: true,
       settings: this.getSettings()
     };
+  }
+
+  getInstallationCompletedAt(): number | null {
+    const stored = this.options.settings.getJson<unknown>(INSTALLATION_COMPLETED_AT_SETTING_KEY);
+    return typeof stored === "number" && Number.isFinite(stored) && stored > 0 ? stored : null;
+  }
+
+  ensureInstallationCompletedAt(fallback?: number | null): number {
+    const stored = this.getInstallationCompletedAt();
+    if (stored !== null) {
+      return stored;
+    }
+
+    const completedAt =
+      typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0
+        ? fallback
+        : this.now();
+    this.options.settings.setJson(INSTALLATION_COMPLETED_AT_SETTING_KEY, completedAt, this.now());
+    return completedAt;
+  }
+
+  markInstallationCompleted(): number {
+    return this.ensureInstallationCompletedAt(this.now());
   }
 
   private readLocale(): SettingsLocale {

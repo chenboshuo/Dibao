@@ -28,6 +28,7 @@ import {
   type FeedFolder,
   type FullContentBackfillResponse,
   type FullContentPreviewResponse,
+  type LatestReleaseStatus,
   type OpmlImportResponse,
   type RankExplanation,
   type RankExplanationReason,
@@ -3788,6 +3789,10 @@ export function SettingsWorkspace(props: {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordNotice, setPasswordNotice] = useState<string | null>(null);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [latestRelease, setLatestRelease] = useState<LatestReleaseStatus | null>(null);
+  const [latestReleaseError, setLatestReleaseError] = useState<string | null>(null);
+  const [isLoadingLatestRelease, setIsLoadingLatestRelease] = useState(false);
+  const [isCheckingLatestRelease, setIsCheckingLatestRelease] = useState(false);
   const savedSettingsRef = useRef(props.settings);
   const hasUnsavedSettingsDraftRef = useRef(false);
 
@@ -3832,6 +3837,36 @@ export function SettingsWorkspace(props: {
     setProviderDraft(draftForEmbeddingProvider(activeProvider));
     setProviderLocalError(null);
   }, [pendingProviderSelectionId, props.embeddingProviders]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLatestRelease() {
+      setIsLoadingLatestRelease(true);
+      setLatestReleaseError(null);
+
+      try {
+        const result = await dibaoApi.getLatestRelease();
+        if (!cancelled) {
+          setLatestRelease(result);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLatestReleaseError(userMessageForError(error, t.errors.api));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingLatestRelease(false);
+        }
+      }
+    }
+
+    void loadLatestRelease();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [t.errors.api]);
 
   function applyDraft(nextDraft: SettingsDraft) {
     hasUnsavedSettingsDraftRef.current = true;
@@ -3919,6 +3954,19 @@ export function SettingsWorkspace(props: {
       setPasswordError(userMessageForError(error, t.errors.api));
     } finally {
       setIsChangingPassword(false);
+    }
+  }
+
+  async function handleCheckLatestRelease() {
+    setIsCheckingLatestRelease(true);
+    setLatestReleaseError(null);
+
+    try {
+      setLatestRelease(await dibaoApi.checkLatestRelease());
+    } catch (error) {
+      setLatestReleaseError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsCheckingLatestRelease(false);
     }
   }
 
@@ -4764,6 +4812,43 @@ export function SettingsWorkspace(props: {
               <dd>{t.common.version(dibaoVersion)}</dd>
             </div>
             <div>
+              <dt>{t.settings.sections.about.latestVersion}</dt>
+              <dd>
+                <div className={styles.latestReleaseStatus}>
+                  <span>
+                    {latestReleaseText(
+                      latestRelease,
+                      isLoadingLatestRelease,
+                      latestReleaseError,
+                      t
+                    )}
+                  </span>
+                  {latestRelease?.updateAvailable && latestRelease.releaseUrl ? (
+                    <a href={latestRelease.releaseUrl} rel="noreferrer" target="_blank">
+                      {t.settings.sections.about.releaseLink}
+                    </a>
+                  ) : null}
+                  <button
+                    className={styles.secondaryButton}
+                    disabled={isCheckingLatestRelease}
+                    onClick={() => void handleCheckLatestRelease()}
+                    type="button"
+                  >
+                    {isCheckingLatestRelease
+                      ? t.settings.sections.about.checkingRelease
+                      : t.settings.sections.about.checkRelease}
+                  </button>
+                  <small>
+                    {latestRelease?.checkedAt
+                      ? t.settings.sections.about.latestCheckedAt(
+                          formatDate(latestRelease.checkedAt)
+                        )
+                      : t.settings.sections.about.latestNeverChecked}
+                  </small>
+                </div>
+              </dd>
+            </div>
+            <div>
               <dt>{t.settings.sections.about.author}</dt>
               <dd>{t.settings.sections.about.authorName}</dd>
             </div>
@@ -4804,6 +4889,35 @@ export function SettingsWorkspace(props: {
       </div>
     </form>
   );
+}
+
+function latestReleaseText(
+  latestRelease: LatestReleaseStatus | null,
+  isLoading: boolean,
+  error: string | null,
+  t: Dictionary
+): string {
+  if (isLoading && latestRelease === null) {
+    return t.settings.sections.about.latestLoading;
+  }
+  if (error) {
+    return error;
+  }
+  if (!latestRelease) {
+    return t.settings.sections.about.latestUnknown;
+  }
+  if (latestRelease.status === "error" && latestRelease.error) {
+    return t.settings.sections.about.latestError(latestRelease.error);
+  }
+  if (!latestRelease.latestVersion) {
+    return latestRelease.checkedAt
+      ? t.settings.sections.about.latestUnavailable
+      : t.settings.sections.about.latestUnknown;
+  }
+  if (latestRelease.updateAvailable) {
+    return t.settings.sections.about.latestUpdateAvailable(latestRelease.latestVersion);
+  }
+  return t.settings.sections.about.latestCurrent(latestRelease.latestVersion);
 }
 
 export function AlgorithmTransparencyPage(props: {

@@ -2654,6 +2654,129 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("checks the latest GitHub release once per installation-anchored day and on demand", async () => {
+    const db = createEmptyDatabase();
+    let now = Date.parse("2026-05-28T09:30:00.000Z");
+    let requestCount = 0;
+    const latestReleaseFetcher: typeof fetch = async () => {
+      requestCount += 1;
+      return new Response(
+        JSON.stringify({
+          tag_name: "v0.2.0",
+          name: "Dibao v0.2.0",
+          html_url: "https://github.com/Pls-1q43/dibao/releases/tag/v0.2.0",
+          published_at: "2026-05-28T08:00:00.000Z"
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    };
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => now,
+      latestReleaseFetcher
+    });
+
+    try {
+      await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toMatchObject({
+        data: {
+          currentVersion: "0.1.0",
+          latestVersion: "v0.2.0",
+          releaseUrl: "https://github.com/Pls-1q43/dibao/releases/tag/v0.2.0",
+          updateAvailable: true,
+          status: "update_available",
+          checkedAt: "2026-05-28T09:30:00.000Z",
+          nextAutoCheckAt: "2026-05-29T09:30:00.000Z"
+        }
+      });
+      expect(requestCount).toBe(1);
+
+      now = Date.parse("2026-05-29T09:29:59.000Z");
+      const sameWindow = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(sameWindow.statusCode, sameWindow.body).toBe(200);
+      expect(requestCount).toBe(1);
+
+      now = Date.parse("2026-05-29T09:30:01.000Z");
+      const nextWindow = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(nextWindow.statusCode, nextWindow.body).toBe(200);
+      expect(requestCount).toBe(2);
+
+      const manual = await app.inject({
+        method: "POST",
+        url: "/api/system/latest-release/check"
+      });
+      expect(manual.statusCode, manual.body).toBe(200);
+      expect(requestCount).toBe(3);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("treats a missing GitHub latest release as an empty release status", async () => {
+    const db = createEmptyDatabase();
+    const now = Date.parse("2026-05-28T09:30:00.000Z");
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => now,
+      latestReleaseFetcher: async () =>
+        new Response(JSON.stringify({ message: "Not Found" }), {
+          status: 404,
+          headers: {
+            "content-type": "application/json"
+          }
+        })
+    });
+
+    try {
+      await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/system/latest-release"
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          latestVersion: null,
+          releaseUrl: null,
+          updateAvailable: false,
+          status: "unknown",
+          error: null,
+          checkedAt: "2026-05-28T09:30:00.000Z"
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("labels lightweight evaluation runs as diagnostic in transparency", async () => {
     const db = createEmptyDatabase();
     new SqliteAppSettingsRepository(db).setJson(

@@ -352,6 +352,19 @@ export type AppSettings = {
   recommendationMaintenance: RecommendationMaintenanceSettings;
 };
 
+export type LatestReleaseStatus = {
+  currentVersion: string;
+  latestVersion: string | null;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  publishedAt: string | null;
+  checkedAt: string | null;
+  nextAutoCheckAt: string;
+  updateAvailable: boolean;
+  status: "unknown" | "current" | "update_available" | "error";
+  error: string | null;
+};
+
 export type RecommendationMaintenanceSettings = {
   maintenanceEnabled: boolean;
   recentIntentAutoRebuildEnabled: boolean;
@@ -1072,6 +1085,18 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getSettings(): Promise<AppSettings> {
       return (await request<AppSettings>("/api/settings")).data;
+    },
+
+    async getLatestRelease(): Promise<LatestReleaseStatus> {
+      return (await request<LatestReleaseStatus>("/api/system/latest-release")).data;
+    },
+
+    async checkLatestRelease(): Promise<LatestReleaseStatus> {
+      return (
+        await request<LatestReleaseStatus>("/api/system/latest-release/check", {
+          method: "POST"
+        })
+      ).data;
     },
 
     async updateSettings(input: UpdateSettingsInput): Promise<UpdateSettingsResponse> {
