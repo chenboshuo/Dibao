@@ -209,7 +209,7 @@ Dibao 采用 [Business Source License 1.1](./LICENSE.md)（`BUSL-1.1`）实现 s
 
 个人、家庭、非商业、研究、评估、学习用途，以及公司 / 机构 / 组织内部自托管使用，均可免费使用、修改、自托管和生产使用 Dibao。有偿部署、咨询、培训、迁移和运维支持也被允许，但客户获得的必须是部署在客户自有环境、客户自有账号或客户控制基础设施中的 Dibao 实例。
 
-未经项目维护者单独商业授权，不得提供收费托管、SaaS、Managed Service、Cloud Service、白标、转售、竞争性商业产品，或任何以 Dibao / 修改版 Dibao 为核心能力的商业 RSS 阅读服务、信息流推荐服务、AI 阅读 / 摘要服务、内容聚合平台或知识流产品。商业授权联系：https://dibao.app。具体 Release Date 和 Change Date 以对应 release tag 中冻结的 `LICENSE.md` 为准；`main` 分支只代表当前开发版。中文说明见 [许可证 FAQ](./docs/license-faq.md)。
+未经项目维护者单独商业授权，不得提供收费托管、SaaS、Managed Service、Cloud Service、白标、转售、竞争性商业产品，或任何以 Dibao / 修改版 Dibao 为核心能力的商业 RSS 阅读服务、信息流推荐服务、AI 阅读 / 摘要服务、内容聚合平台或知识流产品。商业授权联系：[https://dibao.app](https://dibao.app)。具体 Release Date 和 Change Date 以对应 release tag 中冻结的 `LICENSE.md` 为准；`main` 分支只代表当前开发版。中文说明见 [许可证 FAQ](./docs/license-faq.md)。
 
 ### 常见问题
 
