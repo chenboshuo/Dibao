@@ -71,6 +71,19 @@ jobs:
             org.opencontainers.image.title=Dibao
             org.opencontainers.image.description=Self-hosted single-user personalized RSS reader
 
+      - name: Prepare private Sentry build config
+        shell: bash
+        env:
+          DIBAO_SENTRY_CONFIG_JSON: ${{ secrets.DIBAO_SENTRY_CONFIG_JSON }}
+        run: |
+          sentry_config_path="${RUNNER_TEMP}/dibao-sentry.json"
+          if [ -n "${DIBAO_SENTRY_CONFIG_JSON}" ]; then
+            printf '%s' "${DIBAO_SENTRY_CONFIG_JSON}" > "${sentry_config_path}"
+          else
+            printf '{}\n' > "${sentry_config_path}"
+          fi
+          echo "DIBAO_SENTRY_CONFIG_PATH=${sentry_config_path}" >> "${GITHUB_ENV}"
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -80,5 +93,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          secret-files: |
+            dibao_sentry_config=${{ env.DIBAO_SENTRY_CONFIG_PATH }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
