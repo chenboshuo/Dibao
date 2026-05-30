@@ -57,6 +57,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare private Sentry config
+        shell: bash
+        env:
+          DIBAO_SENTRY_CONFIG_JSON: ${{ secrets.DIBAO_SENTRY_CONFIG_JSON }}
+        run: |
+          if [ -z "$DIBAO_SENTRY_CONFIG_JSON" ]; then
+            echo "::error::DIBAO_SENTRY_CONFIG_JSON is required for release Docker images."
+            exit 1
+          fi
+
+          sentry_config="${RUNNER_TEMP}/dibao-sentry.json"
+          printf '%s' "$DIBAO_SENTRY_CONFIG_JSON" > "$sentry_config"
+          chmod 600 "$sentry_config"
+
+          node - "$sentry_config" <<'NODE'
+          const fs = require("node:fs");
+          const path = process.argv[2];
+          const config = JSON.parse(fs.readFileSync(path, "utf8"));
+          const missing = ["dsn", "org", "project"].filter((key) => !String(config[key] ?? "").trim());
+          if (missing.length > 0) {
+            console.error(`DIBAO_SENTRY_CONFIG_JSON is missing required key(s): ${missing.join(", ")}`);
+            process.exit(1);
+          }
+          console.log("Sentry config check:", {
+            hasDsn: Boolean(config.dsn),
+            hasOrg: Boolean(config.org),
+            hasProject: Boolean(config.project)
+          });
+          NODE
+
+          echo "DIBAO_SENTRY_CONFIG_FILE=$sentry_config" >> "$GITHUB_ENV"
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -71,19 +103,6 @@ jobs:
             org.opencontainers.image.title=Dibao
             org.opencontainers.image.description=Self-hosted single-user personalized RSS reader
 
-      - name: Prepare private Sentry build config
-        shell: bash
-        env:
-          DIBAO_SENTRY_CONFIG_JSON: ${{ secrets.DIBAO_SENTRY_CONFIG_JSON }}
-        run: |
-          sentry_config_path="${RUNNER_TEMP}/dibao-sentry.json"
-          if [ -n "${DIBAO_SENTRY_CONFIG_JSON}" ]; then
-            printf '%s' "${DIBAO_SENTRY_CONFIG_JSON}" > "${sentry_config_path}"
-          else
-            printf '{}\n' > "${sentry_config_path}"
-          fi
-          echo "DIBAO_SENTRY_CONFIG_PATH=${sentry_config_path}" >> "${GITHUB_ENV}"
-
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -94,6 +113,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           secret-files: |
-            dibao_sentry_config=${{ env.DIBAO_SENTRY_CONFIG_PATH }}
+            dibao_sentry_config=${{ env.DIBAO_SENTRY_CONFIG_FILE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

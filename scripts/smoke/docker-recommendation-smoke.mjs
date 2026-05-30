@@ -45,8 +45,6 @@ writeFileSync(
   overridePath,
   `services:
   dibao:
-    ports:
-      - "${hostPort}:8080"
     environment:
       DIBAO_BACKGROUND_JOBS: "true"
       DIBAO_JOB_RUNNER_INTERVAL_MS: "500"
@@ -129,6 +127,10 @@ try {
 function run(command, args) {
   execFileSync(command, args, {
     cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DIBAO_HOST_PORT: hostPort
+    },
     stdio: "inherit"
   });
 }

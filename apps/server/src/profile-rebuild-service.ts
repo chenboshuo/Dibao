@@ -1,5 +1,10 @@
+import { setImmediate as delayImmediate } from "node:timers/promises";
 import type { DibaoDatabase } from "@dibao/db";
-import type { InterestClusterLabelService } from "./interest-cluster-label-service.js";
+import type {
+  ClusterLabelRebuildProgress,
+  InterestClusterLabelService
+} from "./interest-cluster-label-service.js";
+import type { InterestClusterCalibrationService } from "./interest-cluster-calibration-service.js";
 import type { InterestFamilyService } from "./interest-family-service.js";
 import type { ProfileService } from "./profile-service.js";
 import type { RecommendationRankingService } from "./ranking-service.js";
@@ -9,6 +14,21 @@ export type ProfileRebuildInput = {
   rebuildLabels?: boolean;
   rebuildFamilies?: boolean;
   recalculateRanking?: boolean;
+};
+
+export type ProfileRebuildStep = "reset" | "replay" | "labels" | "families" | "ranking";
+
+export type ProfileRebuildProgress = {
+  step: ProfileRebuildStep;
+  articleCount: number;
+  articleIdsProcessed: number;
+  chunksProcessed: number;
+  workUnitCount?: number;
+  workUnitsProcessed?: number;
+};
+
+export type AsyncProfileRebuildInput = ProfileRebuildInput & {
+  onProgress?: (progress: ProfileRebuildProgress) => void;
 };
 
 export type ProfileRebuildResult = {
@@ -43,8 +63,11 @@ export type ProfileRebuildResult = {
 
 export type ProfileRebuildServiceOptions = {
   db: DibaoDatabase;
-  profile: Pick<ProfileService, "processArticleEvents">;
-  clusterLabels?: Pick<InterestClusterLabelService, "rebuildIndexLabels">;
+  profile: Pick<ProfileService, "processArticleEvents"> &
+    Partial<Pick<ProfileService, "beginDeferredClusterTrim" | "finalizeClusterMaintenance">>;
+  clusterLabels?: Pick<InterestClusterLabelService, "rebuildIndexLabels"> &
+    Partial<Pick<InterestClusterLabelService, "rebuildIndexLabelsAsync">>;
+  calibration?: Pick<InterestClusterCalibrationService, "getOrCreateCalibration" | "refreshCalibration">;
   interestFamilies?: Pick<InterestFamilyService, "rebuildFamiliesForIndex">;
   ranking?: Pick<RecommendationRankingService, "recalculateAll">;
 };
@@ -67,6 +90,7 @@ export class ProfileRebuildService {
       return emptyRebuildResult();
     }
 
+    this.options.calibration?.refreshCalibration(embeddingIndexId);
     const reset = this.resetActiveIndexProfile(embeddingIndexId);
     const articleIds = this.listReplayArticleIds(embeddingIndexId);
     const chunkSize = clampChunkSize(input.chunkSize);
@@ -74,13 +98,19 @@ export class ProfileRebuildService {
     let chunksProcessed = 0;
     let profileChanged = false;
 
-    for (let offset = 0; offset < articleIds.length; offset += chunkSize) {
-      const chunk = articleIds.slice(offset, offset + chunkSize);
-      const result = this.options.profile.processArticleEvents(chunk);
-      articleIdsProcessed += result.articleIds.length;
-      chunksProcessed += 1;
-      profileChanged = result.profileChanged || profileChanged;
+    const endDeferredTrim = this.options.profile.beginDeferredClusterTrim?.();
+    try {
+      for (let offset = 0; offset < articleIds.length; offset += chunkSize) {
+        const chunk = articleIds.slice(offset, offset + chunkSize);
+        const result = this.options.profile.processArticleEvents(chunk);
+        articleIdsProcessed += result.articleIds.length;
+        chunksProcessed += 1;
+        profileChanged = result.profileChanged || profileChanged;
+      }
+    } finally {
+      endDeferredTrim?.();
     }
+    this.options.profile.finalizeClusterMaintenance?.(embeddingIndexId);
 
     const labels =
       input.rebuildLabels === false
@@ -90,6 +120,120 @@ export class ProfileRebuildService {
       input.rebuildFamilies === false
         ? null
         : this.options.interestFamilies?.rebuildFamiliesForIndex(embeddingIndexId) ?? null;
+    const rankingRows =
+      input.recalculateRanking === false
+        ? null
+        : this.options.ranking?.recalculateAll() ?? null;
+
+    return {
+      embeddingIndexId,
+      reset,
+      replay: {
+        articleCount: articleIds.length,
+        articleIdsProcessed,
+        chunksProcessed,
+        profileChanged
+      },
+      rebuilt: {
+        labels,
+        families: familyResult?.familyCount ?? null,
+        familyMembers: familyResult?.memberCount ?? null,
+        rankingRows
+      },
+      after: {
+        clusters: this.countActiveIndexRows("interest_clusters", embeddingIndexId),
+        evidence: this.countActiveIndexEvidence(embeddingIndexId)
+      }
+    };
+  }
+
+  async rebuildActiveIndexProfileAsync(
+    input: AsyncProfileRebuildInput = {}
+  ): Promise<ProfileRebuildResult> {
+    const embeddingIndexId = this.activeEmbeddingIndexId();
+    if (!embeddingIndexId) {
+      return emptyRebuildResult();
+    }
+
+    input.onProgress?.({
+      step: "reset",
+      articleCount: 0,
+      articleIdsProcessed: 0,
+      chunksProcessed: 0
+    });
+    await delayImmediate();
+    this.options.calibration?.refreshCalibration(embeddingIndexId);
+    const reset = this.resetActiveIndexProfile(embeddingIndexId);
+    const articleIds = this.listReplayArticleIds(embeddingIndexId);
+    const chunkSize = clampChunkSize(input.chunkSize);
+    let articleIdsProcessed = 0;
+    let chunksProcessed = 0;
+    let profileChanged = false;
+
+    input.onProgress?.({
+      step: "replay",
+      articleCount: articleIds.length,
+      articleIdsProcessed,
+      chunksProcessed
+    });
+    const endDeferredTrim = this.options.profile.beginDeferredClusterTrim?.();
+    try {
+      for (let offset = 0; offset < articleIds.length; offset += chunkSize) {
+        const chunk = articleIds.slice(offset, offset + chunkSize);
+        const result = this.options.profile.processArticleEvents(chunk);
+        articleIdsProcessed += result.articleIds.length;
+        chunksProcessed += 1;
+        profileChanged = result.profileChanged || profileChanged;
+        input.onProgress?.({
+          step: "replay",
+          articleCount: articleIds.length,
+          articleIdsProcessed,
+          chunksProcessed
+        });
+        await delayImmediate();
+      }
+    } finally {
+      endDeferredTrim?.();
+    }
+    this.options.profile.finalizeClusterMaintenance?.(embeddingIndexId);
+
+    input.onProgress?.({
+      step: "labels",
+      articleCount: articleIds.length,
+      articleIdsProcessed,
+      chunksProcessed
+    });
+    await delayImmediate();
+    const labels =
+      input.rebuildLabels === false
+        ? null
+        : await this.rebuildLabelsAsync(embeddingIndexId, {
+            chunkSize,
+            articleCount: articleIds.length,
+            articleIdsProcessed,
+            chunksProcessed,
+            onProgress: input.onProgress
+          });
+
+    input.onProgress?.({
+      step: "families",
+      articleCount: articleIds.length,
+      articleIdsProcessed,
+      chunksProcessed
+    });
+    await delayImmediate();
+    const familyResult =
+      input.rebuildFamilies === false
+        ? null
+        : this.options.interestFamilies?.rebuildFamiliesForIndex(embeddingIndexId) ?? null;
+
+    input.onProgress?.({
+      step: "ranking",
+      articleCount: articleIds.length,
+      articleIdsProcessed,
+      chunksProcessed
+    });
+    await delayImmediate();
     const rankingRows =
       input.recalculateRanking === false
         ? null
@@ -178,6 +322,39 @@ export class ProfileRebuildService {
     });
 
     return reset();
+  }
+
+  private async rebuildLabelsAsync(
+    embeddingIndexId: string,
+    input: {
+      chunkSize: number;
+      articleCount: number;
+      articleIdsProcessed: number;
+      chunksProcessed: number;
+      onProgress?: (progress: ProfileRebuildProgress) => void;
+    }
+  ): Promise<number | null> {
+    const clusterLabels = this.options.clusterLabels;
+    if (!clusterLabels) {
+      return null;
+    }
+    if (typeof clusterLabels.rebuildIndexLabelsAsync === "function") {
+      return clusterLabels.rebuildIndexLabelsAsync(embeddingIndexId, {
+        chunkSize: Math.max(1, Math.floor(input.chunkSize / 4)),
+        onProgress: (progress: ClusterLabelRebuildProgress) => {
+          input.onProgress?.({
+            step: "labels",
+            articleCount: input.articleCount,
+            articleIdsProcessed: input.articleIdsProcessed,
+            chunksProcessed: input.chunksProcessed + progress.chunksProcessed,
+            workUnitCount: progress.clusterCount,
+            workUnitsProcessed: progress.clustersProcessed
+          });
+        }
+      });
+    }
+
+    return clusterLabels.rebuildIndexLabels(embeddingIndexId);
   }
 
   private removeActiveIndexSnapshots(embeddingIndexId: string): {

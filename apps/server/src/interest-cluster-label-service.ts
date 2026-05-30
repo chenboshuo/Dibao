@@ -1,3 +1,4 @@
+import { setImmediate as delayImmediate } from "node:timers/promises";
 import {
   fromVectorBlob,
   type AppSettingsRepository,
@@ -182,6 +183,17 @@ export type GeneratedClusterLabel = {
   generatedAt: number;
 };
 
+export type ClusterLabelRebuildProgress = {
+  clusterCount: number;
+  clustersProcessed: number;
+  chunksProcessed: number;
+};
+
+export type ClusterLabelRebuildInput = {
+  chunkSize?: number;
+  onProgress?: (progress: ClusterLabelRebuildProgress) => void;
+};
+
 export class InterestClusterLabelServiceError extends Error {
   constructor(
     public readonly statusCode: number,
@@ -201,6 +213,9 @@ export type InterestClusterLabelServiceOptions = {
 };
 
 const rawDefaultLexicon = defaultLabelLexicon as RawDefaultLexicon;
+const MAX_LABEL_DEDUPE_SCAN_CANDIDATES = 240;
+const MAX_LABEL_TERMS_FOR_DISAMBIGUATION = 8;
+const MAX_REPRESENTATIVE_DEDUPE_SCAN_CANDIDATES = 120;
 
 export class InterestClusterLabelService {
   private readonly now: () => number;
@@ -233,6 +248,36 @@ export class InterestClusterLabelService {
         this.upsertAutoLabel(cluster, label);
       }
     })();
+    return clusters.length;
+  }
+
+  async rebuildIndexLabelsAsync(
+    embeddingIndexId: string,
+    input: ClusterLabelRebuildInput = {}
+  ): Promise<number> {
+    const clusters = this.listClusters({ embeddingIndexId });
+    const generated = await this.generateIndexLabelsAsync(clusters, input);
+    const chunkSize = clampLabelChunkSize(input.chunkSize);
+    let chunksProcessed = Math.ceil(Math.max(clusters.length, 1) / chunkSize) * 2;
+    let labelsWritten = 0;
+
+    for (let offset = 0; offset < generated.length; offset += chunkSize) {
+      const chunk = generated.slice(offset, offset + chunkSize);
+      this.options.db.transaction(() => {
+        for (const { cluster, label } of chunk) {
+          this.upsertAutoLabel(cluster, label);
+        }
+      })();
+      labelsWritten += chunk.length;
+      chunksProcessed += 1;
+      input.onProgress?.({
+        clusterCount: clusters.length * 3,
+        clustersProcessed: clusters.length * 2 + labelsWritten,
+        chunksProcessed
+      });
+      await delayImmediate();
+    }
+
     return clusters.length;
   }
 
@@ -482,6 +527,66 @@ export class InterestClusterLabelService {
     return generated;
   }
 
+  private async generateIndexLabelsAsync(
+    clusters: ClusterDbRow[],
+    input: ClusterLabelRebuildInput
+  ): Promise<Array<{ cluster: ClusterDbRow; label: GeneratedClusterLabel }>> {
+    const lexicon = this.effectiveLexicon();
+    const chunkSize = clampLabelChunkSize(input.chunkSize);
+    const drafts: ClusterLabelDraft[] = [];
+    const termClusterCounts = new Map<string, number>();
+    let chunksProcessed = 0;
+
+    for (let offset = 0; offset < clusters.length; offset += chunkSize) {
+      const chunk = clusters.slice(offset, offset + chunkSize);
+      for (const cluster of chunk) {
+        const draft = this.buildLabelDraft(cluster, drafts.length + 1, lexicon);
+        drafts.push(draft);
+        for (const key of draft.candidates.keys()) {
+          termClusterCounts.set(key, (termClusterCounts.get(key) ?? 0) + 1);
+        }
+      }
+      chunksProcessed += 1;
+      input.onProgress?.({
+        clusterCount: clusters.length * 3,
+        clustersProcessed: drafts.length,
+        chunksProcessed
+      });
+      await delayImmediate();
+    }
+
+    const generated: Array<{ cluster: ClusterDbRow; label: GeneratedClusterLabel }> = [];
+    for (let offset = 0; offset < drafts.length; offset += chunkSize) {
+      const chunk = drafts.slice(offset, offset + chunkSize);
+      for (const draft of chunk) {
+        generated.push({
+          cluster: draft.cluster,
+          label: this.finalizeLabelDraft(draft, {
+            lexicon,
+            totalClusters: Math.max(drafts.length, 1),
+            termClusterCounts
+          })
+        });
+      }
+      chunksProcessed += 1;
+      input.onProgress?.({
+        clusterCount: clusters.length * 3,
+        clustersProcessed: clusters.length + generated.length,
+        chunksProcessed
+      });
+      await delayImmediate();
+    }
+
+    disambiguateLabelCollisions(generated, lexicon);
+    input.onProgress?.({
+      clusterCount: clusters.length * 3,
+      clustersProcessed: clusters.length * 2,
+      chunksProcessed
+    });
+    await delayImmediate();
+    return generated;
+  }
+
   private generateSingleClusterLabel(
     cluster: ClusterDbRow,
     displayIndex: number
@@ -608,20 +713,22 @@ export class InterestClusterLabelService {
     const hasAlternatives = candidateRows.some(
       (candidate) => candidate.clusterRatio <= settings.commonTermClusterRatioDrop || candidate.protectedTerm
     );
+    const rankedLabelCandidates = candidateRows
+      .filter((candidate) => {
+        if (
+          !candidate.protectedTerm &&
+          hasAlternatives &&
+          candidate.clusterRatio > settings.commonTermClusterRatioDrop
+        ) {
+          return false;
+        }
+        return candidate.weight >= 0.35;
+      })
+      .sort((left, right) => right.weight - left.weight || left.term.localeCompare(right.term));
     const labelTerms = dedupeSubsumedTerms(
-      candidateRows
-        .filter((candidate) => {
-          if (
-            !candidate.protectedTerm &&
-            hasAlternatives &&
-            candidate.clusterRatio > settings.commonTermClusterRatioDrop
-          ) {
-            return false;
-          }
-          return candidate.weight >= 0.35;
-        })
-        .sort((left, right) => right.weight - left.weight || left.term.localeCompare(right.term)),
-      input.lexicon
+      rankedLabelCandidates.slice(0, MAX_LABEL_DEDUPE_SCAN_CANDIDATES),
+      input.lexicon,
+      Math.max(settings.maxTerms, MAX_LABEL_TERMS_FOR_DISAMBIGUATION)
     )
       .slice(0, settings.maxTerms)
       .map((candidate) => ({
@@ -1165,8 +1272,11 @@ function labelFromRepresentativeTitles(
     addTextCandidates(titleTerms, article.title, 1, "title", lexicon);
   }
   const terms = dedupeSubsumedTerms(
-    Array.from(titleTerms.values()).sort((left, right) => right.weight - left.weight),
-    lexicon
+    Array.from(titleTerms.values())
+      .sort((left, right) => right.weight - left.weight)
+      .slice(0, MAX_REPRESENTATIVE_DEDUPE_SCAN_CANDIDATES),
+    lexicon,
+    6
   )
     .slice(0, 3)
     .map((candidate) => candidate.term);
@@ -1175,10 +1285,14 @@ function labelFromRepresentativeTitles(
 
 function dedupeSubsumedTerms<T extends { term: string; weight: number }>(
   candidates: T[],
-  lexicon: EffectiveLabelLexicon
+  lexicon: EffectiveLabelLexicon,
+  limit = Number.POSITIVE_INFINITY
 ): T[] {
   const result: T[] = [];
   for (const candidate of candidates) {
+    if (result.length >= limit) {
+      break;
+    }
     const term = candidate.term;
     const key = normalizeTermKey(term);
     if (!key) {
@@ -1337,8 +1451,11 @@ function representativeSpecificTerm(
   }
   return (
     dedupeSubsumedTerms(
-      Array.from(candidates.values()).sort((left, right) => right.weight - left.weight),
-      lexicon
+      Array.from(candidates.values())
+        .sort((left, right) => right.weight - left.weight)
+        .slice(0, MAX_REPRESENTATIVE_DEDUPE_SCAN_CANDIDATES),
+      lexicon,
+      6
     ).find((candidate) => !existingTerms.has(candidate.key))?.term ?? null
   );
 }
@@ -1682,4 +1799,11 @@ function rejectUnknownKeys(input: Record<string, unknown>, allowed: string[]): v
       );
     }
   }
+}
+
+function clampLabelChunkSize(value: number | undefined): number {
+  if (!Number.isFinite(value) || !value) {
+    return 12;
+  }
+  return Math.min(50, Math.max(1, Math.floor(value)));
 }

@@ -306,6 +306,36 @@ export type SetupStatus = {
   hasFeeds: boolean;
   hasEmbeddingProvider: boolean;
   firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+  derivedDataUpgrade?: DerivedDataUpgradeStatus;
+};
+
+export type DerivedDataUpgradeStatus = {
+  id: string;
+  targetVersion: string;
+  state: "not_required" | "pending" | "running" | "completed" | "failed";
+  blocking: boolean;
+  step:
+    | "detecting"
+    | "reset"
+    | "replay"
+    | "labels"
+    | "families"
+    | "ranking"
+    | "completed"
+    | "failed"
+    | "skipped";
+  activeIndexId: string | null;
+  reason: string | null;
+  progress: {
+    current: number;
+    total: number;
+    chunksProcessed: number;
+    percent: number;
+  };
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+  result: unknown | null;
 };
 
 export type SettingsLocale = "zh-CN" | "en-US" | "ja-JP";
@@ -344,6 +374,8 @@ export type AppSettings = {
     cocoonLevel: number;
     maxPositiveInterestClusters: number;
     maxNegativeInterestClusters: number;
+    maxPositiveInterestFamilies: number;
+    maxNegativeInterestFamilies: number;
     localLearningEnabled: boolean;
     localLearningShadowMode: boolean;
     explorationEnabled: boolean;
@@ -404,6 +436,8 @@ export type UpdateSettingsInput = {
     cocoonLevel?: number;
     maxPositiveInterestClusters?: number;
     maxNegativeInterestClusters?: number;
+    maxPositiveInterestFamilies?: number;
+    maxNegativeInterestFamilies?: number;
     localLearningEnabled?: boolean;
     localLearningShadowMode?: boolean;
     explorationEnabled?: boolean;
@@ -911,8 +945,10 @@ export const defaultAppSettings: AppSettings = {
     preferSource: 0.5,
     preferDiversity: 0.5,
     cocoonLevel: 5,
-    maxPositiveInterestClusters: 24,
-    maxNegativeInterestClusters: 16,
+    maxPositiveInterestClusters: 48,
+    maxNegativeInterestClusters: 32,
+    maxPositiveInterestFamilies: 16,
+    maxNegativeInterestFamilies: 12,
     localLearningEnabled: true,
     localLearningShadowMode: false,
     explorationEnabled: true,
@@ -1081,6 +1117,18 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getSetupStatus(): Promise<SetupStatus> {
       return (await request<SetupStatus>("/api/setup/status")).data;
+    },
+
+    async getDerivedDataUpgradeStatus(): Promise<DerivedDataUpgradeStatus> {
+      return (await request<DerivedDataUpgradeStatus>("/api/system/upgrade/status")).data;
+    },
+
+    async retryDerivedDataUpgrade(): Promise<DerivedDataUpgradeStatus> {
+      return (
+        await request<DerivedDataUpgradeStatus>("/api/system/upgrade/retry", {
+          method: "POST"
+        })
+      ).data;
     },
 
     async getSettings(): Promise<AppSettings> {

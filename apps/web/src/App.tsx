@@ -16,6 +16,7 @@ import {
   type AppSettings,
   type AuthSession,
   type CreateEmbeddingProviderInput,
+  type DerivedDataUpgradeStatus,
   type EmbeddingIndex,
   type EmbeddingProvider,
   type EmbeddingProviderType,
@@ -164,6 +165,7 @@ export type AppStage =
   | { type: "setup-password" }
   | { type: "login" }
   | { type: "setup-status-loading" }
+  | { type: "derived-data-upgrade" }
   | { type: "setup-sources" }
   | { type: "setup-provider" }
   | { type: "reader" };
@@ -202,6 +204,10 @@ export function stageForAuthSession(session: AuthSession): AppStage {
 export function stageForSetupStatus(status: SetupStatus): AppStage {
   if (!status.setupCompleted) {
     return { type: "welcome" };
+  }
+
+  if (status.derivedDataUpgrade?.blocking) {
+    return { type: "derived-data-upgrade" };
   }
 
   return { type: status.hasFeeds ? "reader" : "setup-sources" };
@@ -260,6 +266,10 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [setupSourceError, setSetupSourceError] = useState<string | null>(null);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [derivedDataUpgrade, setDerivedDataUpgrade] =
+    useState<DerivedDataUpgradeStatus | null>(null);
+  const [derivedDataUpgradeError, setDerivedDataUpgradeError] = useState<string | null>(null);
+  const [isRetryingDerivedDataUpgrade, setIsRetryingDerivedDataUpgrade] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [telemetryEnabled, setTelemetryEnabled] = useState(() =>
     readStoredTelemetryPreference()
@@ -708,6 +718,7 @@ export function App() {
       try {
         const status = await dibaoApi.getSetupStatus();
         if (!cancelled) {
+          setDerivedDataUpgrade(status.derivedDataUpgrade ?? null);
           const nextStage = stageForSetupStatus(status);
           if (nextStage.type === "welcome") {
             resetReaderState();
@@ -729,6 +740,47 @@ export function App() {
       cancelled = true;
     };
   }, [appStage.type, resetReaderState, t.errors.api]);
+
+  useEffect(() => {
+    if (appStage.type !== "derived-data-upgrade") {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    async function pollUpgradeStatus() {
+      try {
+        const status = await dibaoApi.getDerivedDataUpgradeStatus();
+        if (cancelled) {
+          return;
+        }
+        setDerivedDataUpgrade(status);
+        setDerivedDataUpgradeError(null);
+        if (!status.blocking) {
+          setAppStage({ type: "setup-status-loading" });
+          return;
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDerivedDataUpgradeError(userMessageForError(error, t.errors.api));
+        }
+      }
+
+      if (!cancelled) {
+        timer = window.setTimeout(pollUpgradeStatus, 1500);
+      }
+    }
+
+    void pollUpgradeStatus();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [appStage.type, t.errors.api]);
 
   const applySettings = useCallback(
     (settings: AppSettings) => {
@@ -1345,6 +1397,19 @@ export function App() {
       resetReaderState();
     } catch (error) {
       setLogoutError(userMessageForError(error, t.errors.api) || t.auth.errors.logout);
+    }
+  }
+
+  async function handleRetryDerivedDataUpgrade() {
+    setIsRetryingDerivedDataUpgrade(true);
+    setDerivedDataUpgradeError(null);
+
+    try {
+      setDerivedDataUpgrade(await dibaoApi.retryDerivedDataUpgrade());
+    } catch (error) {
+      setDerivedDataUpgradeError(userMessageForError(error, t.errors.api));
+    } finally {
+      setIsRetryingDerivedDataUpgrade(false);
     }
   }
 
@@ -2377,6 +2442,20 @@ export function App() {
     );
   }
 
+  if (appStage.type === "derived-data-upgrade") {
+    return (
+      <main className={styles.authShell}>
+        {pwaStatusBanner}
+        <DerivedDataUpgradePanel
+          error={derivedDataUpgradeError}
+          isRetrying={isRetryingDerivedDataUpgrade}
+          onRetry={handleRetryDerivedDataUpgrade}
+          status={derivedDataUpgrade}
+        />
+      </main>
+    );
+  }
+
   if (appStage.type === "setup-sources") {
     return (
       <main className={styles.authShell}>
@@ -2979,6 +3058,61 @@ export function AuthGatePanel(props: {
       </form>
 
       {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+    </section>
+  );
+}
+
+function DerivedDataUpgradePanel(props: {
+  error: string | null;
+  isRetrying: boolean;
+  onRetry: () => void;
+  status: DerivedDataUpgradeStatus | null;
+}) {
+  const { t } = useI18n();
+  const progress = props.status?.progress;
+  const percent = progress ? Math.max(0, Math.min(100, Math.round(progress.percent * 100))) : 0;
+  const step = props.status?.step ?? "detecting";
+  const isFailed = props.status?.state === "failed";
+  const articleTotal = progress?.total ?? 0;
+  const articleCurrent = progress?.current ?? 0;
+
+  return (
+    <section className={styles.authPanel} aria-labelledby="derived-data-upgrade-title">
+      <div className={styles.brand}>
+        <img alt="" className={styles.brandMark} src="/logo-64.png" />
+        <span>
+          <strong>{t.common.brandName}</strong>
+          <small>{t.common.brandSubtitle}</small>
+        </span>
+      </div>
+      <div>
+        <p className={styles.kicker}>{t.upgrade.kicker}</p>
+        <h1 id="derived-data-upgrade-title">{t.upgrade.title}</h1>
+        <p>{isFailed ? t.upgrade.failedBody : t.upgrade.body}</p>
+      </div>
+      <div className={styles.setupStatusBox} aria-live="polite">
+        <strong>{t.upgrade.steps[step]}</strong>
+        <p>{t.upgrade.progress(articleCurrent, articleTotal, percent)}</p>
+        <p>{t.upgrade.costNote}</p>
+        <progress
+          aria-label={t.upgrade.progressLabel}
+          className={styles.upgradeProgress}
+          max={100}
+          value={percent}
+        />
+      </div>
+      {props.status?.error ? <p className={styles.errorText}>{props.status.error}</p> : null}
+      {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
+      {isFailed ? (
+        <button
+          className={styles.primaryButton}
+          disabled={props.isRetrying}
+          onClick={props.onRetry}
+          type="button"
+        >
+          {props.isRetrying ? t.upgrade.retrying : t.upgrade.retry}
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -3739,12 +3873,29 @@ type SettingsDraft = {
   cocoonLevel: string;
   maxPositiveInterestClusters: string;
   maxNegativeInterestClusters: string;
+  maxPositiveInterestFamilies: string;
+  maxNegativeInterestFamilies: string;
 };
 
 const interestClusterLimitPresets = [
-  { maxPositiveInterestClusters: 24, maxNegativeInterestClusters: 16 },
-  { maxPositiveInterestClusters: 48, maxNegativeInterestClusters: 32 },
-  { maxPositiveInterestClusters: 96, maxNegativeInterestClusters: 64 }
+  {
+    maxPositiveInterestClusters: 24,
+    maxNegativeInterestClusters: 16,
+    maxPositiveInterestFamilies: 8,
+    maxNegativeInterestFamilies: 6
+  },
+  {
+    maxPositiveInterestClusters: 48,
+    maxNegativeInterestClusters: 32,
+    maxPositiveInterestFamilies: 16,
+    maxNegativeInterestFamilies: 12
+  },
+  {
+    maxPositiveInterestClusters: 96,
+    maxNegativeInterestClusters: 64,
+    maxPositiveInterestFamilies: 28,
+    maxNegativeInterestFamilies: 20
+  }
 ] as const;
 
 type SupportedEmbeddingProviderType = Extract<
@@ -4240,7 +4391,9 @@ export function SettingsWorkspace(props: {
                     applyDraft({
                       ...draft,
                       maxPositiveInterestClusters: String(preset.maxPositiveInterestClusters),
-                      maxNegativeInterestClusters: String(preset.maxNegativeInterestClusters)
+                      maxNegativeInterestClusters: String(preset.maxNegativeInterestClusters),
+                      maxPositiveInterestFamilies: String(preset.maxPositiveInterestFamilies),
+                      maxNegativeInterestFamilies: String(preset.maxNegativeInterestFamilies)
                     });
                   }}
                   step={1}
@@ -4281,6 +4434,28 @@ export function SettingsWorkspace(props: {
                 }
                 step={1}
                 value={draft.maxNegativeInterestClusters}
+              />
+              <NumberSettingField
+                id="settings-max-positive-interest-families"
+                label={t.settings.sections.behavior.interestClusterLimits.positiveFamilyLabel}
+                max={64}
+                min={2}
+                onChange={(value) =>
+                  applyDraft({ ...draft, maxPositiveInterestFamilies: value })
+                }
+                step={1}
+                value={draft.maxPositiveInterestFamilies}
+              />
+              <NumberSettingField
+                id="settings-max-negative-interest-families"
+                label={t.settings.sections.behavior.interestClusterLimits.negativeFamilyLabel}
+                max={48}
+                min={1}
+                onChange={(value) =>
+                  applyDraft({ ...draft, maxNegativeInterestFamilies: value })
+                }
+                step={1}
+                value={draft.maxNegativeInterestFamilies}
               />
             </div>
             <p className={styles.managementHint}>
@@ -7899,20 +8074,27 @@ function draftForSettings(settings: AppSettings): SettingsDraft {
     keepReadLater: settings.retention.keepReadLater,
     cocoonLevel: String(settings.ranking.cocoonLevel),
     maxPositiveInterestClusters: String(settings.ranking.maxPositiveInterestClusters),
-    maxNegativeInterestClusters: String(settings.ranking.maxNegativeInterestClusters)
+    maxNegativeInterestClusters: String(settings.ranking.maxNegativeInterestClusters),
+    maxPositiveInterestFamilies: String(settings.ranking.maxPositiveInterestFamilies),
+    maxNegativeInterestFamilies: String(settings.ranking.maxNegativeInterestFamilies)
   };
 }
 
 function presetIndexForInterestClusterLimits(
   ranking: Pick<
     AppSettings["ranking"],
-    "maxPositiveInterestClusters" | "maxNegativeInterestClusters"
+    | "maxPositiveInterestClusters"
+    | "maxNegativeInterestClusters"
+    | "maxPositiveInterestFamilies"
+    | "maxNegativeInterestFamilies"
   >
 ): number | null {
   const index = interestClusterLimitPresets.findIndex(
     (preset) =>
       preset.maxPositiveInterestClusters === ranking.maxPositiveInterestClusters &&
-      preset.maxNegativeInterestClusters === ranking.maxNegativeInterestClusters
+      preset.maxNegativeInterestClusters === ranking.maxNegativeInterestClusters &&
+      preset.maxPositiveInterestFamilies === ranking.maxPositiveInterestFamilies &&
+      preset.maxNegativeInterestFamilies === ranking.maxNegativeInterestFamilies
   );
   return index >= 0 ? index : null;
 }
@@ -7920,15 +8102,21 @@ function presetIndexForInterestClusterLimits(
 function presetIndexForInterestClusterLimitDraft(draft: SettingsDraft): number | null {
   const maxPositiveInterestClusters = Number(draft.maxPositiveInterestClusters);
   const maxNegativeInterestClusters = Number(draft.maxNegativeInterestClusters);
+  const maxPositiveInterestFamilies = Number(draft.maxPositiveInterestFamilies);
+  const maxNegativeInterestFamilies = Number(draft.maxNegativeInterestFamilies);
   if (
     !Number.isInteger(maxPositiveInterestClusters) ||
-    !Number.isInteger(maxNegativeInterestClusters)
+    !Number.isInteger(maxNegativeInterestClusters) ||
+    !Number.isInteger(maxPositiveInterestFamilies) ||
+    !Number.isInteger(maxNegativeInterestFamilies)
   ) {
     return null;
   }
   return presetIndexForInterestClusterLimits({
     maxPositiveInterestClusters,
-    maxNegativeInterestClusters
+    maxNegativeInterestClusters,
+    maxPositiveInterestFamilies,
+    maxNegativeInterestFamilies
   });
 }
 
@@ -7945,7 +8133,10 @@ function interestClusterPresetIndexFromSliderValue(value: string): 0 | 1 | 2 {
 function closestInterestClusterPresetIndex(
   ranking: Pick<
     AppSettings["ranking"],
-    "maxPositiveInterestClusters" | "maxNegativeInterestClusters"
+    | "maxPositiveInterestClusters"
+    | "maxNegativeInterestClusters"
+    | "maxPositiveInterestFamilies"
+    | "maxNegativeInterestFamilies"
   >
 ): number {
   let closestIndex = 0;
@@ -7953,7 +8144,9 @@ function closestInterestClusterPresetIndex(
   interestClusterLimitPresets.forEach((preset, index) => {
     const distance =
       Math.abs(preset.maxPositiveInterestClusters - ranking.maxPositiveInterestClusters) +
-      Math.abs(preset.maxNegativeInterestClusters - ranking.maxNegativeInterestClusters);
+      Math.abs(preset.maxNegativeInterestClusters - ranking.maxNegativeInterestClusters) +
+      Math.abs(preset.maxPositiveInterestFamilies - ranking.maxPositiveInterestFamilies) +
+      Math.abs(preset.maxNegativeInterestFamilies - ranking.maxNegativeInterestFamilies);
     if (distance < closestDistance) {
       closestIndex = index;
       closestDistance = distance;
@@ -8151,6 +8344,24 @@ function parseSettingsDraft(
   if (maxNegativeInterestClusters === null) {
     return { ok: false, error: t.settings.errors.maxNegativeInterestClusters };
   }
+  const maxPositiveInterestFamilies = parseNumberDraft(
+    draft.maxPositiveInterestFamilies,
+    2,
+    64,
+    true
+  );
+  if (maxPositiveInterestFamilies === null) {
+    return { ok: false, error: t.settings.errors.maxPositiveInterestFamilies };
+  }
+  const maxNegativeInterestFamilies = parseNumberDraft(
+    draft.maxNegativeInterestFamilies,
+    1,
+    48,
+    true
+  );
+  if (maxNegativeInterestFamilies === null) {
+    return { ok: false, error: t.settings.errors.maxNegativeInterestFamilies };
+  }
 
   const settings: AppSettings = {
     ...current,
@@ -8184,7 +8395,9 @@ function parseSettingsDraft(
       ...current.ranking,
       cocoonLevel,
       maxPositiveInterestClusters,
-      maxNegativeInterestClusters
+      maxNegativeInterestClusters,
+      maxPositiveInterestFamilies,
+      maxNegativeInterestFamilies
     }
   };
 
@@ -8217,7 +8430,9 @@ function parseSettingsDraft(
       ranking: {
         cocoonLevel,
         maxPositiveInterestClusters,
-        maxNegativeInterestClusters
+        maxNegativeInterestClusters,
+        maxPositiveInterestFamilies,
+        maxNegativeInterestFamilies
       }
     }
   };
