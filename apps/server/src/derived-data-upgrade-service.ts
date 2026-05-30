@@ -191,8 +191,11 @@ export class DerivedDataUpgradeService {
   }
 
   private recordProgress(progress: ProfileRebuildProgress, startedAt: number): void {
-    const total = Math.max(0, progress.articleCount);
-    const current = Math.min(total, Math.max(0, progress.articleIdsProcessed));
+    const total = Math.max(0, progress.workUnitCount ?? progress.articleCount);
+    const current = Math.min(
+      total,
+      Math.max(0, progress.workUnitsProcessed ?? progress.articleIdsProcessed)
+    );
     this.writeStatus({
       ...this.getStatus(),
       state: "running",
