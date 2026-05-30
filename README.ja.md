@@ -83,7 +83,7 @@ name: dibao
 
 services:
   dibao:
-    image: ghcr.io/pls-1q43/dibao:v0.1.1
+    image: ghcr.io/pls-1q43/dibao:latest
     restart: unless-stopped
     ports:
       - "8080:8080"
