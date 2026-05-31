@@ -1,3 +1,6 @@
+create index if not exists idx_plugin_kv_plugin_key
+  on plugin_kv(plugin_id, key);
+
 create table if not exists plugin_schedules (
   plugin_id text not null references plugin_installs(id) on delete cascade,
   task_id text not null,
