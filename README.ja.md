@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  プロダクト、デザイン、コーディング、マーケティング：All by Codex。OpenAI に感謝します。
+</p>
+
+<p align="center">
   <a href="./README.md">中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
   <a href="./README.en.md">English</a>
