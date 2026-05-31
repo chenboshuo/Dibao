@@ -368,6 +368,15 @@ export function SettingsWorkspace(props: {
   const exactInterestClusterPresetIndex = presetIndexForInterestClusterLimitDraft(draft);
   const interestClusterPresetIndex =
     exactInterestClusterPresetIndex ?? lastInterestClusterPresetIndex;
+  const labelForSettingsTab = (tabId: SettingsTabId) => {
+    const labels = settingsTabLabels[tabId];
+    return props.settings.ui.locale === "en-US"
+      ? labels.enUS
+      : props.settings.ui.locale === "ja-JP"
+        ? labels.jaJP
+        : labels.zhCN;
+  };
+  const activeTabLabel = labelForSettingsTab(activeTab);
 
   return (
     <form
@@ -375,36 +384,25 @@ export function SettingsWorkspace(props: {
       onSubmit={(event) => void handleSubmit(event)}
       aria-labelledby="settings-title"
     >
+      <div className={styles.managementTabs} aria-label={t.settings.pageTitle} role="tablist">
+        {(["basic", "algorithm", "plugins"] as const).map((tabId) => (
+          <button
+            aria-selected={activeTab === tabId}
+            className={activeTab === tabId ? styles.managementTabActive : styles.managementTab}
+            key={tabId}
+            onClick={() => setActiveTab(tabId)}
+            role="tab"
+            type="button"
+          >
+            {labelForSettingsTab(tabId)}
+          </button>
+        ))}
+      </div>
+
       <div className={classNames(styles.settingsHeader, "settings-content-head")}>
         <div>
           <p className={styles.kicker}>{t.navigation.items.settings}</p>
-          <h2 id="settings-title">{t.settings.pageTitle}</h2>
-          <div className={styles.settingsTabBar} aria-label={t.settings.pageTitle}>
-            {(["basic", "algorithm", "plugins"] as const).map((tabId) => {
-              const labels = settingsTabLabels[tabId];
-              const label =
-                props.settings.ui.locale === "en-US"
-                  ? labels.enUS
-                  : props.settings.ui.locale === "ja-JP"
-                    ? labels.jaJP
-                    : labels.zhCN;
-              return (
-                <button
-                  aria-pressed={activeTab === tabId}
-                  className={
-                    activeTab === tabId
-                      ? styles.feedDiagnosticFilterActive
-                      : styles.feedDiagnosticFilter
-                  }
-                  key={tabId}
-                  onClick={() => setActiveTab(tabId)}
-                  type="button"
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          <h2 id="settings-title">{activeTabLabel}</h2>
         </div>
         <button
           className={styles.primaryButton}

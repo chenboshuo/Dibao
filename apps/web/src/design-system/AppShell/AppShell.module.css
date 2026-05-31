@@ -399,6 +399,40 @@
   background: var(--color-surface);
 }
 
+.managementTabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-bottom: var(--border-default);
+  padding: 0;
+  background: var(--color-paper);
+}
+
+.managementTab,
+.managementTabActive {
+  min-height: 48px;
+  border: 0;
+  border-right: var(--border-default);
+  border-radius: 0;
+  padding-inline: var(--space-4);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.managementTab:first-child,
+.managementTabActive:first-child {
+  border-left: var(--border-default);
+}
+
+.managementTabActive {
+  position: relative;
+  background: var(--color-pine-soft);
+  box-shadow: inset 0 -2px 0 var(--color-pine);
+  color: var(--color-pine);
+}
+
 .managementTopSection {
   grid-column: 1 / -1;
   border-bottom: var(--border-default);
@@ -799,7 +833,7 @@
 .settingsWorkspace {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   background: var(--color-surface);
 }
 
@@ -819,13 +853,6 @@
   line-height: 1.25;
 }
 
-.settingsTabBar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-}
-
 .settingsContent {
   width: min(100%, var(--layout-settings-max));
   min-height: 0;
@@ -843,6 +870,10 @@
   border-radius: var(--radius-lg);
   padding: var(--space-5);
   background: var(--color-surface);
+}
+
+.settingsSection[hidden] {
+  display: none;
 }
 
 .settingsSection h3,
@@ -3370,6 +3401,11 @@
   .managementTopSection .managementHeader,
   .settingsHeader {
     padding: var(--space-3);
+  }
+
+  .managementTabs {
+    padding-inline: 0;
+    overflow-x: auto;
   }
 
   .opmlActions {
