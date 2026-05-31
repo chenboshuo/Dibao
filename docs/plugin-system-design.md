@@ -361,6 +361,16 @@ plugin_update_checks
 
 Secrets should not be stored in `plugin_settings` or manifest. Use a dedicated encrypted/obfuscated local secret store later; until then, only official plugins should request secrets.
 
+Plugin package and data paths:
+
+```text
+/app/plugins/official/<plugin-id>        # official plugins bundled in the Docker image
+/data/plugins/installed/<plugin-id>      # third-party plugin packages installed by the user
+/data/plugins/data/<plugin-id>           # third-party plugin runtime files and large local state
+```
+
+This path split is part of the Docker upgrade contract. Official plugins are image assets; third-party plugins are data-volume assets. A user-installed third-party plugin must never be installed only under `/app`, because that directory is replaced whenever the Docker image changes.
+
 ## API Surface
 
 Plugin management API:
@@ -461,6 +471,32 @@ Uninstall flow:
 - If deleting data, remove `plugin_settings`, `plugin_kv`, grants and plugin schedules.
 - Plugin-created article/feed metadata should use namespaced metadata and survive safely unless user chooses cleanup.
 
+## Docker Upgrade Persistence
+
+Users should not need to reinstall third-party plugins after upgrading Dibao with Docker, as long as the `/data` volume is preserved.
+
+On startup after an official image upgrade:
+
+1. Run core Dibao migrations first.
+2. Scan `/app/plugins/official` for bundled official plugins.
+3. Scan `/data/plugins/installed` for user-installed third-party plugins.
+4. Reconcile each plugin with `plugin_installs` by plugin ID and version.
+5. Validate manifest schema, package integrity, Dibao version range and previously granted capabilities.
+6. Run pending plugin migrations only for compatible plugins.
+7. Reactivate compatible plugins that were enabled before the upgrade.
+8. Mark incompatible or invalid plugins as `incompatible` or `failed`, keep their settings/data, and do not load UI contributions, hooks or task handlers.
+
+Pending jobs for incompatible plugins must be paused rather than failed as `No handler registered`. The job runner should treat missing plugin handlers as a plugin lifecycle state, not as an ordinary permanent task failure. Once the user updates or re-enables the plugin, queued plugin jobs can continue if their task schema is still compatible; otherwise the plugin manager should ask the user to cancel or migrate them.
+
+The plugin manager must surface upgrade state clearly:
+
+- compatible and reactivated;
+- disabled before upgrade and still disabled;
+- incompatible with current Dibao version;
+- manifest or package validation failed;
+- update available;
+- plugin migration failed and rollback/repair is required.
+
 ## Developer Distribution
 
 Development artifacts:
@@ -468,6 +504,7 @@ Development artifacts:
 - `@dibao/plugin-sdk`: TypeScript types, host API, manifest schema and test helpers.
 - `@dibao/plugin-cli`: `create`, `validate`, `build`, `pack`, `sign`, `dev`.
 - plugin template with server entry, web iframe panel, locales and README.
+- standalone plugin development documentation in Simplified Chinese and English only. The plugin docs are part of the broader developer documentation set, but must also exist as independent files so plugin authors can read them without opening the full developer guide.
 
 Distribution options:
 
@@ -515,6 +552,7 @@ Official plugins:
 - can be enabled/disabled;
 - may be enabled by default only for low-risk behavior that does not call paid providers or external APIs;
 - update with Dibao release by default;
+- are reconciled from `/app/plugins/official` on every Docker image startup;
 - still declare capabilities and settings;
 - should use the same public plugin APIs as third-party plugins unless a private API is explicitly documented as internal.
 
@@ -661,6 +699,7 @@ System health may include a summarized plugin status:
 - Add manifest validation, compatibility checks, checksum/signature support.
 - Add update metadata check and staged update flow.
 - Publish `@dibao/plugin-sdk` and `@dibao/plugin-cli` or keep them as workspace packages until API stabilizes.
+- Add the plugin development docs as a child unit of the `0.2.0` developer documentation set, with independent Simplified Chinese and English files.
 
 ### Phase 5: Daily Brief Official Plugin
 
