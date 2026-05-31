@@ -8,13 +8,18 @@ import { NumberSettingField, RangeSettingField } from "../ui/FormFields.js";
 import { ActionIcon } from "../reader/ReaderPanels.js";
 import { classNames, closestInterestClusterPresetIndex, defaultFavoriteArticleSort, defaultReadLaterArticleSort, draftForEmbeddingProvider, draftForSettings, draftWithProviderType, embeddingCoverageText, interestClusterLimitPresets, interestClusterPresetIndexFromSliderValue, newEmbeddingProviderId, parseEmbeddingProviderDraft, parseSettingsDraft, presetIndexForInterestClusterLimitDraft, presetIndexForInterestClusterLimits, retentionSettingsRequireCleanupConfirmation, shouldLetBrowserHandleLinkClick, urlForAppPage, type EmbeddingProviderDraft, type SettingsDraft } from "../app/shared.js";
 
-type SettingsTabId = "core" | "provider" | "plugins" | "about";
+type SettingsTabId = "basic" | "algorithm" | "plugins";
 
 const settingsTabLabels: Record<SettingsTabId, { zhCN: string; enUS: string; jaJP: string }> = {
-  core: { zhCN: "基础", enUS: "Core", jaJP: "基本" },
-  provider: { zhCN: "智能能力", enUS: "Intelligence", jaJP: "知能" },
-  plugins: { zhCN: "插件", enUS: "Plugins", jaJP: "プラグイン" },
-  about: { zhCN: "关于", enUS: "About", jaJP: "情報" }
+  basic: { zhCN: "基础设置", enUS: "Basics", jaJP: "基本設定" },
+  algorithm: { zhCN: "算法", enUS: "Algorithm", jaJP: "アルゴリズム" },
+  plugins: { zhCN: "插件", enUS: "Plugins", jaJP: "プラグイン" }
+};
+
+const pluginInstallDocsUrl: Record<AppSettings["ui"]["locale"], string> = {
+  "zh-CN": "https://github.com/Pls-1q43/Dibao/blob/0.2/docs/plugin-installation.zh-CN.md",
+  "en-US": "https://github.com/Pls-1q43/Dibao/blob/0.2/docs/plugin-installation.en-US.md",
+  "ja-JP": "https://github.com/Pls-1q43/Dibao/blob/0.2/docs/plugin-installation.en-US.md"
 };
 
 const pluginCopy = {
@@ -31,12 +36,8 @@ const pluginCopy = {
     status: "状态",
     lastError: "错误",
     installTitle: "安装第三方插件",
-    installBody: "可以上传 .dibao-plugin 文件，也可以粘贴插件包 JSON 或插件包 URL。",
-    packageLabel: "插件包 JSON",
-    packagePlaceholder: "{\"manifest\":{\"manifestVersion\":1,...},\"files\":{}}",
-    urlLabel: "插件包 URL",
-    urlPlaceholder: "https://example.com/plugin.dibao-plugin",
-    checksumLabel: "SHA-256（可选）",
+    installBody: "上传开发者提供的 .dibao-plugin 文件。URL、JSON 包和校验和等高级安装方式请参考说明。",
+    installDocs: "查看插件安装说明",
     chooseFile: "选择 .dibao-plugin",
     install: "安装",
     installing: "安装中",
@@ -49,7 +50,7 @@ const pluginCopy = {
     taskStarted: (id: string) => `任务已加入队列：${id}`,
     updated: "插件状态已更新。",
     installed: "插件已安装，启用前请确认来源与权限。",
-    installRequired: "请上传文件、填写 URL，或粘贴插件包 JSON。"
+    installRequired: "请先选择 .dibao-plugin 文件。"
   },
   "en-US": {
     title: "Plugins",
@@ -64,12 +65,8 @@ const pluginCopy = {
     status: "Status",
     lastError: "Error",
     installTitle: "Install third-party plugin",
-    installBody: "Upload a .dibao-plugin file, paste package JSON, or install from a package URL.",
-    packageLabel: "Plugin package JSON",
-    packagePlaceholder: "{\"manifest\":{\"manifestVersion\":1,...},\"files\":{}}",
-    urlLabel: "Plugin package URL",
-    urlPlaceholder: "https://example.com/plugin.dibao-plugin",
-    checksumLabel: "SHA-256 (optional)",
+    installBody: "Upload the .dibao-plugin file from the plugin developer. See the guide for URL, JSON package, and checksum flows.",
+    installDocs: "Read plugin installation guide",
     chooseFile: "Choose .dibao-plugin",
     install: "Install",
     installing: "Installing",
@@ -82,7 +79,7 @@ const pluginCopy = {
     taskStarted: (id: string) => `Task queued: ${id}`,
     updated: "Plugin state updated.",
     installed: "Plugin installed. Review source and capabilities before enabling.",
-    installRequired: "Upload a file, enter a URL, or paste plugin package JSON."
+    installRequired: "Choose a .dibao-plugin file first."
   },
   "ja-JP": {
     title: "プラグイン",
@@ -97,12 +94,8 @@ const pluginCopy = {
     status: "状態",
     lastError: "エラー",
     installTitle: "サードパーティプラグインをインストール",
-    installBody: ".dibao-plugin ファイル、パッケージ JSON、または URL からインストールできます。",
-    packageLabel: "プラグインパッケージ JSON",
-    packagePlaceholder: "{\"manifest\":{\"manifestVersion\":1,...},\"files\":{}}",
-    urlLabel: "プラグインパッケージ URL",
-    urlPlaceholder: "https://example.com/plugin.dibao-plugin",
-    checksumLabel: "SHA-256（任意）",
+    installBody: "開発者から提供された .dibao-plugin ファイルをアップロードします。URL、JSON パッケージ、チェックサムの手順はガイドを参照してください。",
+    installDocs: "プラグインのインストール手順を見る",
     chooseFile: ".dibao-plugin を選択",
     install: "インストール",
     installing: "インストール中",
@@ -115,7 +108,7 @@ const pluginCopy = {
     taskStarted: (id: string) => `タスクをキューに追加しました：${id}`,
     updated: "プラグイン状態を更新しました。",
     installed: "プラグインをインストールしました。有効化前に提供元と権限を確認してください。",
-    installRequired: "ファイル、URL、またはプラグインパッケージ JSON を指定してください。"
+    installRequired: ".dibao-plugin ファイルを選択してください。"
   }
 };
 
@@ -161,7 +154,7 @@ export function SettingsWorkspace(props: {
   const [providerDraft, setProviderDraft] = useState<EmbeddingProviderDraft>(() =>
     draftForEmbeddingProvider(initialProvider)
   );
-  const [activeTab, setActiveTab] = useState<SettingsTabId>("core");
+  const [activeTab, setActiveTab] = useState<SettingsTabId>("basic");
   const [pendingProviderSelectionId, setPendingProviderSelectionId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [providerLocalError, setProviderLocalError] = useState<string | null>(null);
@@ -403,7 +396,7 @@ export function SettingsWorkspace(props: {
         {localError ? <p className={styles.errorText}>{localError}</p> : null}
 
         <div className={styles.segmentedControl} aria-label={t.settings.pageTitle}>
-          {(["core", "provider", "plugins", "about"] as const).map((tabId) => {
+          {(["basic", "algorithm", "plugins"] as const).map((tabId) => {
             const labels = settingsTabLabels[tabId];
             const label =
               props.settings.ui.locale === "en-US"
@@ -429,7 +422,7 @@ export function SettingsWorkspace(props: {
           })}
         </div>
 
-        <section className={classNames(styles.settingsSection, "settings-card")} hidden={activeTab !== "core"} aria-labelledby="settings-language-title">
+        <section className={classNames(styles.settingsSection, "settings-card")} hidden={activeTab !== "basic"} aria-labelledby="settings-language-title">
           <div>
             <h3 id="settings-language-title">{t.settings.sections.language.title}</h3>
             <p>{t.settings.sections.language.body}</p>
@@ -475,7 +468,7 @@ export function SettingsWorkspace(props: {
           </label>
         </section>
 
-        <section className={classNames(styles.settingsSection, "settings-card")} hidden={activeTab !== "core"} aria-labelledby="settings-account-title">
+        <section className={classNames(styles.settingsSection, "settings-card")} hidden={activeTab !== "basic"} aria-labelledby="settings-account-title">
           <div>
             <h3 id="settings-account-title">{t.settings.sections.account.title}</h3>
             <p>{t.settings.sections.account.body}</p>
@@ -541,7 +534,7 @@ export function SettingsWorkspace(props: {
           {passwordError ? <p className={styles.errorText}>{passwordError}</p> : null}
         </section>
 
-        <section className={classNames(styles.settingsSection, "settings-card")} hidden={activeTab !== "core"} aria-labelledby="settings-behavior-title">
+        <section className={classNames(styles.settingsSection, "settings-card")} hidden={activeTab !== "algorithm"} aria-labelledby="settings-behavior-title">
           <div>
             <h3 id="settings-behavior-title">{t.settings.sections.behavior.title}</h3>
             <p>{t.settings.sections.behavior.body}</p>
@@ -696,7 +689,7 @@ export function SettingsWorkspace(props: {
           </div>
         </section>
 
-        <section className={classNames(styles.settingsSection, "settings-card", "reader-settings-card")} hidden={activeTab !== "core"} aria-labelledby="settings-reader-title">
+        <section className={classNames(styles.settingsSection, "settings-card", "reader-settings-card")} hidden={activeTab !== "basic"} aria-labelledby="settings-reader-title">
           <div>
             <h3 id="settings-reader-title">{t.settings.sections.reader.title}</h3>
             <p>{t.settings.sections.reader.body}</p>
@@ -743,7 +736,7 @@ export function SettingsWorkspace(props: {
           </div>
         </section>
 
-        <section className={classNames(styles.settingsSection, "settings-card", "retention-card")} hidden={activeTab !== "core"} aria-labelledby="settings-retention-title">
+        <section className={classNames(styles.settingsSection, "settings-card", "retention-card")} hidden={activeTab !== "basic"} aria-labelledby="settings-retention-title">
           <div>
             <h3 id="settings-retention-title">{t.settings.sections.retention.title}</h3>
             <p>{t.settings.sections.retention.body}</p>
@@ -783,7 +776,7 @@ export function SettingsWorkspace(props: {
           <p className={styles.managementHint}>{t.settings.sections.retention.mappingHint}</p>
         </section>
 
-        <section className={classNames(styles.settingsSection, "settings-card", "provider-settings-card")} hidden={activeTab !== "provider"} aria-labelledby="settings-provider-title">
+        <section className={classNames(styles.settingsSection, "settings-card", "provider-settings-card")} hidden={activeTab !== "algorithm"} aria-labelledby="settings-provider-title">
           <div>
             <h3 id="settings-provider-title">{t.settings.sections.provider.title}</h3>
             <p>{t.settings.sections.provider.body}</p>
@@ -1227,7 +1220,7 @@ export function SettingsWorkspace(props: {
 
         <PluginManagerSection active={activeTab === "plugins"} locale={props.settings.ui.locale} />
 
-        <section className={classNames(styles.settingsSection, "settings-card", "about-settings-card")} hidden={activeTab !== "about"} aria-labelledby="settings-about-title">
+        <section className={classNames(styles.settingsSection, "settings-card", "about-settings-card")} hidden={activeTab !== "basic"} aria-labelledby="settings-about-title">
           <div>
             <h3 id="settings-about-title">{t.settings.sections.about.title}</h3>
             <p>{t.settings.sections.about.body}</p>
@@ -1341,10 +1334,8 @@ function PluginManagerSection(props: { active: boolean; locale: AppSettings["ui"
   const [isLoading, setIsLoading] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [busyPluginId, setBusyPluginId] = useState<string | null>(null);
-  const [packageContent, setPackageContent] = useState("");
-  const [packageUrl, setPackageUrl] = useState("");
-  const [checksum, setChecksum] = useState("");
   const [packageFile, setPackageFile] = useState<File | null>(null);
+  const [fileInputResetKey, setFileInputResetKey] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1367,10 +1358,7 @@ function PluginManagerSection(props: { active: boolean; locale: AppSettings["ui"
   }, [props.active]);
 
   async function handleInstallPlugin() {
-    const trimmedPackage = packageContent.trim();
-    const trimmedUrl = packageUrl.trim();
-    const trimmedChecksum = checksum.trim() || null;
-    if (!packageFile && !trimmedPackage && !trimmedUrl) {
+    if (!packageFile) {
       setError(copy.installRequired);
       return;
     }
@@ -1379,16 +1367,10 @@ function PluginManagerSection(props: { active: boolean; locale: AppSettings["ui"
     setError(null);
     setNotice(null);
     try {
-      const installed = packageFile
-        ? await dibaoApi.uploadPluginPackage(packageFile)
-        : trimmedPackage
-          ? await dibaoApi.installPluginFromPackage(trimmedPackage, trimmedChecksum)
-          : await dibaoApi.installPluginFromUrl(trimmedUrl, trimmedChecksum);
+      const installed = await dibaoApi.uploadPluginPackage(packageFile);
       setPlugins((current) => upsertPlugin(current, installed));
-      setPackageContent("");
-      setPackageUrl("");
-      setChecksum("");
       setPackageFile(null);
+      setFileInputResetKey((current) => current + 1);
       setNotice(copy.installed);
     } catch (caught) {
       setError(userMessageForError(caught, t.errors.api));
@@ -1448,47 +1430,27 @@ function PluginManagerSection(props: { active: boolean; locale: AppSettings["ui"
         <div>
           <h4>{copy.installTitle}</h4>
           <p>{copy.installBody}</p>
+          <a
+            className={styles.textLink}
+            href={pluginInstallDocsUrl[props.locale]}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {copy.installDocs}
+          </a>
         </div>
         <div className={styles.settingsGrid}>
-          <label className={styles.settingsField} htmlFor="settings-plugin-url">
-            <span>{copy.urlLabel}</span>
-            <input
-              id="settings-plugin-url"
-              inputMode="url"
-              onChange={(event) => setPackageUrl(event.target.value)}
-              placeholder={copy.urlPlaceholder}
-              type="url"
-              value={packageUrl}
-            />
-          </label>
-          <label className={styles.settingsField} htmlFor="settings-plugin-checksum">
-            <span>{copy.checksumLabel}</span>
-            <input
-              id="settings-plugin-checksum"
-              onChange={(event) => setChecksum(event.target.value)}
-              value={checksum}
-            />
-          </label>
           <label className={styles.settingsField} htmlFor="settings-plugin-file">
             <span>{copy.chooseFile}</span>
             <input
               accept=".dibao-plugin,application/json"
               id="settings-plugin-file"
+              key={fileInputResetKey}
               onChange={(event) => setPackageFile(event.target.files?.[0] ?? null)}
               type="file"
             />
           </label>
         </div>
-        <label className={styles.settingsField} htmlFor="settings-plugin-package">
-          <span>{copy.packageLabel}</span>
-          <textarea
-            id="settings-plugin-package"
-            onChange={(event) => setPackageContent(event.target.value)}
-            placeholder={copy.packagePlaceholder}
-            rows={6}
-            value={packageContent}
-          />
-        </label>
         <div className={styles.managementActions}>
           <button
             className={styles.primaryButton}

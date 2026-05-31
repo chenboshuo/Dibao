@@ -1083,6 +1083,9 @@ describe("web i18n", () => {
     );
 
     expect(html).toContain("设置");
+    expect(html).toContain("基础设置");
+    expect(html).toContain("算法");
+    expect(html).toContain("插件");
     expect(html).toContain("界面语言");
     expect(html).toContain("首页默认打开");
     expect(html).toContain("账户安全");
@@ -1125,6 +1128,10 @@ describe("web i18n", () => {
     expect(html).toContain("QPD");
     expect(html).toContain("新的向量空间");
     expect(html).toContain("测试连接");
+    expect(html).toContain("查看插件安装说明");
+    expect(html).toContain("plugin-installation.zh-CN.md");
+    expect(html).not.toContain("插件包 URL");
+    expect(html).not.toContain("插件包 JSON");
     expect(html.indexOf("智能能力")).toBeLessThan(html.indexOf("关于"));
   });
 

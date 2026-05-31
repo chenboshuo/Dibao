@@ -24,6 +24,8 @@ specific test notes, and generated validation evidence are kept outside Git in
 - [Profile algorithm v0](./profile-algorithm-v0.md)
 - [Recommendation v2/v3 design](./recommendation-v2-v3.md)
 - [Plugin system design](./plugin-system-design.md)
+- [插件安装说明](./plugin-installation.zh-CN.md)
+- [Plugin installation guide](./plugin-installation.en-US.md)
 - [插件开发指南](./plugin-development.zh-CN.md)
 - [Plugin development guide](./plugin-development.en-US.md)
 

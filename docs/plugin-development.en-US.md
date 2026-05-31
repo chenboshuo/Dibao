@@ -87,8 +87,10 @@ telemetry:emit
 Plugin developers can distribute plugins in three ways:
 
 - Publish a `.dibao-plugin` file for users to upload in the Plugins settings tab.
-- Publish a plugin package URL for users to paste into the Plugins settings tab.
+- Publish a plugin package URL for the advanced API, automation, or documented installation flows.
 - Publish GitHub Release or website update metadata that points to the latest package and checksum.
+
+User-facing installation guidance: [Plugin installation guide](./plugin-installation.en-US.md).
 
 Recommended metadata:
 

@@ -87,8 +87,10 @@ telemetry:emit
 开发者可以用三种方式分发：
 
 - 直接提供 `.dibao-plugin` 文件，用户在设置的插件页上传安装。
-- 提供插件包 URL，用户在插件页粘贴 URL 安装。
+- 提供插件包 URL，供高级 API、自动化部署或文档化安装流程使用。
 - 在 GitHub Release 或自有站点发布 update metadata，metadata 指向最新插件包和 checksum。
+
+用户侧安装说明见：[插件安装说明](./plugin-installation.zh-CN.md)。
 
 推荐同时发布 SHA-256：
 
