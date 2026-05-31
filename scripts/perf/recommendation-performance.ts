@@ -22,10 +22,11 @@ import { buildServer } from "../../apps/server/src/app.js";
 const articleCount = Number(process.env.DIBAO_PERF_ARTICLES ?? 20_000);
 const feedCount = Number(process.env.DIBAO_PERF_FEEDS ?? 100);
 const databasePath = resolve(process.env.DIBAO_PERF_DB ?? ".tmp/perf/recommendation-20k.sqlite");
-const reportPath = resolve("docs/recommendation-performance.md");
+const reportPath = resolve("local-docs/validation/recommendation-performance.md");
 const now = Date.parse("2026-05-16T00:00:00.000Z");
 
 mkdirSync(dirname(databasePath), { recursive: true });
+mkdirSync(dirname(reportPath), { recursive: true });
 rmSync(databasePath, { force: true });
 rmSync(`${databasePath}-wal`, { force: true });
 rmSync(`${databasePath}-shm`, { force: true });

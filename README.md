@@ -43,7 +43,7 @@
 - [许可证](#许可证)
 - [常见问题](#常见问题)
 - [发布说明](./docs/release-notes-v0.1.1.md)
-- [Roadmap](./docs/roadmap.md)
+- [Roadmap](https://github.com/users/Pls-1q43/projects/1)
 
 ### 它解决什么问题
 
@@ -285,11 +285,10 @@ npm run smoke:docker-recommendation
 
 参考文档：
 
+- [公开文档索引](./docs/README.md)
 - [工程蓝图](./docs/engineering-blueprint.md)
 - [数据库 Schema](./docs/database-schema.md)
 - [API Contract](./docs/api-contract.md)
 - [Profile Algorithm v0 参数表](./docs/profile-algorithm-v0.md)
-- [sqlite-vec Node.js 集成验证](./docs/spikes/sqlite-vec-node.md)
-- [Ollama 测试指南](./docs/user-testing-ollama.md)
 
 </details>
