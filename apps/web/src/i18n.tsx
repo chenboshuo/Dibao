@@ -122,6 +122,7 @@ export const zhCN = {
     retrying: "重试中",
     steps: {
       detecting: "检查需要修复的数据",
+      schemaMigration: "更新数据库结构",
       reset: "清理旧的兴趣簇与家族",
       replay: "回放历史阅读信号",
       labels: "重建兴趣簇标签",
@@ -1418,6 +1419,7 @@ export const enUS = {
     retrying: "Retrying",
     steps: {
       detecting: "Checking profile data",
+      schemaMigration: "Updating database schema",
       reset: "Clearing old clusters and families",
       replay: "Replaying reading signals",
       labels: "Rebuilding cluster labels",
@@ -2705,6 +2707,7 @@ export const jaJP = {
     retrying: "再試行中",
     steps: {
       detecting: "修復対象のデータを確認",
+      schemaMigration: "データベース構造を更新",
       reset: "古いクラスターとファミリーを削除",
       replay: "読書シグナルを再生",
       labels: "クラスターラベルを再構築",

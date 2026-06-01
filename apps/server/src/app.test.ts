@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  loadDefaultMigrations,
   openDatabase,
+  runMigrations,
   SqliteAppSettingsRepository,
   SqliteArticleActionRepository,
   SqliteArticleRepository,
@@ -1471,6 +1473,62 @@ describe("server API vertical slice", () => {
       expect(upgradeStatus.json()).toMatchObject({
         data: {
           blocking: true
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("shows a visible blocking upgrade while core database migrations are pending", async () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: false });
+    runMigrations(
+      db,
+      loadDefaultMigrations().filter((migration) => migration.version !== "021")
+    );
+    const app = buildRealServer({
+      db,
+      logger: false,
+      cookieSecure: false,
+      upgradeAutoStart: false,
+      coreMigrationDeferMs: 60_000
+    });
+
+    try {
+      const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+
+      const setupStatus = await app.inject({
+        method: "GET",
+        url: "/api/setup/status",
+        headers: { cookie }
+      });
+      expect(setupStatus.statusCode, setupStatus.body).toBe(200);
+      expect(setupStatus.json()).toMatchObject({
+        data: {
+          coreDatabaseMigration: {
+            id: "core-database-schema-migrations",
+            state: "pending",
+            blocking: true,
+            step: "detecting",
+            reason: "pending_core_migrations:021"
+          }
+        }
+      });
+
+      const blocked = await app.inject({
+        method: "GET",
+        url: "/api/feeds",
+        headers: { cookie }
+      });
+      expect(blocked.statusCode, blocked.body).toBe(423);
+      expect(blocked.json()).toMatchObject({
+        error: {
+          code: "CORE_DATABASE_MIGRATION_IN_PROGRESS"
         }
       });
     } finally {
@@ -4051,7 +4109,7 @@ describe("server API vertical slice", () => {
       providerTestStatus: "success"
     });
     insertApiClusterLabelFixture(db, index.id);
-    const app = buildServer({ db, logger: false, now: () => 20_000 });
+    const app = buildServer({ db, logger: false, backgroundJobs: false, now: () => 20_000 });
 
     try {
       const missing = await app.inject({

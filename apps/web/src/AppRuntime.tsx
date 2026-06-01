@@ -632,7 +632,7 @@ export function App() {
       try {
         const status = await dibaoApi.getSetupStatus();
         if (!cancelled) {
-          setDerivedDataUpgrade(status.derivedDataUpgrade ?? null);
+          setDerivedDataUpgrade(status.coreDatabaseMigration ?? status.derivedDataUpgrade ?? null);
           const nextStage = stageForSetupStatus(status);
           if (nextStage.type === "welcome") {
             resetReaderState();

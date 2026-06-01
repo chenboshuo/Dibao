@@ -306,6 +306,7 @@ export type SetupStatus = {
   hasFeeds: boolean;
   hasEmbeddingProvider: boolean;
   firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+  coreDatabaseMigration?: DerivedDataUpgradeStatus;
   derivedDataUpgrade?: DerivedDataUpgradeStatus;
   optionalPluginSteps?: PluginListItem[];
 };
@@ -317,6 +318,7 @@ export type DerivedDataUpgradeStatus = {
   blocking: boolean;
   step:
     | "detecting"
+    | "schemaMigration"
     | "reset"
     | "replay"
     | "labels"

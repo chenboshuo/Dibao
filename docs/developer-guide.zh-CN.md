@@ -35,7 +35,9 @@ git diff --check
 
 触及 Docker 发布、迁移或持久化路径时，还需要补充 Docker build smoke 和升级持久化 smoke。
 
-Core 数据库 migration 必须通过阻塞式迁移入口执行。部署流程不得在临时脚本里直接调用 `runMigrations()` 修改生产或测试实例数据库；应在旧容器停止、SQLite WAL checkpoint 和备份完成后，使用新镜像执行：
+Core 数据库 migration 必须走应用内默认的用户可见阻塞迁移门。已有库启动新版本时，Web 服务应保持可访问，普通业务 API 和后台任务暂停，前端展示升级进度；migration 完成后自动恢复。部署流程不得在临时脚本里直接调用 `runMigrations()` 修改生产或测试实例数据库。
+
+离线 CLI 只用于修复或人工演练，不是常规部署主路径。需要使用时，必须在旧容器停止、SQLite WAL checkpoint 和备份策略确认后，使用新镜像执行：
 
 ```bash
 DIBAO_ALLOW_BLOCKING_MIGRATION=1 \
@@ -44,7 +46,7 @@ DIBAO_DATABASE_PATH=/data/dibao.sqlite \
 npm run ops:migrate:core
 ```
 
-该命令会同步阻塞到 migration 完成，输出备份、迁移和关键计数报告。需要重建 embedding、向量索引或推荐画像的变更，还必须额外接入对应的数据升级流程。
+该命令会同步阻塞到 migration 完成，输出备份、迁移和关键计数报告。需要重建 embedding、向量索引或推荐画像的变更，还必须额外接入对应的用户可见数据升级流程。
 
 ## 插件开发
 
@@ -61,5 +63,5 @@ npm run ops:migrate:core
 - 公开 API、manifest v1 字段、capability 名称和 Hook 名称必须按文档演进。
 - 已发布 migration 不可删除或重写。
 - 插件目录、插件数据目录和用户 SQLite 数据库必须在 Docker 重建后保留。
-- Core 数据库 migration 必须走 `ops:migrate:core` 阻塞式迁移入口；部署脚本不能绕过该入口直接执行迁移。
+- Core 数据库 migration 必须默认走应用内用户可见阻塞迁移门；部署脚本不能绕过该入口直接执行迁移。
 - 会导致 embedding 重算、向量索引重建或推荐画像重建的变更必须走明确的数据升级流程，不能在普通请求路径隐式执行。

@@ -137,7 +137,7 @@ export function stageForSetupStatus(status: SetupStatus): AppStage {
     return { type: "welcome" };
   }
 
-  if (status.derivedDataUpgrade?.blocking) {
+  if (status.coreDatabaseMigration?.blocking || status.derivedDataUpgrade?.blocking) {
     return { type: "derived-data-upgrade" };
   }
 

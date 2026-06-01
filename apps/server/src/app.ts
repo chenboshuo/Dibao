@@ -27,6 +27,7 @@ import {
   SqliteSessionRepository,
   SqliteVecVectorStore,
   fromVectorBlob,
+  runMigrations,
   type ArticleActionType,
   type ArticleDetailRow,
   type ArticleListInput,
@@ -65,6 +66,10 @@ import {
 } from "./auth-cookie.js";
 import { AuthService, AuthServiceError } from "./auth-service.js";
 import { ArticleRetentionService } from "./article-retention-service.js";
+import {
+  CoreDatabaseMigrationService,
+  type CoreDatabaseMigrationStatus
+} from "./core-database-migration-service.js";
 import {
   DerivedDataUpgradeService,
   type DerivedDataUpgradeStatus
@@ -203,6 +208,7 @@ type SetupStatusResponse = {
   hasFeeds: boolean;
   hasEmbeddingProvider: boolean;
   firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+  coreDatabaseMigration?: CoreDatabaseMigrationStatus;
   derivedDataUpgrade?: DerivedDataUpgradeStatus;
   optionalPluginSteps?: unknown[];
 };
@@ -401,6 +407,8 @@ type BuildServerOptions = {
   officialPluginsDir?: string;
   pluginDataDir?: string;
   webDistDir?: string | false;
+  coreMigrationDeferMs?: number;
+  upgradeAutoStart?: boolean;
 };
 
 export function buildServer(options: BuildServerOptions = {}) {
@@ -423,6 +431,13 @@ export function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? true
   });
+  const coreDatabaseMigrationService = new CoreDatabaseMigrationService({
+    db,
+    now: options.now,
+    deferMs: options.coreMigrationDeferMs,
+    onError: (error) => app.log.error(error)
+  });
+  const hasBlockingCoreMigration = coreDatabaseMigrationService.getStatus().blocking;
   const onFetchWarning = (warning: unknown) => {
     app.log.warn({ event: "outbound_fetch_private_target", warning });
   };
@@ -492,7 +507,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     fetcher: options.pluginFetcher,
     now: options.now
   });
-  pluginService.reconcileOfficialPlugins();
+  if (!hasBlockingCoreMigration) {
+    pluginService.reconcileOfficialPlugins();
+  }
   const rankingJobService = new RankingRecalculateJobService({
     jobs,
     ranking: rankingService,
@@ -967,15 +984,23 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
 
     if (
-      derivedDataUpgradeService.isBlocking() &&
+      (coreDatabaseMigrationService.isBlocking() || derivedDataUpgradeService.isBlocking()) &&
       !isUpgradeAllowedRoute(request.method, request.routeOptions.url)
     ) {
+      const isCoreMigrationBlocking = coreDatabaseMigrationService.isBlocking();
+      const status = isCoreMigrationBlocking
+        ? coreDatabaseMigrationService.getStatus()
+        : derivedDataUpgradeService.getStatus();
       return sendApiError(
         reply,
         423,
-        "DERIVED_DATA_UPGRADE_IN_PROGRESS",
-        "Dibao is rebuilding derived recommendation data for this version upgrade",
-        derivedDataUpgradeService.getStatus()
+        isCoreMigrationBlocking
+          ? "CORE_DATABASE_MIGRATION_IN_PROGRESS"
+          : "DERIVED_DATA_UPGRADE_IN_PROGRESS",
+        isCoreMigrationBlocking
+          ? "Dibao is applying database migrations for this version upgrade"
+          : "Dibao is rebuilding derived recommendation data for this version upgrade",
+        status
       );
     }
   });
@@ -1010,22 +1035,32 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   }
 
-  if (backgroundJobs) {
-    app.addHook("onReady", async () => {
-      const status = derivedDataUpgradeService.getStatus();
-      if (!status.blocking) {
-        startBackgroundServices();
+  async function startUpgradePipeline(): Promise<void> {
+    const coreStatus = coreDatabaseMigrationService.getStatus();
+    if (coreStatus.blocking) {
+      const result = await coreDatabaseMigrationService.startIfRequired();
+      if (result.blocking) {
         return;
       }
+      pluginService.reconcileOfficialPlugins();
+    }
 
-      void derivedDataUpgradeService
-        .startIfRequired()
-        .then((result) => {
-          if (!result.blocking) {
-            startBackgroundServices();
-          }
-        })
-        .catch((error) => app.log.error(error));
+    if (backgroundJobs) {
+      const derivedStatus = derivedDataUpgradeService.getStatus();
+      if (derivedStatus.blocking) {
+        const result = await derivedDataUpgradeService.startIfRequired();
+        if (result.blocking) {
+          return;
+        }
+      }
+    }
+
+    startBackgroundServices();
+  }
+
+  if (options.upgradeAutoStart !== false) {
+    app.addHook("onReady", async () => {
+      void startUpgradePipeline().catch((error) => app.log.error(error));
     });
   }
 
@@ -1135,12 +1170,27 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.get("/api/setup/status", async () => {
+    const coreMigrationStatus = coreDatabaseMigrationService.getStatus();
+    if (coreMigrationStatus.blocking) {
+      return {
+        data: getSetupStatus(
+          credentials.hasCredential(),
+          false,
+          false,
+          coreMigrationStatus,
+          null,
+          []
+        )
+      };
+    }
+
     const hasFeeds = feeds.list().length > 0;
     return {
       data: getSetupStatus(
         credentials.hasCredential(),
         hasFeeds,
         embeddingProviderService.hasActiveProviderAndIndex(),
+        coreMigrationStatus,
         derivedDataUpgradeService.getStatus(),
         hasFeeds
           ? pluginService.listSetupSteps().filter(
@@ -1172,6 +1222,14 @@ export function buildServer(options: BuildServerOptions = {}) {
   );
 
   app.get("/api/system/upgrade/status", async () => {
+    const coreMigrationStatus = coreDatabaseMigrationService.getStatus();
+    if (coreMigrationStatus.blocking) {
+      void coreDatabaseMigrationService.startIfRequired().catch((error) => app.log.error(error));
+      return {
+        data: coreMigrationStatus
+      };
+    }
+
     const status = derivedDataUpgradeService.getStatus();
     if (status.blocking) {
       void derivedDataUpgradeService.startIfRequired().catch((error) => app.log.error(error));
@@ -1181,9 +1239,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
-  app.post("/api/system/upgrade/retry", async () => ({
-    data: await derivedDataUpgradeService.retry()
-  }));
+  app.post("/api/system/upgrade/retry", async () => {
+    const coreMigrationStatus = coreDatabaseMigrationService.getStatus();
+    if (coreMigrationStatus.blocking) {
+      return {
+        data: await coreDatabaseMigrationService.retry()
+      };
+    }
+    return {
+      data: await derivedDataUpgradeService.retry()
+    };
+  });
 
   app.get<{ Querystring: JobQuery }>("/api/jobs", async (request, reply) => {
     const parsed = parseJobQuery(request.query);
@@ -2184,10 +2250,18 @@ export function buildServer(options: BuildServerOptions = {}) {
 function openConfiguredDatabase(options: BuildServerOptions): DibaoDatabase {
   const databasePath = resolveDatabasePath(options.databasePath);
   ensureDatabaseDirectory(databasePath);
-
-  return openDatabase(databasePath, {
-    migrate: options.migrate ?? true
+  const shouldMigrate = options.migrate ?? true;
+  const shouldRunInitialMigrations =
+    shouldMigrate && (!existsSync(databasePath) || statSync(databasePath).size === 0);
+  const db = openDatabase(databasePath, {
+    migrate: false
   });
+
+  if (shouldRunInitialMigrations) {
+    runMigrations(db);
+  }
+
+  return db;
 }
 
 function resolveDatabasePath(databasePath: string | undefined): string {
@@ -2478,7 +2552,8 @@ function getSetupStatus(
   setupCompleted: boolean,
   hasFeeds: boolean,
   hasEmbeddingProvider: boolean,
-  derivedDataUpgrade: DerivedDataUpgradeStatus,
+  coreDatabaseMigration: CoreDatabaseMigrationStatus,
+  derivedDataUpgrade: DerivedDataUpgradeStatus | null,
   optionalPluginSteps: unknown[] = []
 ): SetupStatusResponse {
   const status: SetupStatusResponse = {
@@ -2490,7 +2565,10 @@ function getSetupStatus(
   if (optionalPluginSteps.length > 0) {
     status.optionalPluginSteps = optionalPluginSteps;
   }
-  if (derivedDataUpgrade.blocking || derivedDataUpgrade.state === "pending") {
+  if (coreDatabaseMigration.blocking || coreDatabaseMigration.state === "pending") {
+    status.coreDatabaseMigration = coreDatabaseMigration;
+  }
+  if (derivedDataUpgrade && (derivedDataUpgrade.blocking || derivedDataUpgrade.state === "pending")) {
     status.derivedDataUpgrade = derivedDataUpgrade;
   }
   return status;
