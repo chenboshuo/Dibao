@@ -1233,18 +1233,65 @@ describe("server API vertical slice", () => {
         }
       });
 
+      const emptyState = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/api/state"
+      });
+      expect(emptyState.statusCode, emptyState.body).toBe(200);
+      expect(emptyState.json().data).toMatchObject({
+        latest: null,
+        briefs: []
+      });
+
       const generated = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/generate", {
-        force: true
+        force: false
       });
       expect(generated.statusCode, generated.body).toBe(200);
+      expect(generated.json().data.generated).toBe(true);
       const generatedBrief = generated.json().data.brief;
       const htmlArticle = generatedBrief.groups
-        .flatMap((group: { articles: Array<{ articleId: string; displaySummary: string | null }> }) => group.articles)
+        .flatMap(
+          (group: {
+            articles: Array<{
+              articleId: string;
+              displaySummary: string | null;
+              summary: string | null;
+              url: string;
+              snapshotAt: number;
+            }>;
+          }) => group.articles
+        )
         .find((article: { articleId: string }) => article.articleId === "article_recommended");
       expect(htmlArticle?.displaySummary).toContain("Readable & useful summary.");
       expect(htmlArticle?.displaySummary).not.toContain("<article>");
       expect(htmlArticle?.displaySummary).not.toContain("bad()");
       expect(htmlArticle?.displaySummary.length).toBeLessThanOrEqual(280);
+      expect(htmlArticle).toMatchObject({
+        url: "https://example.com/recommended",
+        snapshotAt: 10_000
+      });
+
+      db.prepare("update articles set title = ?, summary = ?, status = 'deleted', deleted_at = ? where id = ?").run(
+        "Deleted source article",
+        null,
+        10_500,
+        "article_recommended"
+      );
+      const cachedGenerate = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/generate", {
+        force: false
+      });
+      expect(cachedGenerate.statusCode, cachedGenerate.body).toBe(200);
+      expect(cachedGenerate.json().data.generated).toBe(false);
+      const cachedArticle = cachedGenerate
+        .json()
+        .data.brief.groups.flatMap((group: { articles: Array<{ articleId: string; title: string; displaySummary: string | null }> }) =>
+          group.articles
+        )
+        .find((article: { articleId: string }) => article.articleId === "article_recommended");
+      expect(cachedArticle).toMatchObject({
+        title: "Quiet ranking systems",
+        displaySummary: expect.stringContaining("Readable & useful summary.")
+      });
 
       const excludedCluster = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/settings", {
         enabled: true,

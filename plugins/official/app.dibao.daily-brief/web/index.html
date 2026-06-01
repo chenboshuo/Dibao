@@ -96,7 +96,8 @@
 
       .actions,
       .tabs,
-      .history {
+      .history,
+      .article-actions {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
@@ -297,6 +298,28 @@
         padding: 22px;
       }
 
+      .status {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .article-actions {
+        margin-top: 2px;
+      }
+
+      .article-link {
+        color: var(--pine);
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .article-link:hover {
+        text-decoration: underline;
+      }
+
       .error {
         color: var(--vermilion);
         background: var(--vermilion-soft);
@@ -335,7 +358,8 @@
           </div>
           <div class="actions">
             <button class="button" id="open-settings" type="button">设置</button>
-            <button class="button primary" id="generate" type="button">立即生成</button>
+            <button class="button primary" id="generate" type="button">生成今日简报</button>
+            <button class="button" id="regenerate" type="button">重新生成</button>
           </div>
         </section>
 
@@ -347,14 +371,16 @@
         <p class="error" id="error" hidden></p>
 
         <section id="brief-panel">
+          <p class="status" id="loading">正在读取已生成的简报快照...</p>
+          <p class="status" id="brief-meta" hidden></p>
           <div class="history" id="history"></div>
           <section class="empty" id="empty" hidden>
             <h2>还没有简报</h2>
-            <p>点击“立即生成”，邸报会从当前推荐排序中挑选过去 24 小时的文章并按兴趣主题分组。</p>
+            <p>这里不会在打开页面时临时生成。启用每日计划后，邸报会在设定时间保存一份快照；也可以点击“生成今日简报”手动补生成一次。</p>
           </section>
           <section class="empty" id="filtered-empty" hidden>
             <h2>当前设置下没有可用文章</h2>
-            <p>可以放宽主题选择，或等新的推荐文章进入过去 24 小时窗口后再生成。</p>
+            <p>这份空简报已经作为快照保存。可以放宽主题选择，或等新的推荐文章进入过去 24 小时窗口后再生成新快照。</p>
           </section>
           <section class="content" id="content"></section>
         </section>
@@ -430,13 +456,24 @@
       });
       document.getElementById("generate").addEventListener("click", async () => {
         await runBusy("generate", async () => {
+          const result = await api("generate", { method: "POST", body: JSON.stringify({ force: false }) });
+          applyBriefResult(result);
+        });
+      });
+      document.getElementById("regenerate").addEventListener("click", async () => {
+        await runBusy("regenerate", async () => {
           const result = await api("generate", { method: "POST", body: JSON.stringify({ force: true }) });
+          applyBriefResult(result);
+        });
+      });
+
+      function applyBriefResult(result) {
           state.briefs = result.briefs;
           state.selectedId = result.brief.id;
           state.activePanel = "brief";
           render();
-        });
-      });
+      }
+
       document.getElementById("save").addEventListener("click", async () => {
         await runBusy("save", async () => {
           const result = await api("settings", {
@@ -446,6 +483,7 @@
           state.settings = result.settings;
           state.targets = result.targets || state.targets;
           state.briefs = result.briefs;
+          state.selectedId = result.latest?.id || state.selectedId || state.briefs[0]?.id || null;
           render();
         });
       });
@@ -457,11 +495,13 @@
           const result = await api("state");
           state.settings = result.settings;
           state.targets = result.targets || state.targets;
-          state.briefs = result.briefs;
+          state.briefs = result.briefs || [];
           state.selectedId = result.latest?.id || state.briefs[0]?.id || null;
           render();
         } catch (error) {
           showError(error.message);
+        } finally {
+          document.getElementById("loading").hidden = true;
         }
       }
 
@@ -563,6 +603,7 @@
       function renderHistory() {
         const history = document.getElementById("history");
         history.replaceChildren();
+        history.hidden = state.briefs.length === 0;
         for (const brief of state.briefs) {
           const button = document.createElement("button");
           button.className = `button${brief.id === state.selectedId ? " active" : ""}`;
@@ -581,9 +622,14 @@
         const empty = document.getElementById("empty");
         const filteredEmpty = document.getElementById("filtered-empty");
         const content = document.getElementById("content");
+        const meta = document.getElementById("brief-meta");
         content.replaceChildren();
+        meta.hidden = !brief;
         empty.hidden = Boolean(brief);
         filteredEmpty.hidden = !brief || brief.articleCount !== 0;
+        if (brief) {
+          meta.textContent = `${formatDateTime(brief.generatedAt)} 生成 · ${formatDateTime(brief.windowStartAt)} 至 ${formatDateTime(brief.windowEndAt)} · ${brief.articleCount} 篇`;
+        }
         if (!brief || brief.articleCount === 0) return;
 
         for (const group of brief.groups) {
@@ -612,6 +658,27 @@
               summary.textContent = displaySummary;
               row.append(summary);
             }
+            const actions = document.createElement("div");
+            actions.className = "article-actions";
+            const openSnapshot = document.createElement("a");
+            openSnapshot.className = "article-link";
+            openSnapshot.href = "#";
+            openSnapshot.textContent = "在邸报中打开";
+            openSnapshot.addEventListener("click", (event) => {
+              event.preventDefault();
+              window.parent.postMessage({ type: "dibao.openArticle", articleId: article.articleId }, window.location.origin);
+            });
+            actions.append(openSnapshot);
+            if (article.url) {
+              const original = document.createElement("a");
+              original.className = "article-link";
+              original.href = article.url;
+              original.target = "_blank";
+              original.rel = "noreferrer";
+              original.textContent = "打开原文";
+              actions.append(original);
+            }
+            row.append(actions);
             section.append(row);
           }
           content.append(section);
@@ -657,6 +724,10 @@
       }
 
       function formatTime(value) {
+        return value ? new Date(value).toLocaleString() : "未知时间";
+      }
+
+      function formatDateTime(value) {
         return value ? new Date(value).toLocaleString() : "未知时间";
       }
 

@@ -54,10 +54,12 @@ export default {
     ctx.api.post("/generate", async ({ body }) => {
       const settings = readSettings(ctx);
       const force = body && typeof body === "object" && body.force === true;
+      const hadTodayBrief = Boolean(ctx.storage.get(briefKey(ctx.now(), settings.timezone)));
       const brief = await generateBrief(ctx, settings, { force });
       return {
         brief,
-        briefs: listBriefs(ctx)
+        briefs: listBriefs(ctx),
+        generated: force || !hadTodayBrief
       };
     });
   }
@@ -104,7 +106,7 @@ async function generateBrief(ctx, settings, options = {}) {
     limit: Math.max(settings.articleCount * 5, 50)
   });
   const filtered = filterCandidates(candidates, settings);
-  const selected = diversifyByFamily(filtered, settings.articleCount).map(briefArticle);
+  const selected = diversifyByFamily(filtered, settings.articleCount).map((article) => briefArticle(article, now));
   const groups = groupByFamily(selected);
   const brief = {
     id: key.replace("brief:", ""),
@@ -144,10 +146,25 @@ function filterCandidates(candidates, settings) {
   });
 }
 
-function briefArticle(article) {
+function briefArticle(article, now) {
   return {
-    ...article,
-    displaySummary: cleanSummary(article.summary, SUMMARY_MAX_LENGTH)
+    articleId: article.articleId,
+    feedId: article.feedId,
+    feedTitle: article.feedTitle,
+    title: article.title,
+    url: article.url,
+    summary: article.summary,
+    displaySummary: cleanSummary(article.summary, SUMMARY_MAX_LENGTH),
+    publishedAt: article.publishedAt,
+    discoveredAt: article.discoveredAt,
+    score: article.score,
+    calculatedAt: article.calculatedAt,
+    familyId: article.familyId,
+    familyLabel: article.familyLabel,
+    clusterId: article.clusterId,
+    clusterLabel: article.clusterLabel,
+    reason: article.reason,
+    snapshotAt: now
   };
 }
 
