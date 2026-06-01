@@ -1902,6 +1902,21 @@
   line-height: 1.5;
 }
 
+.pluginStatusCard {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 156px);
+}
+
+.pluginCardActions {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.pluginCardActions .secondaryButton,
+.pluginCardActions .dangerButton {
+  width: 100%;
+  min-width: 0;
+}
+
 .segmentedControl {
   width: fit-content;
   display: inline-grid;
@@ -3921,6 +3936,10 @@
   }
 
   .settingsIndexStatus {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pluginStatusCard {
     grid-template-columns: minmax(0, 1fr);
   }
 

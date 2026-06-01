@@ -1476,7 +1476,7 @@ function PluginManagerSection(props: { active: boolean; locale: AppSettings["ui"
       ) : null}
 
       {plugins.map((plugin) => (
-        <div className={styles.settingsIndexStatus} key={plugin.id}>
+        <div className={classNames(styles.settingsIndexStatus, styles.pluginStatusCard)} key={plugin.id}>
           <div>
             <strong>
               {plugin.name} {plugin.version}
@@ -1514,40 +1514,40 @@ function PluginManagerSection(props: { active: boolean; locale: AppSettings["ui"
               </div>
             ) : null}
           </div>
-          <button
-            className={styles.secondaryButton}
-            disabled={busyPluginId === plugin.id || plugin.status === "enabled"}
-            onClick={() => void mutatePlugin(plugin.id, () => dibaoApi.enablePlugin(plugin.id))}
-            type="button"
-          >
-            {copy.enable}
-          </button>
-          <button
-            className={styles.secondaryButton}
-            disabled={busyPluginId === plugin.id || plugin.status !== "enabled"}
-            onClick={() => void mutatePlugin(plugin.id, () => dibaoApi.disablePlugin(plugin.id))}
-            type="button"
-          >
-            {copy.disable}
-          </button>
-          <button
-            className={styles.secondaryButton}
-            disabled={busyPluginId === plugin.id || !plugin.updateUrl}
-            onClick={() => void mutatePlugin(plugin.id, () => dibaoApi.updatePlugin(plugin.id))}
-            type="button"
-          >
-            {copy.update}
-          </button>
-          <button
-            className={styles.dangerButton}
-            disabled={busyPluginId === plugin.id || plugin.official}
-            onClick={() =>
-              void mutatePlugin(plugin.id, () => dibaoApi.deletePlugin(plugin.id, false))
-            }
-            type="button"
-          >
-            {copy.uninstall}
-          </button>
+          <div className={styles.pluginCardActions}>
+            <button
+              className={styles.secondaryButton}
+              disabled={busyPluginId === plugin.id}
+              onClick={() =>
+                void mutatePlugin(plugin.id, () =>
+                  plugin.status === "enabled"
+                    ? dibaoApi.disablePlugin(plugin.id)
+                    : dibaoApi.enablePlugin(plugin.id)
+                )
+              }
+              type="button"
+            >
+              {plugin.status === "enabled" ? copy.disable : copy.enable}
+            </button>
+            <button
+              className={styles.secondaryButton}
+              disabled={busyPluginId === plugin.id || !plugin.updateUrl}
+              onClick={() => void mutatePlugin(plugin.id, () => dibaoApi.updatePlugin(plugin.id))}
+              type="button"
+            >
+              {copy.update}
+            </button>
+            <button
+              className={styles.dangerButton}
+              disabled={busyPluginId === plugin.id || plugin.official}
+              onClick={() =>
+                void mutatePlugin(plugin.id, () => dibaoApi.deletePlugin(plugin.id, false))
+              }
+              type="button"
+            >
+              {copy.uninstall}
+            </button>
+          </div>
         </div>
       ))}
     </section>
