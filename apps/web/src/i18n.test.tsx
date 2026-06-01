@@ -491,6 +491,8 @@ describe("web i18n", () => {
     expect(articlePanel).toContain("只看未读");
     expect(articlePanel).toContain("全部");
     expect(articlePanel).toContain("加载更多");
+    expect(articlePanel).toContain('aria-label="打开来源: 设计"');
+    expect(articlePanel).toContain('aria-pressed="true"');
     expect(articlePanel).toContain("设计");
   });
 

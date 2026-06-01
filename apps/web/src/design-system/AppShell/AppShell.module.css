@@ -2429,6 +2429,44 @@
   justify-content: center;
 }
 
+.mobileSourceButton {
+  min-width: 0;
+  max-width: min(280px, 42vw);
+  gap: var(--space-1);
+}
+
+.mobileSourceButtonActive {
+  border-color: var(--color-pine);
+  background: var(--color-pine-soft);
+  color: var(--color-pine);
+}
+
+.mobileSourceButtonText,
+.mobileSourceButtonStatus {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileSourceButtonStatus {
+  max-width: 160px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-size: var(--text-xs);
+}
+
+.mobileSourceButtonStatus::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+}
+
 .feedList > .mobileSourceCloseButton {
   width: calc(100% - var(--space-6));
   margin: var(--space-3);
@@ -3770,6 +3808,14 @@
     min-height: 32px;
     padding-inline: var(--space-2);
     font-size: 12px;
+  }
+
+  .mobileSourceButton {
+    max-width: 48vw;
+  }
+
+  .mobileSourceButtonStatus {
+    max-width: 24vw;
   }
 
   .articleItem,

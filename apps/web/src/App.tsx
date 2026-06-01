@@ -6292,6 +6292,7 @@ export function ArticleListPanel(props: {
   const listScrollKey = props.listScrollKey ?? `dibao:list-scroll:${props.articleView}`;
   const sourceTitle =
     props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
+  const isSourceFiltered = props.sourceSelection.type !== "all";
 
   useArticleListIgnoreTelemetry({
     articles: props.articles,
@@ -6321,12 +6322,25 @@ export function ArticleListPanel(props: {
         </div>
         <div className={styles.panelHeaderActions}>
           <button
-            aria-label={t.feeds.openSourcesLabel}
-            className={styles.mobileSourceButton}
+            aria-label={
+              isSourceFiltered
+                ? `${t.feeds.openSourcesLabel}: ${sourceTitle}`
+                : t.feeds.openSourcesLabel
+            }
+            aria-pressed={isSourceFiltered}
+            className={
+              isSourceFiltered
+                ? `${styles.mobileSourceButton} ${styles.mobileSourceButtonActive}`
+                : styles.mobileSourceButton
+            }
             onClick={props.onOpenSources}
+            title={isSourceFiltered ? sourceTitle : undefined}
             type="button"
           >
-            {t.feeds.openSources}
+            <span className={styles.mobileSourceButtonText}>{t.feeds.openSources}</span>
+            {isSourceFiltered ? (
+              <span className={styles.mobileSourceButtonStatus}>{sourceTitle}</span>
+            ) : null}
           </button>
           {props.articleView === "favorites" || props.articleView === "read_later" ? (
             <label
