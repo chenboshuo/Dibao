@@ -35,6 +35,17 @@ git diff --check
 
 When Docker release, migrations, or persistence paths are touched, add Docker build smoke and persistent-upgrade smoke checks.
 
+Core database migrations must run through the blocking migration entry point. Deployment scripts must not directly call `runMigrations()` from temporary code against production or test-instance databases. After the old container is stopped, SQLite WAL is checkpointed, and a backup exists, run the new image with:
+
+```bash
+DIBAO_ALLOW_BLOCKING_MIGRATION=1 \
+DIBAO_DB_BACKUP_CONFIRMED=1 \
+DIBAO_DATABASE_PATH=/data/dibao.sqlite \
+npm run ops:migrate:core
+```
+
+The command blocks until migration completion and prints a backup, migration, and key-count report. Changes that rebuild embeddings, vector indexes, or recommendation profiles still need their dedicated data-upgrade flow in addition to this Core migration gate.
+
 ## Plugin Development
 
 Read:
@@ -50,4 +61,5 @@ Plugin development docs are maintained in Chinese and English only. Other UI loc
 - Public APIs, manifest v1 fields, capability names, and hook names must evolve through documented compatibility changes.
 - Released migrations must not be deleted or rewritten.
 - Plugin package directories, plugin data directories, and the user SQLite database must survive Docker rebuilds.
+- Core database migrations must use the `ops:migrate:core` blocking migration entry point; deployment scripts must not bypass it by running migrations directly.
 - Changes that require embedding recomputation, vector-index rebuilds, or recommendation-profile rebuilds must use an explicit data-upgrade flow and must not run implicitly on ordinary request paths.
