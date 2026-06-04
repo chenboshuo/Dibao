@@ -95,10 +95,7 @@ export class OpenAiCompatibleEmbeddingAdapter implements EmbeddingProviderAdapte
           "content-type": "application/json",
           ...(provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {})
         },
-        body: JSON.stringify({
-          model: provider.model,
-          input: texts
-        }),
+        body: JSON.stringify(embeddingRequestBody(provider, texts)),
         signal: controller.signal
       });
 
@@ -124,6 +121,37 @@ export class OpenAiCompatibleEmbeddingAdapter implements EmbeddingProviderAdapte
     } finally {
       clearTimeout(timeout);
     }
+  }
+}
+
+function embeddingRequestBody(
+  provider: EmbeddingProviderConfig,
+  texts: string[]
+): { model: string; input: string[]; dimensions?: number } {
+  return {
+    model: provider.model,
+    input: texts,
+    ...(shouldRequestOpenAiCompatibleDimensions(provider)
+      ? { dimensions: provider.dimension }
+      : {})
+  };
+}
+
+function shouldRequestOpenAiCompatibleDimensions(provider: EmbeddingProviderConfig): boolean {
+  const model = provider.model.trim().toLowerCase();
+  if (model.startsWith("gemini-embedding")) {
+    return true;
+  }
+
+  if (!provider.baseUrl) {
+    return false;
+  }
+
+  try {
+    const url = new URL(provider.baseUrl);
+    return url.hostname.endsWith("googleapis.com") && url.pathname.includes("/openai");
+  } catch {
+    return false;
   }
 }
 
