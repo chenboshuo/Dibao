@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import Fastify, {
   type FastifyInstance,
@@ -522,7 +523,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     pluginDataDir: options.pluginDataDir,
     secretKey: options.pluginSecretKey,
     fetcher: options.pluginFetcher,
-    now: options.now
+    now: options.now,
+    logPerformance: (record) => {
+      app.log.info(record, "plugin.api.performance");
+    }
   });
   if (!hasBlockingCoreMigration) {
     pluginService.reconcileOfficialPlugins();
@@ -1544,25 +1548,54 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   );
 
-  app.get("/api/recommendation/transparency", async () => ({
-    data: getRecommendationTransparency({
-      db,
-      embeddings,
-      profiles,
-      rankings,
-      rankingService,
-      clusterLabels: clusterLabelService,
-      interestFamilies: interestFamilyService,
-      settings: settingsService.getSettings().ranking,
-      maintenanceSettings: settingsService.getSettings().recommendationMaintenance,
-      maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates()
-    })
-  }));
+  app.get<{ Querystring: RecommendationStatusQuery }>(
+    "/api/recommendation/transparency",
+    async (request, reply) => {
+      const startedAt = performance.now();
+      const includeClusterItems = parseBooleanParam(request.query.includeClusterItems);
+      if (includeClusterItems === null) {
+        return sendApiError(
+          reply,
+          400,
+          "VALIDATION_ERROR",
+          "includeClusterItems must be true or false",
+          { field: "includeClusterItems" }
+        );
+      }
+
+      const data = getRecommendationTransparency({
+        db,
+        embeddings,
+        profiles,
+        rankings,
+        rankingService,
+        clusterLabels: clusterLabelService,
+        interestFamilies: interestFamilyService,
+        settings: settingsService.getSettings().ranking,
+        maintenanceSettings: settingsService.getSettings().recommendationMaintenance,
+        maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates(),
+        includeClusterItems: includeClusterItems ?? false
+      });
+      app.log.info(
+        {
+          route: "/api/recommendation/transparency",
+          durationMs: roundDuration(performance.now() - startedAt),
+          includeClusterItems: includeClusterItems ?? false,
+          clusterCount: data.clusters.positive + data.clusters.negative,
+          itemCount: data.clusters.items.length,
+          familyCount: data.clusters.families?.topFamilies.length ?? 0
+        },
+        "api.performance"
+      );
+      return { data };
+    }
+  );
 
   app.get<{ Querystring: RecommendationClusterQuery }>(
     "/api/recommendation/clusters",
-    async (request) => ({
-      data: getRecommendationClusters({
+    async (request) => {
+      const startedAt = performance.now();
+      const data = getRecommendationClusters({
         db,
         embeddings,
         profiles,
@@ -1572,8 +1605,19 @@ export function buildServer(options: BuildServerOptions = {}) {
         interestFamilies: interestFamilyService,
         settings: settingsService.getSettings().ranking,
         limit: request.query.limit === "all" ? null : parsePositiveInteger(request.query.limit, 12)
-      })
-    })
+      });
+      app.log.info(
+        {
+          route: "/api/recommendation/clusters",
+          durationMs: roundDuration(performance.now() - startedAt),
+          total: data.total,
+          itemCount: data.items.length,
+          familyCount: data.families?.topFamilies.length ?? 0
+        },
+        "api.performance"
+      );
+      return { data };
+    }
   );
 
   app.post<{ Params: RecommendationMaintenanceParams }>(
@@ -1690,10 +1734,18 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.patch<{ Params: RecommendationClusterParams; Body: RecommendationClusterLabelBody }>(
     "/api/recommendation/clusters/:id/label",
     async (request, reply) => {
+      const startedAt = performance.now();
       try {
         const result = clusterLabelService.setManualLabel(
           request.params.id,
           request.body?.manualLabel
+        );
+        app.log.info(
+          {
+            route: "/api/recommendation/clusters/:id/label",
+            durationMs: roundDuration(performance.now() - startedAt)
+          },
+          "api.performance"
         );
         return {
           data: {
@@ -1712,10 +1764,18 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.patch<{ Params: RecommendationFamilyParams; Body: RecommendationFamilyLabelBody }>(
     "/api/recommendation/families/:id/label",
     async (request, reply) => {
+      const startedAt = performance.now();
       try {
         const result = interestFamilyService.setManualLabel(
           request.params.id,
           request.body?.manualLabel
+        );
+        app.log.info(
+          {
+            route: "/api/recommendation/families/:id/label",
+            durationMs: roundDuration(performance.now() - startedAt)
+          },
+          "api.performance"
         );
         return {
           data: {
@@ -2958,6 +3018,7 @@ function getRecommendationTransparency(options: {
   clusterLabels: InterestClusterLabelService;
   interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
+  includeClusterItems?: boolean;
   maintenanceSettings?: ReturnType<SettingsService["getSettings"]>["recommendationMaintenance"];
   maintenanceScheduleStates?: Array<{
     taskKey: string;
@@ -5319,6 +5380,10 @@ function parseBooleanParam(value: string | undefined): boolean | undefined | nul
   }
 
   return null;
+}
+
+function roundDuration(value: number): number {
+  return Math.round(Math.max(0, value) * 10) / 10;
 }
 
 function parseLimit(value: string | undefined): number | undefined | null {

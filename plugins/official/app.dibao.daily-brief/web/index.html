@@ -426,7 +426,9 @@
         briefs: [],
         selectedId: null,
         settings: null,
-        targets: { families: [], clusters: [] }
+        targets: { families: [], clusters: [] },
+        settingsLoaded: false,
+        settingsLoading: false
       };
 
       const api = async (path, options = {}) => {
@@ -442,18 +444,12 @@
         return body.data;
       };
 
-      document.getElementById("open-settings").addEventListener("click", () => {
-        state.activePanel = "settings";
-        render();
-      });
+      document.getElementById("open-settings").addEventListener("click", () => openSettings());
       document.getElementById("tab-brief").addEventListener("click", () => {
         state.activePanel = "brief";
         render();
       });
-      document.getElementById("tab-settings").addEventListener("click", () => {
-        state.activePanel = "settings";
-        render();
-      });
+      document.getElementById("tab-settings").addEventListener("click", () => openSettings());
       document.getElementById("generate").addEventListener("click", async () => {
         await runBusy("generate", async () => {
           const result = await api("generate", { method: "POST", body: JSON.stringify({ force: false }) });
@@ -484,6 +480,7 @@
           state.targets = result.targets || state.targets;
           state.briefs = result.briefs;
           state.selectedId = result.latest?.id || state.selectedId || state.briefs[0]?.id || null;
+          state.settingsLoaded = true;
           render();
         });
       });
@@ -492,16 +489,44 @@
 
       async function load() {
         try {
-          const result = await api("state");
-          state.settings = result.settings;
-          state.targets = result.targets || state.targets;
+          const result = await api("briefs");
           state.briefs = result.briefs || [];
           state.selectedId = result.latest?.id || state.briefs[0]?.id || null;
           render();
+          if (state.activePanel === "settings") {
+            await loadSettings();
+          }
         } catch (error) {
           showError(error.message);
         } finally {
           document.getElementById("loading").hidden = true;
+        }
+      }
+
+      async function openSettings() {
+        state.activePanel = "settings";
+        render();
+        if (!state.settingsLoaded && !state.settingsLoading) {
+          await loadSettings();
+        }
+      }
+
+      async function loadSettings() {
+        state.settingsLoading = true;
+        render();
+        try {
+          const result = await api("state");
+          state.settings = result.settings;
+          state.targets = result.targets || state.targets;
+          state.briefs = result.briefs || state.briefs;
+          state.selectedId = result.latest?.id || state.selectedId || state.briefs[0]?.id || null;
+          state.settingsLoaded = true;
+          showError(null);
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          state.settingsLoading = false;
+          render();
         }
       }
 
@@ -540,7 +565,12 @@
       function renderTopics() {
         const list = document.getElementById("topic-list");
         list.replaceChildren();
-        if (!state.settings) return;
+        if (!state.settings) {
+          const loading = document.createElement("p");
+          loading.textContent = state.settingsLoading ? "正在读取设置..." : "打开设置后会读取可配置主题。";
+          list.append(loading);
+          return;
+        }
 
         const excludedFamilies = new Set(state.settings.excludedFamilyIds || []);
         const excludedClusters = new Set(state.settings.excludedClusterIds || []);

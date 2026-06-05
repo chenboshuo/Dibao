@@ -1229,6 +1229,90 @@ describe("web API client", () => {
     ]);
   });
 
+  it("loads recommendation transparency with optional cluster items", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          data: {
+            mode: "personalized",
+            activeProvider: null,
+            activeIndex: null,
+            activeRankContext: "base",
+            algorithm: {
+              version: "rec_v3",
+              featureSchemaVersion: 3,
+              cocoonLevel: 1,
+              localLearning: { enabled: true, shadowMode: false },
+              exploration: { enabled: true },
+              evaluation: { enabled: false },
+              cocoonParameters: {}
+            },
+            coverage: {
+              candidateCount: 0,
+              embeddingCount: 0,
+              coverageRatio: 1,
+              pendingJobs: 0,
+              failedJobs: 0,
+              lastFailedAt: null,
+              lastError: null
+            },
+            behaviorCounts: {},
+            clusters: {
+              positive: 0,
+              negative: 0,
+              items: []
+            },
+            rankedArticles: {
+              base: 0,
+              active: 0
+            },
+            lastProfileUpdate: null,
+            lastRankingUpdate: null,
+            warnings: [],
+            transparency: {
+              currentFormula: "test",
+              fallbackReason: null,
+              rankingCore: {
+                usesRemoteLlm: false,
+                usesRemoteReranker: false,
+                usesExternalSearchService: false,
+                allowedRemoteDependency: "one embedding provider"
+              },
+              moduleStatus: {},
+              algorithmModules: [],
+              maintenance: {
+                schemaMigration: "017_interest_families",
+                backfillState: "tracked",
+                explanationAuthority: "article_rank_explanations",
+                scoreAuthority: "article_rank_scores",
+                automaticMaintenanceEnabled: true,
+                settings: null,
+                schedule: []
+              },
+              failureStates: {}
+            }
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await api.getRecommendationTransparency();
+    await api.getRecommendationTransparency({ includeClusterItems: true });
+
+    expect(calls).toEqual([
+      "/api/recommendation/transparency",
+      "/api/recommendation/transparency?includeClusterItems=true"
+    ]);
+  });
+
   it("updates manual recommendation family labels", async () => {
     const calls: Array<{ path: string; body: unknown; method: string | undefined }> = [];
     const api = createDibaoApi(async (input, init) => {

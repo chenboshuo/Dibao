@@ -1653,8 +1653,19 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
-    async getRecommendationTransparency(): Promise<RecommendationTransparency> {
-      return (await request<RecommendationTransparency>("/api/recommendation/transparency")).data;
+    async getRecommendationTransparency(input?: {
+      includeClusterItems?: boolean;
+    }): Promise<RecommendationTransparency> {
+      const params = new URLSearchParams();
+      if (input?.includeClusterItems !== undefined) {
+        params.set("includeClusterItems", String(input.includeClusterItems));
+      }
+      const query = params.toString();
+      return (
+        await request<RecommendationTransparency>(
+          query ? `/api/recommendation/transparency?${query}` : "/api/recommendation/transparency"
+        )
+      ).data;
     },
 
     async listRecommendationClusters(

@@ -40,6 +40,10 @@ export function AlgorithmTransparencyPage(props: {
         ? t.recommendationStatus.loading
         : t.recommendationStatus.fallback;
   const behaviorEntries = props.status ? Object.entries(props.status.behaviorCounts) : [];
+  const clusterItems = props.status?.clusters.items ?? [];
+  const clusterTotal = props.status
+    ? props.status.clusters.positive + props.status.clusters.negative
+    : 0;
   const recommendationStatusRows: Array<{ label: string; value: string }> = props.status
     ? [
         {
@@ -212,9 +216,9 @@ export function AlgorithmTransparencyPage(props: {
             <h3>{t.algorithmTransparency.sections.currentClusters}</h3>
             <p>{t.algorithmTransparency.clusters.generated}</p>
           </div>
-          {props.status?.clusters.items && props.status.clusters.items.length > 0 ? (
+          {clusterItems.length > 0 ? (
             <div className={styles.algorithmClusterGrid}>
-              {props.status.clusters.items.map((cluster, index) => (
+              {clusterItems.map((cluster, index) => (
                 <ClusterCard
                   cluster={cluster}
                   index={index}
@@ -225,9 +229,9 @@ export function AlgorithmTransparencyPage(props: {
               ))}
             </div>
           ) : (
-            <p>{t.algorithmTransparency.clusters.empty}</p>
+            <p>{clusterTotal > 0 ? t.algorithmTransparency.clusters.generated : t.algorithmTransparency.clusters.empty}</p>
           )}
-          {props.status?.clusters.items && props.status.clusters.items.length >= 12 ? (
+          {clusterTotal > 0 ? (
             <a
               className={styles.textLink}
               href={urlForAppPage({ type: "algorithm-clusters" })}

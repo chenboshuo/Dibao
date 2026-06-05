@@ -851,21 +851,26 @@ export function App() {
     setRecommendationStatusError(null);
 
     try {
-      const [status, lexicon, candidates] = await Promise.all([
-        dibaoApi.getRecommendationTransparency(),
-        dibaoApi.getClusterLabelLexicon(),
-        dibaoApi.listRecommendationClusterMergeCandidates("all")
-      ]);
+      const status = await dibaoApi.getRecommendationTransparency();
       setRecommendationStatus(status);
-      setClusterLabelLexicon(lexicon);
-      setMergeCandidates(candidates.candidates);
     } catch (error) {
       setRecommendationStatus(null);
-      setClusterLabelLexicon(null);
-      setMergeCandidates([]);
       setRecommendationStatusError(userMessageForError(error, t.errors.api));
     } finally {
       setIsRecommendationStatusLoading(false);
+    }
+  }, [t.errors.api]);
+
+  const loadRecommendationDiagnostics = useCallback(async () => {
+    try {
+      const [lexicon, candidates] = await Promise.all([
+        dibaoApi.getClusterLabelLexicon(),
+        dibaoApi.listRecommendationClusterMergeCandidates("all")
+      ]);
+      setClusterLabelLexicon(lexicon);
+      setMergeCandidates(candidates.candidates);
+    } catch (error) {
+      setRecommendationStatusError(userMessageForError(error, t.errors.api));
     }
   }, [t.errors.api]);
 
@@ -1163,6 +1168,28 @@ export function App() {
     currentArticleView,
     loadRecommendationStatus,
     loadRecommendationSummaryStatus
+  ]);
+
+  useEffect(() => {
+    if (appStage.type !== "reader" || appPage.type !== "algorithm-transparency") {
+      return;
+    }
+    if (isRecommendationStatusLoading || !recommendationStatus) {
+      return;
+    }
+    if (clusterLabelLexicon !== null || mergeCandidates.length > 0) {
+      return;
+    }
+
+    void loadRecommendationDiagnostics();
+  }, [
+    appPage.type,
+    appStage.type,
+    clusterLabelLexicon,
+    isRecommendationStatusLoading,
+    loadRecommendationDiagnostics,
+    mergeCandidates.length,
+    recommendationStatus
   ]);
 
   useEffect(() => {
@@ -1854,11 +1881,12 @@ export function App() {
     setAllClustersError(null);
 
     try {
-      await dibaoApi.updateRecommendationClusterLabel(clusterId, manualLabel);
-      await loadRecommendationStatus();
-      if (appPageRef.current.type === "algorithm-clusters") {
-        await loadAllRecommendationClusters();
-      }
+      const result = await dibaoApi.updateRecommendationClusterLabel(clusterId, manualLabel);
+      patchRecommendationClusterLabel(clusterId, {
+        displayLabel: result.displayLabel,
+        labelSource: result.labelSource,
+        manualLabel
+      });
     } catch (error) {
       const message = userMessageForError(error, t.errors.api);
       setRecommendationStatusError(message);
@@ -1877,11 +1905,11 @@ export function App() {
     setAllClustersError(null);
 
     try {
-      await dibaoApi.updateRecommendationFamilyLabel(familyId, manualLabel);
-      await loadRecommendationStatus();
-      if (appPageRef.current.type === "algorithm-clusters") {
-        await loadAllRecommendationClusters();
-      }
+      const result = await dibaoApi.updateRecommendationFamilyLabel(familyId, manualLabel);
+      patchRecommendationFamilyLabel(familyId, {
+        displayLabel: result.displayLabel,
+        manualLabel: result.manualLabel
+      });
     } catch (error) {
       const message = userMessageForError(error, t.errors.api);
       setRecommendationStatusError(message);
@@ -1889,6 +1917,84 @@ export function App() {
     } finally {
       setUpdatingFamilyLabelId(null);
     }
+  }
+
+  function patchRecommendationClusterLabel(
+    clusterId: string,
+    label: {
+      displayLabel: string;
+      labelSource: RecommendationClusterItem["labelSource"];
+      manualLabel: string | null;
+    }
+  ) {
+    const patchCluster = (cluster: RecommendationClusterItem): RecommendationClusterItem =>
+      cluster.id === clusterId
+        ? {
+            ...cluster,
+            displayLabel: label.displayLabel,
+            labelSource: label.labelSource,
+            manualLabel: label.manualLabel
+          }
+        : cluster;
+    setRecommendationStatus((current) =>
+      current
+        ? {
+            ...current,
+            clusters: {
+              ...current.clusters,
+              items: current.clusters.items?.map(patchCluster) ?? []
+            }
+          }
+        : current
+    );
+    setAllRecommendationClusters((current) => current.map(patchCluster));
+  }
+
+  function patchRecommendationFamilyLabel(
+    familyId: string,
+    label: {
+      displayLabel: string;
+      manualLabel: string | null;
+    }
+  ) {
+    const patchFamily = <T extends { id: string; displayLabel: string; manualLabel?: string | null }>(
+      family: T
+    ): T =>
+      family.id === familyId
+        ? {
+            ...family,
+            displayLabel: label.displayLabel,
+            manualLabel: label.manualLabel
+          }
+        : family;
+    const patchCluster = (cluster: RecommendationClusterItem): RecommendationClusterItem =>
+      cluster.family?.id === familyId
+        ? {
+            ...cluster,
+            family: patchFamily(cluster.family)
+          }
+        : cluster;
+    setRecommendationStatus((current) =>
+      current
+        ? {
+            ...current,
+            clusters: {
+              ...current.clusters,
+              families: current.clusters.families
+                ? {
+                    ...current.clusters.families,
+                    topFamilies: current.clusters.families.topFamilies.map(patchFamily),
+                    dominantFamily: current.clusters.families.dominantFamily
+                      ? patchFamily(current.clusters.families.dominantFamily)
+                      : null
+                  }
+                : current.clusters.families,
+              items: current.clusters.items?.map(patchCluster) ?? []
+            }
+          }
+        : current
+    );
+    setAllRecommendationClusters((current) => current.map(patchCluster));
   }
 
   async function handleUpdateClusterLabelLexicon(

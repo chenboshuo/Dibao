@@ -1720,6 +1720,29 @@ describe("server API vertical slice", () => {
         }
       });
 
+      db.prepare("update plugin_schedules set updated_at = ? where plugin_id = ? and task_id = ?").run(
+        4242,
+        "app.dibao.daily-brief",
+        "dailyBrief.generate"
+      );
+      const briefsOnly = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/api/briefs"
+      });
+      expect(briefsOnly.statusCode, briefsOnly.body).toBe(200);
+      expect(briefsOnly.json().data).toMatchObject({
+        latest: null,
+        briefs: []
+      });
+      expect(briefsOnly.json().data.settings).toBeUndefined();
+      expect(briefsOnly.json().data.targets).toBeUndefined();
+      expect(
+        db.prepare("select updated_at from plugin_schedules where plugin_id = ? and task_id = ?").get(
+          "app.dibao.daily-brief",
+          "dailyBrief.generate"
+        )
+      ).toMatchObject({ updated_at: 4242 });
+
       const health = await app.inject({
         method: "GET",
         url: "/api/plugins/app.dibao.daily-brief/health"
@@ -1756,6 +1779,12 @@ describe("server API vertical slice", () => {
         url: "/api/plugins/app.dibao.daily-brief/api/state"
       });
       expect(renamedState.statusCode, renamedState.body).toBe(200);
+      expect(
+        db.prepare("select updated_at from plugin_schedules where plugin_id = ? and task_id = ?").get(
+          "app.dibao.daily-brief",
+          "dailyBrief.generate"
+        )
+      ).toMatchObject({ updated_at: 4242 });
       expect(renamedState.json().data.targets.families).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: "family_ai", label: "AI 产品与开发" })
@@ -3360,6 +3389,9 @@ describe("server API vertical slice", () => {
       expect(transparency.statusCode, transparency.body).toBe(200);
       expect(transparency.json()).toMatchObject({
         data: {
+          clusters: {
+            items: []
+          },
           transparency: {
             algorithmModules: expect.arrayContaining([
               expect.objectContaining({
@@ -3371,6 +3403,24 @@ describe("server API vertical slice", () => {
                 status: "warning"
               })
             ])
+          }
+        }
+      });
+      expect(transparency.body).not.toContain("cluster_overfit_probe");
+
+      const transparencyWithItems = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency?includeClusterItems=true"
+      });
+      expect(transparencyWithItems.statusCode, transparencyWithItems.body).toBe(200);
+      expect(transparencyWithItems.json()).toMatchObject({
+        data: {
+          clusters: {
+            items: [
+              expect.objectContaining({
+                id: "cluster_overfit_probe"
+              })
+            ]
           }
         }
       });
@@ -4652,7 +4702,7 @@ describe("server API vertical slice", () => {
 
       const transparency = await app.inject({
         method: "GET",
-        url: "/api/recommendation/transparency"
+        url: "/api/recommendation/transparency?includeClusterItems=true"
       });
       expect(transparency.statusCode, transparency.body).toBe(200);
       expect(transparency.json()).toMatchObject({

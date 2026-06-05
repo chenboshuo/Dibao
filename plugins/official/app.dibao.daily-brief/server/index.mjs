@@ -29,12 +29,21 @@ export default {
 
     ctx.api.get("/state", () => {
       const settings = readSettings(ctx);
-      ensureSchedule(ctx, settings);
+      const briefs = listBriefs(ctx);
       return {
         settings,
         targets: readTargets(ctx),
-        briefs: listBriefs(ctx),
-        latest: latestBrief(ctx),
+        briefs,
+        latest: latestFromBriefs(briefs),
+        generatedAt: ctx.now()
+      };
+    });
+
+    ctx.api.get("/briefs", () => {
+      const briefs = listBriefs(ctx);
+      return {
+        briefs,
+        latest: latestFromBriefs(briefs),
         generatedAt: ctx.now()
       };
     });
@@ -43,11 +52,12 @@ export default {
       const next = sanitizeSettings(body, readSettings(ctx));
       writeSettings(ctx, next);
       ensureSchedule(ctx, next);
+      const briefs = listBriefs(ctx);
       return {
         settings: next,
         targets: readTargets(ctx),
-        briefs: listBriefs(ctx),
-        latest: latestBrief(ctx)
+        briefs,
+        latest: latestFromBriefs(briefs)
       };
     });
 
@@ -176,8 +186,8 @@ function listBriefs(ctx) {
     .slice(0, 30);
 }
 
-function latestBrief(ctx) {
-  return listBriefs(ctx)[0] ?? null;
+function latestFromBriefs(briefs) {
+  return briefs[0] ?? null;
 }
 
 function pruneBriefs(ctx) {

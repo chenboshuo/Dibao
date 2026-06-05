@@ -10,6 +10,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { verifyPluginPackageSignature, type DibaoPluginSignature } from "@dibao/plugin-sdk";
 import type {
@@ -245,6 +246,15 @@ export type PluginServiceOptions = {
   fetcher?: typeof fetch;
   secretKey?: string;
   now?: () => number;
+  logPerformance?: (record: {
+    route: string;
+    pluginId: string;
+    method: "GET" | "POST";
+    durationMs: number;
+    briefCount?: number;
+    familyCount?: number;
+    clusterCount?: number;
+  }) => void;
 };
 
 type PluginRuntime = {
@@ -815,17 +825,49 @@ export class PluginService {
   }
 
   async dispatchApi(pluginId: string, method: "GET" | "POST", path: string, body: unknown): Promise<unknown> {
+    const startedAt = performance.now();
+    let normalizedPath = "/";
     const install = this.requireInstall(pluginId);
     if (install.status !== "enabled") {
       throw new PluginServiceError(409, "CONFLICT", "Plugin is not enabled");
     }
     const runtime = await this.ensureRuntime(install);
-    const normalizedPath = normalizeApiPath(path);
+    normalizedPath = normalizeApiPath(path);
     const match = matchPluginApiRoute(method === "GET" ? runtime.apiGet : runtime.apiPost, normalizedPath);
     if (!match) {
       throw new PluginServiceError(404, "NOT_FOUND", "Plugin API route not found");
     }
-    return match.handler({ params: match.params, body });
+    try {
+      const result = await match.handler({ params: match.params, body });
+      this.logApiPerformance({
+        route: normalizedPath,
+        pluginId,
+        method,
+        durationMs: roundDuration(performance.now() - startedAt),
+        ...summarizePluginApiResult(result)
+      });
+      return result;
+    } catch (error) {
+      this.logApiPerformance({
+        route: normalizedPath,
+        pluginId,
+        method,
+        durationMs: roundDuration(performance.now() - startedAt)
+      });
+      throw error;
+    }
+  }
+
+  private logApiPerformance(record: {
+    route: string;
+    pluginId: string;
+    method: "GET" | "POST";
+    durationMs: number;
+    briefCount?: number;
+    familyCount?: number;
+    clusterCount?: number;
+  }) {
+    this.options.logPerformance?.(record);
   }
 
   updateSettings(pluginId: string, body: unknown): Record<string, unknown> {
@@ -2758,4 +2800,30 @@ function clampInteger(value: number, min: number, max: number, fallback: number)
     return fallback;
   }
   return Math.min(Math.max(value, min), max);
+}
+
+function roundDuration(value: number): number {
+  return Math.round(Math.max(0, value) * 10) / 10;
+}
+
+function summarizePluginApiResult(result: unknown): {
+  briefCount?: number;
+  familyCount?: number;
+  clusterCount?: number;
+} {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return {};
+  }
+  const record = result as {
+    briefs?: unknown;
+    targets?: {
+      families?: unknown;
+      clusters?: unknown;
+    };
+  };
+  return {
+    ...(Array.isArray(record.briefs) ? { briefCount: record.briefs.length } : {}),
+    ...(Array.isArray(record.targets?.families) ? { familyCount: record.targets.families.length } : {}),
+    ...(Array.isArray(record.targets?.clusters) ? { clusterCount: record.targets.clusters.length } : {})
+  };
 }
