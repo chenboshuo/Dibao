@@ -253,7 +253,7 @@ function sameAppPage(left: AppPage, right: AppPage): boolean {
 }
 
 export function App() {
-  const { t, setLocale } = useI18n();
+  const { locale, t, setLocale } = useI18n();
   const initialRoute = useMemo(
     () => routeFromLocation(defaultAppSettings.ui.defaultHomeView),
     []
@@ -2406,6 +2406,20 @@ export function App() {
         : appPage.type === "algorithm-transparency" || appPage.type === "algorithm-clusters"
           ? t.algorithmTransparency.pageTitle
           : t.shell.pageTitles[currentArticleView];
+  const pageKicker =
+    locale === "en-US"
+      ? null
+      : appPage.type === "feed-management"
+        ? t.feedManagement.kicker
+        : appPage.type === "full-content-preview"
+          ? t.fullContentPreview.kicker
+          : appPage.type === "search"
+            ? t.search.kicker
+            : appPage.type === "settings"
+              ? t.settings.kicker
+              : appPage.type === "algorithm-transparency" || appPage.type === "algorithm-clusters"
+                ? t.algorithmTransparency.kicker
+                : t.shell.pageKickers[currentArticleView];
   const topbarStatus =
     appPage.type === "feed-management"
       ? isFeedsLoading
@@ -2621,7 +2635,7 @@ export function App() {
       <section className={styles.content} aria-labelledby="page-title">
         <header className={styles.topbar}>
           <div>
-            <p className={styles.kicker}>{t.shell.kicker}</p>
+            {pageKicker ? <p className={styles.kicker}>{pageKicker}</p> : null}
             <h1 id="page-title">{pageTitle}</h1>
           </div>
           <div className={styles.topbarMeta}>
@@ -3049,7 +3063,6 @@ export function AuthGatePanel(props: {
         </span>
       </div>
       <div>
-        <p className={styles.kicker}>{t.shell.kicker}</p>
         <h1 id="auth-title">{title}</h1>
         <p>{body}</p>
       </div>
@@ -3663,6 +3676,11 @@ export function SetupProviderPanel(props: {
           step={500}
           value={providerDraft.textMaxChars}
         />
+        {providerDraft.type === "ollama" ? (
+          <p className={styles.managementHint}>
+            {t.settings.sections.provider.ollamaTextMaxCharsHint}
+          </p>
+        ) : null}
 
         <NumberSettingField
           id="setup-provider-qpm"
@@ -4772,6 +4790,11 @@ export function SettingsWorkspace(props: {
               step={500}
               value={providerDraft.textMaxChars}
             />
+            {providerDraft.type === "ollama" ? (
+              <p className={styles.managementHint}>
+                {t.settings.sections.provider.ollamaTextMaxCharsHint}
+              </p>
+            ) : null}
 
             <NumberSettingField
               id="settings-provider-qpm"
@@ -6274,11 +6297,12 @@ export function ArticleListPanel(props: {
   unreadCount: number;
   unreadOnly: boolean;
 }) {
-  const { t, formatDate } = useI18n();
+  const { t, formatDate, formatArticleDate } = useI18n();
   const scrollContainerRef = useRef<HTMLElement>(null);
   const listScrollKey = props.listScrollKey ?? `dibao:list-scroll:${props.articleView}`;
   const sourceTitle =
     props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
+  const isSourceFiltered = props.sourceSelection.type !== "all";
 
   useArticleListIgnoreTelemetry({
     articles: props.articles,
@@ -6308,12 +6332,25 @@ export function ArticleListPanel(props: {
         </div>
         <div className={styles.panelHeaderActions}>
           <button
-            aria-label={t.feeds.openSourcesLabel}
-            className={styles.mobileSourceButton}
+            aria-label={
+              isSourceFiltered
+                ? `${t.feeds.openSourcesLabel}: ${sourceTitle}`
+                : t.feeds.openSourcesLabel
+            }
+            aria-pressed={isSourceFiltered}
+            className={
+              isSourceFiltered
+                ? `${styles.mobileSourceButton} ${styles.mobileSourceButtonActive}`
+                : styles.mobileSourceButton
+            }
             onClick={props.onOpenSources}
+            title={isSourceFiltered ? sourceTitle : undefined}
             type="button"
           >
-            {t.feeds.openSources}
+            <span className={styles.mobileSourceButtonText}>{t.feeds.openSources}</span>
+            {isSourceFiltered ? (
+              <span className={styles.mobileSourceButtonStatus}>{sourceTitle}</span>
+            ) : null}
           </button>
           {props.articleView === "favorites" || props.articleView === "read_later" ? (
             <label
@@ -6436,7 +6473,7 @@ export function ArticleListPanel(props: {
               >
                 <span className={styles.meta}>
                   {t.articles.itemMeta(
-                    formatDate(article.publishedAt ?? article.discoveredAt),
+                    formatArticleDate(article.publishedAt ?? article.discoveredAt),
                     article.feedTitle
                   )}
                 </span>
@@ -6672,7 +6709,7 @@ export function SearchResultsPanel(props: {
   selectedArticleId: string | null;
   unreadCount: number;
 }) {
-  const { t, formatDate } = useI18n();
+  const { t, formatDate, formatArticleDate } = useI18n();
   const [isAdvancedSearchOpen, setIsAdvancedSearchOpen] = useState(false);
 
   function update(patch: Partial<SearchFormState>) {
@@ -6879,7 +6916,7 @@ export function SearchResultsPanel(props: {
               >
                 <span className={styles.meta}>
                   {t.articles.itemMeta(
-                    formatDate(article.publishedAt ?? article.discoveredAt),
+                    formatArticleDate(article.publishedAt ?? article.discoveredAt),
                     article.feedTitle
                   )}
                 </span>
@@ -7185,7 +7222,7 @@ function handleReaderMediaError(event: SyntheticEvent<HTMLDivElement>): void {
   event.target.removeAttribute("srcset");
 }
 
-function ArticleDetailPanel(props: {
+export function ArticleDetailPanel(props: {
   actionError: string | null;
   article: ArticleDetail | null;
   articleView: ArticleView;
@@ -7208,7 +7245,7 @@ function ArticleDetailPanel(props: {
   pendingAction: ArticleActionIntent | null;
   readerSettings: ReaderSettings;
 }) {
-  const { t, formatDate } = useI18n();
+  const { t, formatArticleDate } = useI18n();
   const readerPanelRef = useRef<HTMLElement>(null);
   const safeHtml = useMemo(
     () =>
@@ -7262,7 +7299,9 @@ function ArticleDetailPanel(props: {
             <p>
               {t.reader.meta(
                 props.article.feedTitle,
-                props.article.publishedAt ? formatDate(props.article.publishedAt) : undefined,
+                props.article.publishedAt
+                  ? formatArticleDate(props.article.publishedAt)
+                  : undefined,
                 props.article.author
               )}
             </p>
@@ -8312,7 +8351,7 @@ function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderType) {
       baseUrl: "http://127.0.0.1:11434",
       model: "nomic-embed-text",
       dimension: 768,
-      textMaxChars: 8000
+      textMaxChars: 4000
     };
   }
 

@@ -99,6 +99,7 @@ export class GeminiEmbeddingAdapter implements EmbeddingProviderAdapter {
         body: JSON.stringify({
           requests: texts.map((text) => ({
             model,
+            outputDimensionality: provider.dimension,
             content: {
               parts: [{ text }]
             }

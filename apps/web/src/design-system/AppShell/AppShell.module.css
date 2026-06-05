@@ -448,7 +448,7 @@
 
 .feedManagementSection {
   display: grid;
-  grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -756,12 +756,58 @@
   min-height: 0;
 }
 
-.feedManagementGrid > .managementList,
+.feedManagementListPane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.feedManagementListPane > .opmlSummary {
+  border-bottom: var(--border-default);
+}
+
+.feedListFilters {
+  display: grid;
+  gap: var(--space-2);
+  border-bottom: var(--border-default);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+}
+
+.feedListFilterHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.feedListFilterHeader h3,
+.feedListFilterHeader p {
+  margin: 0;
+}
+
+.feedListFilterHeader h3 {
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.feedListFilterHeader p {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.feedManagementListPane > .managementList,
 .feedManagementGrid > .managementEditor,
 .folderManagementLayout > .managementList {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+.feedManagementListPane > .managementList {
+  flex: 1 1 auto;
 }
 
 .managementFeedItem,
@@ -852,6 +898,43 @@
   overflow-wrap: anywhere;
   color: var(--color-muted);
   font-size: var(--text-xs);
+}
+
+.managementDialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(32 36 33 / 0.2);
+}
+
+.managementDialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: auto;
+  border: var(--border-default);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.managementDialogHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: var(--border-default);
+  padding: var(--space-4);
+  background: var(--color-paper);
+}
+
+.managementDialogHeader h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.25;
 }
 
 .settingsWorkspace {
@@ -2346,6 +2429,44 @@
   justify-content: center;
 }
 
+.mobileSourceButton {
+  min-width: 0;
+  max-width: min(280px, 42vw);
+  gap: var(--space-1);
+}
+
+.mobileSourceButtonActive {
+  border-color: var(--color-pine);
+  background: var(--color-pine-soft);
+  color: var(--color-pine);
+}
+
+.mobileSourceButtonText,
+.mobileSourceButtonStatus {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileSourceButtonStatus {
+  max-width: 160px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-size: var(--text-xs);
+}
+
+.mobileSourceButtonStatus::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+}
+
 .feedList > .mobileSourceCloseButton {
   width: calc(100% - var(--space-6));
   margin: var(--space-3);
@@ -3207,6 +3328,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .feedListFilterHeader {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .managementEditor {
     border-top: var(--border-default);
     border-left: 0;
@@ -3463,7 +3588,8 @@
     overflow: visible;
   }
 
-  .feedManagementGrid > .managementList,
+  .feedManagementListPane,
+  .feedManagementListPane > .managementList,
   .feedManagementGrid > .managementEditor,
   .folderManagementLayout > .managementList,
   .managementSection {
@@ -3682,6 +3808,14 @@
     min-height: 32px;
     padding-inline: var(--space-2);
     font-size: 12px;
+  }
+
+  .mobileSourceButton {
+    max-width: 48vw;
+  }
+
+  .mobileSourceButtonStatus {
+    max-width: 24vw;
   }
 
   .articleItem,

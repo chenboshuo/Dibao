@@ -60,7 +60,7 @@ describe("server API vertical slice", () => {
           database: "ok",
           fts: "ok",
           vectorStore: "ok",
-          version: "0.1.2"
+          version: "0.1.3"
         }
       });
     } finally {
@@ -1336,6 +1336,7 @@ describe("server API vertical slice", () => {
             baseUrl: "http://127.0.0.1:11434",
             model: "nomic-embed-text",
             dimension: 3,
+            textMaxChars: 4000,
             enabled: true,
             qualityTier: "basic",
             hasApiKey: false
@@ -1376,6 +1377,7 @@ describe("server API vertical slice", () => {
       apiKey: string | null;
       inputCount: number;
       model: string;
+      outputDimensionality: number | null;
     }> = [];
     const app = buildServer({
       db,
@@ -1436,7 +1438,63 @@ describe("server API vertical slice", () => {
           url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
           apiKey: "gemini-secret",
           inputCount: 1,
-          model: "models/gemini-embedding-001"
+          model: "models/gemini-embedding-001",
+          outputDimensionality: 3
+        }
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("requests configured dimensions for Gemini through OpenAI-compatible providers", async () => {
+    const db = createEmptyDatabase();
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => 1000,
+      embeddingFetcher: googleOpenAiCompatibleEmbeddingFetcherFixture(embeddingCalls)
+    });
+
+    try {
+      const created = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Google AI Studio",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        model: "gemini-embedding-001",
+        dimension: 768,
+        apiKey: "google-secret",
+        enabled: true,
+        qualityTier: "recommended"
+      });
+      expect(created.statusCode, created.body).toBe(200);
+      const providerId = (created.json() as { data: { id: string } }).data.id;
+
+      const test = await app.inject({
+        method: "POST",
+        url: `/api/embedding/providers/${providerId}/test`
+      });
+      expect(test.statusCode, test.body).toBe(200);
+      expect(test.json()).toMatchObject({
+        data: {
+          status: "success",
+          dimension: 768,
+          latencyMs: expect.any(Number)
+        }
+      });
+      expect(embeddingCalls).toEqual([
+        {
+          url: "https://generativelanguage.googleapis.com/v1beta/openai/embeddings",
+          authorization: "Bearer google-secret",
+          inputCount: 1,
+          dimensions: 768
         }
       ]);
     } finally {
@@ -2979,7 +3037,7 @@ describe("server API vertical slice", () => {
       expect(first.statusCode, first.body).toBe(200);
       expect(first.json()).toMatchObject({
         data: {
-          currentVersion: "0.1.2",
+          currentVersion: "0.1.3",
           latestVersion: "v0.2.0",
           releaseUrl: "https://github.com/Pls-1q43/Dibao/releases/tag/v0.2.0",
           updateAvailable: true,
@@ -7680,6 +7738,49 @@ function embeddingErrorFetcher(status: number, payload: unknown): typeof fetch {
     });
 }
 
+function googleOpenAiCompatibleEmbeddingFetcherFixture(
+  calls: Array<{
+    url: string;
+    authorization: string | null;
+    inputCount: number;
+    dimensions: number | null;
+  }>
+): typeof fetch {
+  return async (input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      input?: unknown;
+      dimensions?: unknown;
+    };
+    const values = Array.isArray(body.input) ? body.input : [body.input];
+    const dimensions = typeof body.dimensions === "number" ? body.dimensions : 3072;
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url: String(input),
+      authorization: headers.get("authorization"),
+      inputCount: values.length,
+      dimensions: typeof body.dimensions === "number" ? body.dimensions : null
+    });
+
+    return new Response(
+      JSON.stringify({
+        data: values.map((_, index) => ({
+          index,
+          embedding: Array.from(
+            { length: dimensions },
+            (_value, vectorIndex) => vectorIndex + 1
+          )
+        }))
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  };
+}
+
 function ollamaEmbeddingFetcherFixture(
   calls: Array<{ url: string; authorization: string | null; inputCount: number; model: string }>,
   dimension: number
@@ -7713,26 +7814,44 @@ function ollamaEmbeddingFetcherFixture(
 }
 
 function geminiEmbeddingFetcherFixture(
-  calls: Array<{ url: string; apiKey: string | null; inputCount: number; model: string }>,
+  calls: Array<{
+    url: string;
+    apiKey: string | null;
+    inputCount: number;
+    model: string;
+    outputDimensionality: number | null;
+  }>,
   dimension: number
 ): typeof fetch {
   return async (input, init) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as {
-      requests?: Array<{ model?: unknown; content?: { parts?: Array<{ text?: unknown }> } }>;
+      requests?: Array<{
+        model?: unknown;
+        outputDimensionality?: unknown;
+        content?: { parts?: Array<{ text?: unknown }> };
+      }>;
     };
     const requests = Array.isArray(body.requests) ? body.requests : [];
+    const outputDimensionality =
+      typeof requests[0]?.outputDimensionality === "number"
+        ? requests[0].outputDimensionality
+        : null;
     const headers = new Headers(init?.headers);
     calls.push({
       url: String(input),
       apiKey: headers.get("x-goog-api-key"),
       inputCount: requests.length,
-      model: typeof requests[0]?.model === "string" ? requests[0].model : ""
+      model: typeof requests[0]?.model === "string" ? requests[0].model : "",
+      outputDimensionality
     });
 
     return new Response(
       JSON.stringify({
         embeddings: requests.map(() => ({
-          values: Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
+          values: Array.from(
+            { length: outputDimensionality ?? dimension },
+            (_value, vectorIndex) => vectorIndex + 1
+          )
         }))
       }),
       {

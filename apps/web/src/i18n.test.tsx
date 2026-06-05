@@ -5,6 +5,7 @@ import {
   App,
   AlgorithmTransparencyPage,
   ArticleActionControls,
+  ArticleDetailPanel,
   ArticleExplanationEntry,
   ArticleListPanel,
   AuthGatePanel,
@@ -27,7 +28,12 @@ import {
   unreadCountWithKnownLocalStates,
   unreadCountAfterStateChange
 } from "./articleListState.js";
-import { defaultAppSettings, type ArticleListItem, type EmbeddingProvider } from "./api.js";
+import {
+  defaultAppSettings,
+  type ArticleDetail,
+  type ArticleListItem,
+  type EmbeddingProvider
+} from "./api.js";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
 import {
   DibaoI18nProvider,
@@ -58,6 +64,7 @@ describe("web i18n", () => {
     expect(i18n.locale).toBe(defaultLocale);
     expect(i18n.t.errors.api.requestFailed).toBe("请求失败，请稍后重试。");
     expect(i18n.formatDate("2026-05-14T08:00:00.000Z")).not.toBe("2026-05-14T08:00:00.000Z");
+    expect(i18n.formatArticleDate("2026-05-14T08:00:00.000Z")).toContain("2026");
   });
 
   it("chooses the initial locale from browser languages when available", () => {
@@ -491,6 +498,8 @@ describe("web i18n", () => {
     expect(articlePanel).toContain("只看未读");
     expect(articlePanel).toContain("全部");
     expect(articlePanel).toContain("加载更多");
+    expect(articlePanel).toContain('aria-label="打开来源: 设计"');
+    expect(articlePanel).toContain('aria-pressed="true"');
     expect(articlePanel).toContain("设计");
   });
 
@@ -650,8 +659,49 @@ describe("web i18n", () => {
     );
 
     expect(html).toContain("摘要 正文 &amp; 线索");
+    expect(html).toContain("2026");
     expect(html).toContain("view=latest&amp;folderId=folder_design&amp;article=article_html_summary");
     expect(html).not.toContain("&lt;strong&gt;");
+  });
+
+  it("renders article detail metadata with the publication year", () => {
+    const article: ArticleDetail = {
+      ...articleListItem("article_detail_year", "unseen"),
+      feedTitle: "Design Feed",
+      title: "Detail with year",
+      author: "Reporter",
+      contentHtml: null,
+      contentText: "Full text",
+      extractionStatus: "success",
+      extractionError: null
+    };
+
+    const html = renderToStaticMarkup(
+      <DibaoI18nProvider>
+        <ArticleDetailPanel
+          actionError={null}
+          article={article}
+          articleView="latest"
+          detailError={null}
+          explanation={null}
+          explanationError={null}
+          isDetailLoading={false}
+          isExplanationLoading={false}
+          isExplanationOpen={false}
+          onArticleAction={() => undefined}
+          onBackToList={() => undefined}
+          onCloseExplanation={() => undefined}
+          onOpenExplanation={() => undefined}
+          onReadProgress={() => undefined}
+          pendingAction={null}
+          readerSettings={defaultAppSettings.reader}
+        />
+      </DibaoI18nProvider>
+    );
+
+    expect(html).toContain("Design Feed");
+    expect(html).toContain("2026");
+    expect(html).toContain("Reporter");
   });
 
   it("only renders row recommendation explain actions for personalized views", () => {
@@ -1041,8 +1091,7 @@ describe("web i18n", () => {
     expect(html).toContain("导入 OPML");
     expect(html).toContain("导出 OPML");
     expect(html).toContain("刷新全部");
-    expect(html).toContain("检查");
-    expect(html).toContain("网站或 RSS / Atom URL");
+    expect(html).toContain("添加订阅源");
     expect(html).toContain("订阅源健康");
     expect(html).toContain("查看文章");
     expect(html).toContain("删除");
@@ -1113,7 +1162,7 @@ describe("web i18n", () => {
     expect(html).toContain("保留天数");
     expect(html).toContain("retention.retentionDays");
     expect(html).toContain("关于");
-    expect(html).toContain("v0.1.2");
+    expect(html).toContain("v0.1.3");
     expect(html).toContain("评论尸");
     expect(html).toContain("https://x.com/JeffreyCalm");
     expect(html).toContain("https://1q43.blog");
