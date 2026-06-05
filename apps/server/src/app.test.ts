@@ -378,6 +378,293 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("runs the official Webhook plugin through settings, events, secrets, and deliveries", async () => {
+    const db = createFixtureDatabase();
+    const received: Array<{ url: string; method: string; authorization: string | null; body: string | null }> = [];
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginSecretKey: "test-plugin-secret-key",
+      pluginFetcher: async (input, init) => {
+        received.push({
+          url: String(input),
+          method: String(init?.method ?? "GET"),
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: init?.body ? String(init.body) : null
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      },
+      backgroundJobs: true,
+      jobRunnerIntervalMs: 1,
+      jobRetryDelayMs: 1,
+      now: Date.now
+    });
+
+    try {
+      const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(catalog.statusCode, catalog.body).toBe(200);
+      expect(catalog.json().data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "app.dibao.webhook",
+            status: "installed",
+            contributes: expect.objectContaining({
+              settingsTabs: [
+                expect.objectContaining({
+                  id: "webhook-settings",
+                  route: "settings"
+                })
+              ]
+            })
+          })
+        ])
+      );
+
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/app.dibao.webhook/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+
+      const contributions = await app.inject({ method: "GET", url: "/api/plugins/contributions" });
+      const webhook = contributions.json().data.find((plugin: { id: string }) => plugin.id === "app.dibao.webhook");
+      expect(webhook.contributions).toMatchObject({
+        primaryNav: [],
+        primaryMobile: [],
+        routes: [],
+        actions: [],
+        setupSteps: [],
+        settingsTabs: [
+          expect.objectContaining({
+            id: "webhook-settings",
+            route: "settings"
+          })
+        ]
+      });
+
+      const secret = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/app.dibao.webhook/api/secrets/webhook.token",
+        { value: "top-secret-token", hint: "top..." }
+      );
+      expect(secret.statusCode, secret.body).toBe(200);
+      expect(secret.body).not.toContain("top-secret-token");
+      expect(secret.json().data.secret).toMatchObject({
+        key: "webhook.token",
+        hasValue: true,
+        hint: "top..."
+      });
+
+      const getRule = await injectJson(app, "POST", "/api/plugins/app.dibao.webhook/api/rules", {
+        name: "GET article test",
+        enabled: true,
+        eventName: "article.created",
+        method: "GET",
+        urlTemplate: "https://hooks.example.test/get",
+        queryTemplate: {
+          event: "{{eventName}}",
+          title: "{{article.title}}"
+        },
+        headers: {},
+        secretHeaders: {},
+        includeContent: false
+      });
+      expect(getRule.statusCode, getRule.body).toBe(200);
+      const getRuleId = getRule.json().data.rules[0].id;
+      const testSend = await injectJson(
+        app,
+        "POST",
+        `/api/plugins/app.dibao.webhook/api/rules/${getRuleId}/test`,
+        {
+          event: { articleId: "article_recent", feedId: "feed_design" }
+        }
+      );
+      expect(testSend.statusCode, testSend.body).toBe(200);
+      const testDeliveryId = testSend.json().data.delivery.id;
+      await waitForCondition(async () => {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/plugins/app.dibao.webhook/deliveries/${testDeliveryId}`
+        });
+        return response.json().data.status === "succeeded";
+      });
+      expect(received.some((request) =>
+        request.method === "GET" &&
+        request.url.includes("event=article.created") &&
+        request.url.includes("title=Dense+reader+interfaces") &&
+        request.body === null
+      )).toBe(true);
+
+      const postRule = await injectJson(app, "POST", "/api/plugins/app.dibao.webhook/api/rules", {
+        name: "POST article action",
+        enabled: true,
+        eventName: "article.actionRecorded",
+        method: "POST",
+        urlTemplate: "https://hooks.example.test/post/{{event.action}}",
+        conditions: [{ path: "event.action", operator: "equals", value: "favorite" }],
+        bodyTemplate: {
+          eventName: "{{eventName}}",
+          title: "{{article.title}}",
+          contentText: "{{article.contentText}}",
+          action: "{{event.action}}"
+        },
+        headers: { "x-rule": "{{ruleId}}" },
+        secretHeaders: {
+          authorization: { key: "webhook.token", prefix: "Bearer " }
+        },
+        includeContent: true
+      });
+      expect(postRule.statusCode, postRule.body).toBe(200);
+
+      const action = await postJson(app, "/api/articles/article_recent/actions", { type: "favorite" });
+      expect(action.statusCode, action.body).toBe(200);
+      await waitForDeferredPostActionWork();
+      await waitForCondition(async () =>
+        Boolean(
+          db.prepare(
+            "select id from plugin_deliveries where plugin_id = ? and method = 'POST' and url = ?"
+          ).get("app.dibao.webhook", "https://hooks.example.test/post/favorite")
+        )
+      );
+      const postDelivery = db.prepare(
+        "select request_json as requestJson from plugin_deliveries where plugin_id = ? and method = 'POST' and url = ?"
+      ).get("app.dibao.webhook", "https://hooks.example.test/post/favorite") as { requestJson: string };
+      expect(JSON.parse(postDelivery.requestJson)).toMatchObject({
+        method: "POST",
+        url: "https://hooks.example.test/post/favorite",
+        body: {
+          eventName: "article.actionRecorded",
+          title: "Dense reader interfaces",
+          contentText: "Reader density without visual clutter.",
+          action: "favorite"
+        },
+        secretHeaders: {
+          authorization: { key: "webhook.token", prefix: "Bearer " }
+        }
+      });
+
+      const state = await app.inject({ method: "GET", url: "/api/plugins/app.dibao.webhook/api/state" });
+      expect(state.statusCode, state.body).toBe(200);
+      expect(state.body).not.toContain("top-secret-token");
+      expect(state.json().data.events).toContain("dailyBrief.generated");
+      expect(state.json().data.deliveries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "POST",
+            url: "https://hooks.example.test/post/favorite"
+          })
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("exposes article snapshots to plugins only with the articles read capability", async () => {
+    const db = createFixtureDatabase();
+    const pluginDataDir = createTempDir();
+    const app = buildServer({ db, logger: false, pluginDataDir });
+
+    try {
+      const noPermissionPackage = JSON.stringify({
+        manifest: {
+          manifestVersion: 1,
+          id: "com.example.no-article-snapshot",
+          name: "No Snapshot Permission",
+          version: "1.0.0",
+          publisher: "Example",
+          dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+          entry: { server: "server/index.mjs" },
+          capabilities: [],
+          contributes: {}
+        },
+        files: {
+          "server/index.mjs": `
+            export function activate(ctx) {
+              ctx.api.post("/snapshot/:id", ({ params }) => ctx.articles.snapshot(params.id));
+            }
+          `
+        }
+      });
+      expect((await injectJson(app, "POST", "/api/plugins/install", { package: noPermissionPackage })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/api/plugins/com.example.no-article-snapshot/enable" })).statusCode).toBe(200);
+      const denied = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.no-article-snapshot/api/snapshot/article_recent",
+        {}
+      );
+      expect(denied.statusCode, denied.body).toBe(403);
+      expect(denied.body).toContain("articles:read");
+
+      const allowedPackage = JSON.stringify({
+        manifest: {
+          manifestVersion: 1,
+          id: "com.example.article-snapshot",
+          name: "Snapshot Permission",
+          version: "1.0.0",
+          publisher: "Example",
+          dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+          entry: { server: "server/index.mjs" },
+          capabilities: ["articles:read"],
+          contributes: {}
+        },
+        files: {
+          "server/index.mjs": `
+            export function activate(ctx) {
+              ctx.api.post("/snapshot/:id", ({ params, body }) =>
+                ctx.articles.snapshot(params.id, { includeContent: body?.includeContent === true })
+              );
+            }
+          `
+        }
+      });
+      expect((await injectJson(app, "POST", "/api/plugins/install", { package: allowedPackage })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/api/plugins/com.example.article-snapshot/enable" })).statusCode).toBe(200);
+
+      const basic = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.article-snapshot/api/snapshot/article_recent",
+        { includeContent: false }
+      );
+      expect(basic.statusCode, basic.body).toBe(200);
+      expect(basic.json().data).toMatchObject({
+        articleId: "article_recent",
+        title: "Dense reader interfaces",
+        feed: { id: "feed_design", title: "Design Notes" }
+      });
+      expect(basic.json().data).not.toHaveProperty("contentText");
+
+      const withContent = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.article-snapshot/api/snapshot/article_recent",
+        { includeContent: true }
+      );
+      expect(withContent.statusCode, withContent.body).toBe(200);
+      expect(withContent.json().data).toMatchObject({
+        contentText: "Reader density without visual clutter.",
+        extractionStatus: "success"
+      });
+
+      db.prepare("update articles set status = 'deleted', deleted_at = ? where id = ?").run(10_000, "article_recent");
+      const deleted = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.article-snapshot/api/snapshot/article_recent",
+        { includeContent: true }
+      );
+      expect(deleted.statusCode, deleted.body).toBe(200);
+      expect(deleted.json().data).toBeNull();
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("rejects plugin packages that subscribe to unknown events", async () => {
     const db = createEmptyDatabase();
     const app = buildServer({ db, logger: false, pluginDataDir: createTempDir() });

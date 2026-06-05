@@ -260,6 +260,11 @@ type PluginApiInput = {
   body: unknown;
 };
 
+type PluginApiRouteMatch = {
+  handler: (input: PluginApiInput) => Promise<unknown> | unknown;
+  params: Record<string, string>;
+};
+
 type PluginRuntimeContributions = {
   routes: Array<{ id: string; title: string; path: string }>;
   primaryNav: Array<{ label: string; route: string; icon?: string; order?: number }>;
@@ -816,11 +821,11 @@ export class PluginService {
     }
     const runtime = await this.ensureRuntime(install);
     const normalizedPath = normalizeApiPath(path);
-    const handler = (method === "GET" ? runtime.apiGet : runtime.apiPost).get(normalizedPath);
-    if (!handler) {
+    const match = matchPluginApiRoute(method === "GET" ? runtime.apiGet : runtime.apiPost, normalizedPath);
+    if (!match) {
       throw new PluginServiceError(404, "NOT_FOUND", "Plugin API route not found");
     }
-    return handler({ params: {}, body });
+    return match.handler({ params: match.params, body });
   }
 
   updateSettings(pluginId: string, body: unknown): Record<string, unknown> {
@@ -1058,6 +1063,10 @@ export class PluginService {
         openableSummary: (articleId: string) => {
           requireCapability("articles:read");
           return this.openableArticleSummary(articleId);
+        },
+        snapshot: (articleId: string, input: { includeContent?: boolean } = {}) => {
+          requireCapability("articles:read");
+          return this.articleSnapshot(articleId, input);
         }
       }
     };
@@ -1417,6 +1426,85 @@ export class PluginService {
   private openableArticleSummary(articleId: string): RankedWinner | null {
     const rows = this.listRankedWinners({ windowMs: 365 * 24 * 60 * 60 * 1000, limit: 250 });
     return rows.find((row) => row.articleId === articleId) ?? null;
+  }
+
+  private articleSnapshot(articleId: string, input: { includeContent?: boolean } = {}): Record<string, unknown> | null {
+    const row = this.options.db
+      .prepare(
+        `
+          select
+            a.id as articleId,
+            a.feed_id as feedId,
+            f.title as feedTitle,
+            a.guid,
+            a.url,
+            a.canonical_url as canonicalUrl,
+            a.title,
+            a.author,
+            a.summary,
+            a.published_at as publishedAt,
+            a.discovered_at as discoveredAt,
+            a.updated_at as updatedAt,
+            ac.content_html as contentHtml,
+            ac.content_text as contentText,
+            coalesce(ac.extraction_status, 'pending') as extractionStatus,
+            ac.extraction_error as extractionError
+          from articles a
+          join feeds f on f.id = a.feed_id
+          left join article_contents ac on ac.article_id = a.id
+          where a.id = ?
+            and a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+        `
+      )
+      .get(articleId) as {
+        articleId: string;
+        feedId: string;
+        feedTitle: string;
+        guid: string | null;
+        url: string;
+        canonicalUrl: string | null;
+        title: string;
+        author: string | null;
+        summary: string | null;
+        publishedAt: number | null;
+        discoveredAt: number;
+        updatedAt: number;
+        contentHtml: string | null;
+        contentText: string | null;
+        extractionStatus: string;
+        extractionError: string | null;
+      } | undefined;
+
+    if (!row) {
+      return null;
+    }
+    const snapshot: Record<string, unknown> = {
+      articleId: row.articleId,
+      feedId: row.feedId,
+      feedTitle: row.feedTitle,
+      guid: row.guid,
+      url: row.url,
+      canonicalUrl: row.canonicalUrl,
+      title: row.title,
+      author: row.author,
+      summary: row.summary,
+      publishedAt: row.publishedAt,
+      discoveredAt: row.discoveredAt,
+      updatedAt: row.updatedAt,
+      feed: {
+        id: row.feedId,
+        title: row.feedTitle
+      }
+    };
+    if (input.includeContent === true) {
+      snapshot.contentHtml = row.contentHtml;
+      snapshot.contentText = row.contentText;
+      snapshot.extractionStatus = row.extractionStatus;
+      snapshot.extractionError = row.extractionError;
+    }
+    return snapshot;
   }
 
   private requireCapability(pluginId: string, capability: string): PluginInstallRow {
@@ -2236,6 +2324,48 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
 function normalizeApiPath(path: string): string {
   const trimmed = path.trim();
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function matchPluginApiRoute(
+  routes: Map<string, (input: PluginApiInput) => Promise<unknown> | unknown>,
+  path: string
+): PluginApiRouteMatch | null {
+  const exact = routes.get(path);
+  if (exact) {
+    return { handler: exact, params: {} };
+  }
+  const pathParts = splitApiPath(path);
+  for (const [pattern, handler] of routes.entries()) {
+    const patternParts = splitApiPath(pattern);
+    if (patternParts.length !== pathParts.length || !patternParts.some((part) => part.startsWith(":"))) {
+      continue;
+    }
+    const params: Record<string, string> = {};
+    let matched = true;
+    for (let index = 0; index < patternParts.length; index += 1) {
+      const patternPart = patternParts[index]!;
+      const pathPart = pathParts[index]!;
+      if (patternPart.startsWith(":")) {
+        const paramName = patternPart.slice(1);
+        if (!paramName || params[paramName] !== undefined) {
+          matched = false;
+          break;
+        }
+        params[paramName] = decodeURIComponent(pathPart);
+      } else if (patternPart !== pathPart) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) {
+      return { handler, params };
+    }
+  }
+  return null;
+}
+
+function splitApiPath(path: string): string[] {
+  return normalizeApiPath(path).split("/").filter(Boolean);
 }
 
 function errorMessage(error: unknown): string {
