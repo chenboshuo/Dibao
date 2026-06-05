@@ -295,6 +295,21 @@ type PluginTaskRunParams = {
   runId: string;
 };
 
+type PluginSecretParams = {
+  id: string;
+  key: string;
+};
+
+type PluginDeliveryParams = {
+  id: string;
+  deliveryId: string;
+};
+
+type PluginDeliveryQuery = {
+  status?: string;
+  limit?: string;
+};
+
 type PluginApiParams = {
   id: string;
   "*": string;
@@ -406,6 +421,7 @@ type BuildServerOptions = {
   pluginFetcher?: typeof fetch;
   officialPluginsDir?: string;
   pluginDataDir?: string;
+  pluginSecretKey?: string;
   webDistDir?: string | false;
   coreMigrationDeferMs?: number;
   upgradeAutoStart?: boolean;
@@ -504,6 +520,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     getActiveRankContext: () => rankingService.getActiveRankContext(),
     officialPluginsDir: options.officialPluginsDir,
     pluginDataDir: options.pluginDataDir,
+    secretKey: options.pluginSecretKey,
     fetcher: options.pluginFetcher,
     now: options.now
   });
@@ -651,6 +668,30 @@ export function buildServer(options: BuildServerOptions = {}) {
     refreshService: feedRefreshService,
     afterRefresh: (result) => {
       handleEffectiveContentChanged(result.effectiveContentChangedArticleIds);
+      void pluginService.emitHook("feed.refreshCompleted", {
+        feedId: result.feed.id,
+        refreshedAt: options.now?.() ?? Date.now(),
+        articleIds: result.articleIds,
+        createdArticleIds: result.createdArticleIds,
+        updatedArticleIds: result.updatedArticleIds,
+        articlesSeen: result.articlesSeen,
+        articlesCreated: result.articlesCreated,
+        articlesUpdated: result.articlesUpdated
+      }).catch((error) => app.log.error(error));
+      for (const articleId of result.createdArticleIds) {
+        void pluginService.emitHook("article.created", {
+          articleId,
+          feedId: result.feed.id,
+          createdAt: options.now?.() ?? Date.now()
+        }).catch((error) => app.log.error(error));
+      }
+      for (const articleId of result.updatedArticleIds) {
+        void pluginService.emitHook("article.updated", {
+          articleId,
+          feedId: result.feed.id,
+          updatedAt: options.now?.() ?? Date.now()
+        }).catch((error) => app.log.error(error));
+      }
       const maintenanceSettings = settingsService.getSettings().recommendationMaintenance;
       if (
         result.articleIds.length > 0 &&
@@ -1360,6 +1401,63 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.patch<{ Params: PluginParams; Body: unknown }>("/api/plugins/:id/settings", async (request, reply) => {
     try {
       return { data: pluginService.updateSettings(request.params.id, request.body) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginParams }>("/api/plugins/:id/secrets", async (request, reply) => {
+    try {
+      return { data: pluginService.listSecretMetadata(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginSecretParams; Body: unknown }>("/api/plugins/:id/secrets/:key", async (request, reply) => {
+    try {
+      const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+        ? request.body as { value?: unknown; hint?: unknown }
+        : {};
+      return {
+        data: pluginService.setSecret(
+          request.params.id,
+          request.params.key,
+          body.value,
+          typeof body.hint === "string" ? body.hint : null
+        )
+      };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: PluginSecretParams }>("/api/plugins/:id/secrets/:key", async (request, reply) => {
+    try {
+      pluginService.deleteSecret(request.params.id, request.params.key);
+      return { data: { ok: true } };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginParams; Querystring: PluginDeliveryQuery }>("/api/plugins/:id/deliveries", async (request, reply) => {
+    try {
+      const status = isPluginDeliveryStatus(request.query.status) ? request.query.status : undefined;
+      return {
+        data: pluginService.listDeliveries(request.params.id, {
+          status,
+          limit: parseOptionalPositiveInteger(request.query.limit)
+        })
+      };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginDeliveryParams }>("/api/plugins/:id/deliveries/:deliveryId", async (request, reply) => {
+    try {
+      return { data: pluginService.getDelivery(request.params.id, request.params.deliveryId) };
     } catch (error) {
       return sendPluginError(reply, error);
     }
@@ -2792,6 +2890,18 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   }
 
   return parsed;
+}
+
+function parseOptionalPositiveInteger(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function isPluginDeliveryStatus(value: unknown): value is "queued" | "running" | "succeeded" | "failed" | "cancelled" {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
 }
 
 function parseMergeCandidateQuery(query: RecommendationMergeCandidateQuery):

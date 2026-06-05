@@ -162,6 +162,9 @@ describe("db package", () => {
         "plugin_kv",
         "plugin_migrations",
         "plugin_update_checks",
+        "plugin_secrets",
+        "plugin_deliveries",
+        "plugin_delivery_attempts",
         "jobs"
       ]) {
         expect(hasTableOrView(db, name), name).toBe(true);
@@ -185,6 +188,8 @@ describe("db package", () => {
       expect(hasIndex(db, "idx_interest_cluster_calibrations_algorithm")).toBe(true);
       expect(hasIndex(db, "idx_reader_command_events_created_at")).toBe(true);
       expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
+      expect(hasIndex(db, "idx_plugin_deliveries_plugin_status")).toBe(true);
+      expect(hasIndex(db, "idx_plugin_delivery_attempts_delivery")).toBe(true);
     } finally {
       db.close();
     }
@@ -224,7 +229,8 @@ describe("db package", () => {
         "018",
         "019",
         "020",
-        "021"
+        "021",
+        "022"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
       expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
@@ -248,6 +254,9 @@ describe("db package", () => {
       expect(hasColumn(db, "embedding_providers", "requests_per_day")).toBe(true);
       expect(hasColumn(db, "embedding_indexes", "text_max_chars")).toBe(true);
       expect(hasTableOrView(db, "reader_command_events")).toBe(true);
+      expect(hasTableOrView(db, "plugin_secrets")).toBe(true);
+      expect(hasTableOrView(db, "plugin_deliveries")).toBe(true);
+      expect(hasTableOrView(db, "plugin_delivery_attempts")).toBe(true);
 
       db.prepare(
         `
@@ -655,7 +664,8 @@ describe("db package", () => {
         "018",
         "019",
         "020",
-        "021"
+        "021",
+        "022"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -763,6 +773,35 @@ describe("db package", () => {
       plugins.grantCapabilities(manifest.id, manifest.capabilities, 1100);
       plugins.setSetting(manifest.id, "enabledFlag", true, 1200);
       plugins.setKv(manifest.id, "hook:settings.afterUpdated:last", { ok: true }, 1300);
+      plugins.upsertSecret({
+        pluginId: manifest.id,
+        key: "webhook.token",
+        ciphertext: "ciphertext",
+        hint: "tok...",
+        now: 1350
+      });
+      const delivery = plugins.upsertDelivery({
+        id: "delivery_test",
+        pluginId: manifest.id,
+        status: "queued",
+        method: "POST",
+        url: "https://example.com/hook",
+        requestJson: JSON.stringify({ method: "POST" }),
+        idempotencyKey: "once",
+        now: 1360
+      });
+      plugins.insertDeliveryAttempt({
+        id: "attempt_test",
+        deliveryId: delivery.id,
+        attempt: 1,
+        status: "failed",
+        statusCode: 500,
+        durationMs: 12,
+        requestJson: "{}",
+        responseJson: "{}",
+        error: "HTTP 500",
+        now: 1370
+      });
       const updateCheck = plugins.upsertUpdateCheck({
         pluginId: manifest.id,
         latestVersion: "1.1.0",
@@ -779,6 +818,35 @@ describe("db package", () => {
       expect(plugins.listCapabilityGrants(manifest.id)).toEqual(["articles:read"]);
       expect(plugins.listSettings(manifest.id)).toEqual({ enabledFlag: true });
       expect(plugins.getKv(manifest.id, "hook:settings.afterUpdated:last")).toEqual({ ok: true });
+      expect(plugins.listSecrets(manifest.id)).toEqual([
+        expect.objectContaining({
+          key: "webhook.token",
+          hasValue: true,
+          hint: "tok..."
+        })
+      ]);
+      expect(plugins.getSecret(manifest.id, "webhook.token")?.ciphertext).toBe("ciphertext");
+      expect(plugins.findDeliveryByIdempotencyKey(manifest.id, "once")).toMatchObject({
+        id: "delivery_test",
+        status: "queued"
+      });
+      expect(plugins.listDeliveryAttempts("delivery_test")).toEqual([
+        expect.objectContaining({
+          id: "attempt_test",
+          status: "failed",
+          statusCode: 500
+        })
+      ]);
+      expect(plugins.updateDeliveryStatus("delivery_test", {
+        status: "failed",
+        error: "done",
+        finishedAt: 1380,
+        now: 1380
+      })).toMatchObject({
+        status: "failed",
+        error: "done",
+        finishedAt: 1380
+      });
       expect(updateCheck).toMatchObject({
         pluginId: manifest.id,
         latestVersion: "1.1.0",

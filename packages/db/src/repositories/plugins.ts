@@ -1,12 +1,20 @@
 import type {
   DibaoDatabase,
+  InsertPluginDeliveryAttemptInput,
   PluginInstallRow,
   PluginInstallStatus,
+  PluginDeliveryAttemptRow,
+  PluginDeliveryListInput,
+  PluginDeliveryRow,
+  PluginSecretMetadata,
+  PluginSecretRow,
   PluginScheduleRow,
   PluginSourceType,
   PluginTrustLevel,
   PluginUpdateCheckRow,
+  UpsertPluginDeliveryInput,
   UpsertPluginInstallInput,
+  UpsertPluginSecretInput,
   UpsertPluginScheduleInput,
   UpsertPluginUpdateCheckInput
 } from "../types.js";
@@ -56,23 +64,82 @@ type PluginScheduleDbRow = {
   updatedAt: number;
 };
 
+type PluginSecretDbRow = {
+  pluginId: string;
+  key: string;
+  ciphertext: string;
+  hint: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type PluginDeliveryDbRow = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryRow["status"];
+  method: PluginDeliveryRow["method"];
+  url: string;
+  requestJson: string;
+  responseJson: string | null;
+  error: string | null;
+  idempotencyKey: string | null;
+  jobId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+};
+
+type PluginDeliveryAttemptDbRow = {
+  id: string;
+  deliveryId: string;
+  attempt: number;
+  status: PluginDeliveryAttemptRow["status"];
+  statusCode: number | null;
+  durationMs: number | null;
+  requestJson: string;
+  responseJson: string | null;
+  error: string | null;
+  createdAt: number;
+};
+
 export interface PluginRepository {
   deleteInstall(pluginId: string): void;
   deleteKv(pluginId: string, key: string): void;
+  deleteSecret(pluginId: string, key: string): void;
   findInstall(pluginId: string): PluginInstallRow | null;
+  findDelivery(id: string): PluginDeliveryRow | null;
+  findDeliveryByIdempotencyKey(pluginId: string, idempotencyKey: string): PluginDeliveryRow | null;
   getKv<T>(pluginId: string, key: string): T | null;
+  getSecret(pluginId: string, key: string): PluginSecretRow | null;
   getSetting<T>(pluginId: string, key: string): T | null;
   grantCapabilities(pluginId: string, capabilities: string[], now?: number): void;
+  insertDeliveryAttempt(input: InsertPluginDeliveryAttemptInput): PluginDeliveryAttemptRow;
   listCapabilityGrants(pluginId: string): string[];
+  listDeliveryAttempts(deliveryId: string): PluginDeliveryAttemptRow[];
+  listDeliveries(input: PluginDeliveryListInput): PluginDeliveryRow[];
   listDueSchedules(now: number): PluginScheduleRow[];
   listInstalls(): PluginInstallRow[];
   listKvByPrefix<T>(pluginId: string, prefix: string): Array<{ key: string; value: T; updatedAt: number }>;
+  listSecrets(pluginId: string): PluginSecretMetadata[];
   listSettings(pluginId: string): Record<string, unknown>;
   listSchedules(pluginId: string): PluginScheduleRow[];
   setKv(pluginId: string, key: string, value: unknown, now?: number): void;
   setSetting(pluginId: string, key: string, value: unknown, now?: number): void;
   setStatus(pluginId: string, status: PluginInstallStatus, error?: string | null, now?: number): void;
+  updateDeliveryStatus(
+    id: string,
+    input: {
+      status: PluginDeliveryRow["status"];
+      responseJson?: string | null;
+      error?: string | null;
+      jobId?: string | null;
+      finishedAt?: number | null;
+      now?: number;
+    }
+  ): PluginDeliveryRow | null;
+  upsertDelivery(input: UpsertPluginDeliveryInput): PluginDeliveryRow;
   upsertInstall(input: UpsertPluginInstallInput): PluginInstallRow;
+  upsertSecret(input: UpsertPluginSecretInput): PluginSecretMetadata;
   upsertSchedule(input: UpsertPluginScheduleInput): PluginScheduleRow;
   upsertUpdateCheck(input: UpsertPluginUpdateCheckInput): PluginUpdateCheckRow;
 }
@@ -88,6 +155,10 @@ export class SqlitePluginRepository implements PluginRepository {
     this.db.prepare("delete from plugin_kv where plugin_id = ? and key = ?").run(pluginId, key);
   }
 
+  deleteSecret(pluginId: string, key: string): void {
+    this.db.prepare("delete from plugin_secrets where plugin_id = ? and key = ?").run(pluginId, key);
+  }
+
   findInstall(pluginId: string): PluginInstallRow | null {
     const row = this.db
       .prepare(`${basePluginInstallSelect()} where id = ?`)
@@ -95,8 +166,29 @@ export class SqlitePluginRepository implements PluginRepository {
     return row ? mapPluginInstall(row) : null;
   }
 
+  findDelivery(id: string): PluginDeliveryRow | null {
+    const row = this.db
+      .prepare(`${basePluginDeliverySelect()} where id = ?`)
+      .get(id) as PluginDeliveryDbRow | undefined;
+    return row ?? null;
+  }
+
+  findDeliveryByIdempotencyKey(pluginId: string, idempotencyKey: string): PluginDeliveryRow | null {
+    const row = this.db
+      .prepare(`${basePluginDeliverySelect()} where plugin_id = ? and idempotency_key = ?`)
+      .get(pluginId, idempotencyKey) as PluginDeliveryDbRow | undefined;
+    return row ?? null;
+  }
+
   getKv<T>(pluginId: string, key: string): T | null {
     return readJsonRow<T>(this.db, "plugin_kv", pluginId, key);
+  }
+
+  getSecret(pluginId: string, key: string): PluginSecretRow | null {
+    const row = this.db
+      .prepare(`${basePluginSecretSelect()} where plugin_id = ? and key = ?`)
+      .get(pluginId, key) as PluginSecretDbRow | undefined;
+    return row ?? null;
   }
 
   getSetting<T>(pluginId: string, key: string): T | null {
@@ -117,6 +209,40 @@ export class SqlitePluginRepository implements PluginRepository {
     })();
   }
 
+  insertDeliveryAttempt(input: InsertPluginDeliveryAttemptInput): PluginDeliveryAttemptRow {
+    const now = input.now ?? Date.now();
+    this.db
+      .prepare(
+        `
+          insert into plugin_delivery_attempts (
+            id, delivery_id, attempt, status, status_code, duration_ms,
+            request_json, response_json, error, created_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .run(
+        input.id,
+        input.deliveryId,
+        input.attempt,
+        input.status,
+        input.statusCode ?? null,
+        input.durationMs ?? null,
+        input.requestJson,
+        input.responseJson ?? null,
+        input.error ?? null,
+        now
+      );
+
+    const row = this.db
+      .prepare(`${basePluginDeliveryAttemptSelect()} where id = ?`)
+      .get(input.id) as PluginDeliveryAttemptDbRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to insert plugin delivery attempt: ${input.id}`);
+    }
+    return row;
+  }
+
   listCapabilityGrants(pluginId: string): string[] {
     return (
       this.db
@@ -130,6 +256,42 @@ export class SqlitePluginRepository implements PluginRepository {
         )
         .all(pluginId) as Array<{ capability: string }>
     ).map((row) => row.capability);
+  }
+
+  listDeliveryAttempts(deliveryId: string): PluginDeliveryAttemptRow[] {
+    return (
+      this.db
+        .prepare(
+          `
+            ${basePluginDeliveryAttemptSelect()}
+            where delivery_id = ?
+            order by attempt, created_at
+          `
+        )
+        .all(deliveryId) as PluginDeliveryAttemptDbRow[]
+    );
+  }
+
+  listDeliveries(input: PluginDeliveryListInput): PluginDeliveryRow[] {
+    const conditions = ["plugin_id = ?"];
+    const params: unknown[] = [input.pluginId];
+    if (input.status) {
+      conditions.push("status = ?");
+      params.push(input.status);
+    }
+    const limit = Math.min(Math.max(input.limit ?? 50, 1), 100);
+    return (
+      this.db
+        .prepare(
+          `
+            ${basePluginDeliverySelect()}
+            where ${conditions.join(" and ")}
+            order by updated_at desc, id desc
+            limit ?
+          `
+        )
+        .all(...params, limit) as PluginDeliveryDbRow[]
+    );
   }
 
   listDueSchedules(now: number): PluginScheduleRow[] {
@@ -183,6 +345,20 @@ export class SqlitePluginRepository implements PluginRepository {
       value: JSON.parse(row.valueJson) as T,
       updatedAt: row.updatedAt
     }));
+  }
+
+  listSecrets(pluginId: string): PluginSecretMetadata[] {
+    return (
+      this.db
+        .prepare(
+          `
+            ${basePluginSecretSelect()}
+            where plugin_id = ?
+            order by key
+          `
+        )
+        .all(pluginId) as PluginSecretDbRow[]
+    ).map(mapPluginSecretMetadata);
   }
 
   listSettings(pluginId: string): Record<string, unknown> {
@@ -243,6 +419,93 @@ export class SqlitePluginRepository implements PluginRepository {
       .run(status, error, status, now, status, now, now, pluginId);
   }
 
+  updateDeliveryStatus(
+    id: string,
+    input: {
+      status: PluginDeliveryRow["status"];
+      responseJson?: string | null;
+      error?: string | null;
+      jobId?: string | null;
+      finishedAt?: number | null;
+      now?: number;
+    }
+  ): PluginDeliveryRow | null {
+    const now = input.now ?? Date.now();
+    const existing = this.findDelivery(id);
+    if (!existing) {
+      return null;
+    }
+    this.db
+      .prepare(
+        `
+          update plugin_deliveries
+          set
+            status = ?,
+            response_json = ?,
+            error = ?,
+            job_id = ?,
+            finished_at = ?,
+            updated_at = ?
+          where id = ?
+        `
+      )
+      .run(
+        input.status,
+        input.responseJson === undefined ? existing.responseJson : input.responseJson,
+        input.error === undefined ? existing.error : input.error,
+        input.jobId === undefined ? existing.jobId : input.jobId,
+        input.finishedAt === undefined ? existing.finishedAt : input.finishedAt,
+        now,
+        id
+      );
+    return this.findDelivery(id);
+  }
+
+  upsertDelivery(input: UpsertPluginDeliveryInput): PluginDeliveryRow {
+    const now = input.now ?? Date.now();
+    this.db
+      .prepare(
+        `
+          insert into plugin_deliveries (
+            id, plugin_id, status, method, url, request_json, response_json,
+            error, idempotency_key, job_id, created_at, updated_at, finished_at
+          )
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(id) do update set
+            status = excluded.status,
+            method = excluded.method,
+            url = excluded.url,
+            request_json = excluded.request_json,
+            response_json = excluded.response_json,
+            error = excluded.error,
+            idempotency_key = excluded.idempotency_key,
+            job_id = excluded.job_id,
+            updated_at = excluded.updated_at,
+            finished_at = excluded.finished_at
+        `
+      )
+      .run(
+        input.id,
+        input.pluginId,
+        input.status,
+        input.method,
+        input.url,
+        input.requestJson,
+        input.responseJson ?? null,
+        input.error ?? null,
+        input.idempotencyKey ?? null,
+        input.jobId ?? null,
+        now,
+        now,
+        input.finishedAt ?? null
+      );
+    const row = this.findDelivery(input.id);
+    if (!row) {
+      throw new Error(`Failed to upsert plugin delivery: ${input.id}`);
+    }
+    return row;
+  }
+
   upsertInstall(input: UpsertPluginInstallInput): PluginInstallRow {
     const now = input.now ?? Date.now();
     const existing = this.findInstall(input.id);
@@ -298,6 +561,28 @@ export class SqlitePluginRepository implements PluginRepository {
       throw new Error(`Failed to upsert plugin install: ${input.id}`);
     }
     return install;
+  }
+
+  upsertSecret(input: UpsertPluginSecretInput): PluginSecretMetadata {
+    const now = input.now ?? Date.now();
+    const existing = this.getSecret(input.pluginId, input.key);
+    this.db
+      .prepare(
+        `
+          insert into plugin_secrets (plugin_id, key, ciphertext, hint, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)
+          on conflict(plugin_id, key) do update set
+            ciphertext = excluded.ciphertext,
+            hint = excluded.hint,
+            updated_at = excluded.updated_at
+        `
+      )
+      .run(input.pluginId, input.key, input.ciphertext, input.hint ?? null, existing?.createdAt ?? now, now);
+    const row = this.getSecret(input.pluginId, input.key);
+    if (!row) {
+      throw new Error(`Failed to upsert plugin secret: ${input.pluginId}:${input.key}`);
+    }
+    return mapPluginSecretMetadata(row);
   }
 
   upsertSchedule(input: UpsertPluginScheduleInput): PluginScheduleRow {
@@ -441,6 +726,56 @@ function basePluginScheduleSelect(): string {
   `;
 }
 
+function basePluginSecretSelect(): string {
+  return `
+    select
+      plugin_id as pluginId,
+      key,
+      ciphertext,
+      hint,
+      created_at as createdAt,
+      updated_at as updatedAt
+    from plugin_secrets
+  `;
+}
+
+function basePluginDeliverySelect(): string {
+  return `
+    select
+      id,
+      plugin_id as pluginId,
+      status,
+      method,
+      url,
+      request_json as requestJson,
+      response_json as responseJson,
+      error,
+      idempotency_key as idempotencyKey,
+      job_id as jobId,
+      created_at as createdAt,
+      updated_at as updatedAt,
+      finished_at as finishedAt
+    from plugin_deliveries
+  `;
+}
+
+function basePluginDeliveryAttemptSelect(): string {
+  return `
+    select
+      id,
+      delivery_id as deliveryId,
+      attempt,
+      status,
+      status_code as statusCode,
+      duration_ms as durationMs,
+      request_json as requestJson,
+      response_json as responseJson,
+      error,
+      created_at as createdAt
+    from plugin_delivery_attempts
+  `;
+}
+
 function mapPluginInstall(row: PluginInstallDbRow): PluginInstallRow {
   return {
     ...row,
@@ -453,6 +788,17 @@ function mapPluginSchedule(row: PluginScheduleDbRow): PluginScheduleRow {
   return {
     ...row,
     enabled: row.enabled === 1
+  };
+}
+
+function mapPluginSecretMetadata(row: PluginSecretDbRow): PluginSecretMetadata {
+  return {
+    pluginId: row.pluginId,
+    key: row.key,
+    hasValue: Boolean(row.ciphertext),
+    hint: row.hint,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   };
 }
 

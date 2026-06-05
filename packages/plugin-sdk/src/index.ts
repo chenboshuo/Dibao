@@ -15,6 +15,70 @@ export type DibaoPluginPackage = {
   signature?: DibaoPluginSignature;
 };
 
+export const dibaoPluginCapabilities = [
+  "articles:read",
+  "articles:write",
+  "feeds:read",
+  "feeds:write",
+  "ranking:read",
+  "ranking:write",
+  "settings:plugin",
+  "settings:core:read",
+  "settings:core:write",
+  "jobs:read",
+  "jobs:write",
+  "database:plugin",
+  "network:outbound",
+  "secrets:plugin",
+  "deliveries:read",
+  "deliveries:write",
+  "files:plugin-data",
+  "telemetry:emit"
+] as const;
+
+export type DibaoPluginCapability = typeof dibaoPluginCapabilities[number];
+
+export const dibaoPluginEvents = [
+  "article.created",
+  "article.updated",
+  "article.actionRecorded",
+  "feed.refreshCompleted",
+  "ranking.afterRanked",
+  "settings.afterUpdated",
+  "plugin.taskSucceeded",
+  "plugin.taskFailed",
+  "maintenance.tick",
+  "dailyBrief.generated"
+] as const;
+
+export type DibaoPluginEvent = typeof dibaoPluginEvents[number];
+
+export type DibaoPluginSecretMetadata = {
+  key: string;
+  hasValue: boolean;
+  hint: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DibaoPluginDeliveryStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type DibaoPluginDelivery = {
+  id: string;
+  pluginId: string;
+  status: DibaoPluginDeliveryStatus;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  url: string;
+  request: unknown;
+  response: unknown;
+  error: string | null;
+  idempotencyKey: string | null;
+  jobId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
+
 export type DibaoPluginValidationResult =
   | { ok: true }
   | { ok: false; errors: string[] };
@@ -107,6 +171,19 @@ export function validatePluginPackage(pluginPackage: DibaoPluginPackage): DibaoP
     for (const entryPath of [entry?.server, entry?.web]) {
       if (typeof entryPath === "string" && pluginPackage.files && !Object.hasOwn(pluginPackage.files, entryPath)) {
         errors.push(`entry file is missing: ${entryPath}`);
+      }
+    }
+    const capabilities = Array.isArray(manifest.capabilities) ? manifest.capabilities : [];
+    for (const capability of capabilities) {
+      if (typeof capability !== "string" || !dibaoPluginCapabilities.includes(capability as DibaoPluginCapability)) {
+        errors.push(`manifest.capabilities contains unsupported capability: ${String(capability)}`);
+      }
+    }
+    const contributes = manifest.contributes as Record<string, unknown> | undefined;
+    const hooks = Array.isArray(contributes?.hooks) ? contributes.hooks : [];
+    for (const hook of hooks) {
+      if (typeof hook !== "string" || !dibaoPluginEvents.includes(hook as DibaoPluginEvent)) {
+        errors.push(`manifest.contributes.hooks contains unsupported event: ${String(hook)}`);
       }
     }
   }

@@ -3197,6 +3197,31 @@ async function handlePluginBridgeRequest(
           ? input.settings as Record<string, unknown>
           : input
       );
+    case "listPluginSecrets":
+      return await dibaoApi.listPluginSecrets(plugin.id);
+    case "setPluginSecret":
+      if (typeof input.key !== "string" || typeof input.value !== "string") {
+        throw new Error("key and value are required");
+      }
+      return await dibaoApi.setPluginSecret(plugin.id, input.key, {
+        value: input.value,
+        hint: typeof input.hint === "string" ? input.hint : null
+      });
+    case "deletePluginSecret":
+      if (typeof input.key !== "string") {
+        throw new Error("key is required");
+      }
+      return await dibaoApi.deletePluginSecret(plugin.id, input.key);
+    case "listPluginDeliveries":
+      return await dibaoApi.listPluginDeliveries(plugin.id, {
+        status: isPluginDeliveryStatus(input.status) ? input.status : undefined,
+        limit: typeof input.limit === "number" ? input.limit : undefined
+      });
+    case "getPluginDelivery":
+      if (typeof input.deliveryId !== "string") {
+        throw new Error("deliveryId is required");
+      }
+      return await dibaoApi.getPluginDelivery(plugin.id, input.deliveryId);
     case "startTask":
       if (typeof input.taskId !== "string") {
         throw new Error("taskId is required");
@@ -3234,6 +3259,10 @@ function isArticleView(value: unknown): value is ArticleView {
 }
 
 function isPluginJobStatus(value: unknown): value is JobListItem["status"] {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
+}
+
+function isPluginDeliveryStatus(value: unknown): value is "queued" | "running" | "succeeded" | "failed" | "cancelled" {
   return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
 }
 

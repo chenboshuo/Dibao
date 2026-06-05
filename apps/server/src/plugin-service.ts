@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -16,11 +16,15 @@ import type {
   DibaoDatabase,
   JobRepository,
   JobRow,
+  PluginDeliveryMethod,
+  PluginDeliveryRow,
+  PluginDeliveryStatus,
   PluginInstallRow,
   PluginRepository,
+  PluginSecretMetadata,
   PluginScheduleRow
 } from "@dibao/db";
-import type { JobHandler } from "./job-runner.js";
+import { PermanentJobFailure, type JobHandler } from "./job-runner.js";
 
 export const PLUGIN_CAPABILITIES = [
   "articles:read",
@@ -36,14 +40,35 @@ export const PLUGIN_CAPABILITIES = [
   "jobs:write",
   "database:plugin",
   "network:outbound",
+  "secrets:plugin",
+  "deliveries:read",
+  "deliveries:write",
   "files:plugin-data",
   "telemetry:emit"
 ] as const;
 
 const PLUGIN_CAPABILITY_SET = new Set<string>(PLUGIN_CAPABILITIES);
+export const PLUGIN_EVENT_CATALOG = [
+  "article.created",
+  "article.updated",
+  "article.actionRecorded",
+  "feed.refreshCompleted",
+  "ranking.afterRanked",
+  "settings.afterUpdated",
+  "plugin.taskSucceeded",
+  "plugin.taskFailed",
+  "maintenance.tick",
+  "dailyBrief.generated"
+] as const;
+const PLUGIN_EVENT_SET = new Set<string>(PLUGIN_EVENT_CATALOG);
 const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/;
 const PLUGIN_SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const PLUGIN_HOOK_TIMEOUT_MS = 2_000;
+const PLUGIN_DELIVERY_TASK_ID = "__delivery";
+const PLUGIN_OUTBOUND_TIMEOUT_MS = 10_000;
+const PLUGIN_OUTBOUND_MAX_REQUEST_BYTES = 256 * 1024;
+const PLUGIN_OUTBOUND_MAX_RESPONSE_BYTES = 512 * 1024;
+const PLUGIN_OUTBOUND_MAX_REDIRECTS = 3;
 
 export type PluginManifest = {
   manifestVersion: 1;
@@ -66,6 +91,7 @@ export type PluginManifest = {
     routes?: PluginRouteContribution[];
     actions?: PluginActionContribution[];
     hooks?: string[];
+    events?: string[];
     tasks?: PluginTaskContribution[];
     setupSteps?: PluginSetupStepContribution[];
   };
@@ -217,6 +243,7 @@ export type PluginServiceOptions = {
   officialPluginsDir?: string;
   pluginDataDir?: string;
   fetcher?: typeof fetch;
+  secretKey?: string;
   now?: () => number;
 };
 
@@ -257,6 +284,42 @@ type PluginRuntimeContributions = {
   }>;
 };
 
+export type PluginSecretMetadataItem = Omit<PluginSecretMetadata, "pluginId" | "createdAt" | "updatedAt"> & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PluginDeliveryListItem = Omit<PluginDeliveryRow, "requestJson" | "responseJson" | "createdAt" | "updatedAt" | "finishedAt"> & {
+  request: unknown;
+  response: unknown;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
+
+type PluginOutboundFetchInput = {
+  method?: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  timeoutMs?: number;
+};
+
+type PluginDeliveryEnqueueInput = PluginOutboundFetchInput & {
+  idempotencyKey?: string | null;
+  maxAttempts?: number;
+  secretHeaders?: Record<string, { key: string; prefix?: string }>;
+};
+
+type PluginDeliveryStoredRequest = {
+  method: PluginDeliveryMethod;
+  url: string;
+  headers: Record<string, string>;
+  secretHeaders: Record<string, { key: string; prefix?: string }>;
+  body: unknown;
+  timeoutMs: number;
+};
+
 type PluginTableColumnType = "text" | "integer" | "real" | "boolean" | "json";
 
 type PluginTableColumnDefinition = {
@@ -289,6 +352,8 @@ type PluginTableListInput = {
 export class PluginService {
   private readonly now: () => number;
   private readonly fetcher: typeof fetch;
+  private readonly secretCodec: PluginSecretCodec;
+  private readonly secretKeyStatus: { source: "environment" | "fallback_file" | "ephemeral"; persistent: boolean };
   private readonly runtimes = new Map<string, Promise<PluginRuntime>>();
   readonly officialPluginsDir: string;
   readonly pluginDataDir: string;
@@ -308,6 +373,15 @@ export class PluginService {
     );
     this.installedPluginsDir = join(this.pluginDataDir, "installed");
     this.pluginRuntimeDataDir = join(this.pluginDataDir, "data");
+    const resolvedSecretKey = resolvePluginSecretKey({
+      secretKey: options.secretKey,
+      pluginDataDir: this.pluginDataDir
+    });
+    this.secretCodec = new PluginSecretCodec(resolvedSecretKey.key);
+    this.secretKeyStatus = {
+      source: resolvedSecretKey.source,
+      persistent: resolvedSecretKey.persistent
+    };
   }
 
   async checkUpdate(pluginId: string): Promise<PluginListItem> {
@@ -423,6 +497,7 @@ export class PluginService {
       compatible: isDibaoVersionCompatible(this.options.dibaoVersion, manifest.dibao).ok,
       lastError: install.lastError,
       capabilities: manifest.capabilities,
+      secretKey: this.secretKeyStatus,
       schedules: this.options.plugins.listSchedules(pluginId),
       tasks: manifest.contributes?.tasks ?? []
     };
@@ -431,6 +506,49 @@ export class PluginService {
   getSettings(pluginId: string): Record<string, unknown> {
     this.requireInstall(pluginId);
     return this.options.plugins.listSettings(pluginId);
+  }
+
+  listSecretMetadata(pluginId: string): PluginSecretMetadataItem[] {
+    this.requireCapability(pluginId, "secrets:plugin");
+    return this.options.plugins.listSecrets(pluginId).map(mapPluginSecretMetadataItem);
+  }
+
+  setSecret(pluginId: string, key: string, value: unknown, hint?: string | null): PluginSecretMetadataItem {
+    this.requireCapability(pluginId, "secrets:plugin");
+    const normalizedKey = normalizeSecretKey(key);
+    const plaintext = typeof value === "string" ? value : "";
+    if (!plaintext) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin secret value is required");
+    }
+    const metadata = this.options.plugins.upsertSecret({
+      pluginId,
+      key: normalizedKey,
+      ciphertext: this.secretCodec.encrypt(plaintext),
+      hint: stringOrNull(hint),
+      now: this.now()
+    });
+    return mapPluginSecretMetadataItem(metadata);
+  }
+
+  deleteSecret(pluginId: string, key: string): void {
+    this.requireCapability(pluginId, "secrets:plugin");
+    this.options.plugins.deleteSecret(pluginId, normalizeSecretKey(key));
+  }
+
+  listDeliveries(pluginId: string, input: { status?: PluginDeliveryStatus; limit?: number } = {}): PluginDeliveryListItem[] {
+    this.requireCapability(pluginId, "deliveries:read");
+    return this.options.plugins
+      .listDeliveries({ pluginId, status: input.status, limit: input.limit })
+      .map(mapPluginDeliveryListItem);
+  }
+
+  getDelivery(pluginId: string, deliveryId: string): PluginDeliveryListItem {
+    this.requireCapability(pluginId, "deliveries:read");
+    const delivery = this.options.plugins.findDelivery(deliveryId);
+    if (!delivery || delivery.pluginId !== pluginId) {
+      throw new PluginServiceError(404, "NOT_FOUND", "Plugin delivery not found");
+    }
+    return mapPluginDeliveryListItem(delivery);
   }
 
   handlePluginJob: JobHandler = async (job: JobRow) => {
@@ -442,12 +560,33 @@ export class PluginService {
     if (install.status !== "enabled") {
       throw new Error(`Plugin is not enabled: ${parsed.pluginId}`);
     }
+    if (parsed.taskId === PLUGIN_DELIVERY_TASK_ID) {
+      await this.handleDeliveryJob(parsed.pluginId, job);
+      return;
+    }
     const runtime = await this.ensureRuntime(install);
     const handler = runtime.tasks.get(parsed.taskId);
     if (!handler) {
       throw new Error(`Plugin task is not registered: ${parsed.taskId}`);
     }
-    await handler(job);
+    try {
+      await handler(job);
+      void this.emitHook("plugin.taskSucceeded", {
+        pluginId: parsed.pluginId,
+        taskId: parsed.taskId,
+        jobId: job.id,
+        finishedAt: this.now()
+      });
+    } catch (error) {
+      void this.emitHook("plugin.taskFailed", {
+        pluginId: parsed.pluginId,
+        taskId: parsed.taskId,
+        jobId: job.id,
+        failedAt: this.now(),
+        error: redactText(errorMessage(error))
+      });
+      throw error;
+    }
   };
 
   async installFromPackageContent(
@@ -753,9 +892,28 @@ export class PluginService {
       now: this.now,
       hooks: {
         on: (hook: string, handler: (payload: unknown) => Promise<void> | void) => {
+          if (!PLUGIN_EVENT_SET.has(hook)) {
+            throw new PluginServiceError(400, "VALIDATION_ERROR", `Unknown plugin event: ${hook}`);
+          }
+          if (!(manifest.contributes?.hooks?.includes(hook) ?? false)) {
+            throw new PluginServiceError(403, "FORBIDDEN", `Plugin hook is not declared: ${hook}`);
+          }
           const handlers = runtime.hooks.get(hook) ?? [];
           handlers.push(handler);
           runtime.hooks.set(hook, handlers);
+        }
+      },
+      events: {
+        catalog: () => [...PLUGIN_EVENT_CATALOG],
+        emit: async (event: string, payload: unknown) => {
+          if (!(manifest.contributes?.events?.includes(event) ?? false)) {
+            throw new PluginServiceError(403, "FORBIDDEN", `Plugin event is not declared: ${event}`);
+          }
+          await this.emitHook(event, {
+            pluginId,
+            emittedAt: this.now(),
+            payload
+          });
         }
       },
       tasks: {
@@ -805,6 +963,48 @@ export class PluginService {
         list: () => {
           requireCapability("settings:plugin");
           return this.options.plugins.listSettings(pluginId);
+        }
+      },
+      secrets: {
+        list: () => {
+          requireCapability("secrets:plugin");
+          return this.listSecretMetadata(pluginId);
+        },
+        get: (key: string) => {
+          requireCapability("secrets:plugin");
+          return this.readSecret(pluginId, key);
+        },
+        set: (key: string, value: string, hint?: string | null) => {
+          requireCapability("secrets:plugin");
+          return this.setSecret(pluginId, key, value, hint);
+        },
+        delete: (key: string) => {
+          requireCapability("secrets:plugin");
+          this.deleteSecret(pluginId, key);
+        }
+      },
+      network: {
+        fetch: async (input: PluginOutboundFetchInput) => {
+          requireCapability("network:outbound");
+          return await this.pluginFetch(input);
+        }
+      },
+      deliveries: {
+        enqueue: (input: PluginDeliveryEnqueueInput) => {
+          requireCapability("deliveries:write");
+          return this.enqueueDelivery(pluginId, input);
+        },
+        get: (deliveryId: string) => {
+          requireCapability("deliveries:read");
+          return this.getDelivery(pluginId, deliveryId);
+        },
+        list: (input: { status?: PluginDeliveryStatus; limit?: number } = {}) => {
+          requireCapability("deliveries:read");
+          return this.listDeliveries(pluginId, input);
+        },
+        cancel: (deliveryId: string) => {
+          requireCapability("deliveries:write");
+          return this.cancelDelivery(pluginId, deliveryId);
         }
       },
       database: {
@@ -861,6 +1061,182 @@ export class PluginService {
         }
       }
     };
+  }
+
+  private readSecret(pluginId: string, key: string): string | null {
+    const row = this.options.plugins.getSecret(pluginId, normalizeSecretKey(key));
+    return row ? this.secretCodec.decrypt(row.ciphertext) : null;
+  }
+
+  private async pluginFetch(input: PluginOutboundFetchInput) {
+    return await performPluginFetch({
+      input: normalizeOutboundFetchInput(input),
+      fetcher: this.fetcher
+    });
+  }
+
+  private enqueueDelivery(pluginId: string, input: PluginDeliveryEnqueueInput): PluginDeliveryListItem {
+    const request = normalizeDeliveryRequest(input);
+    if (input.idempotencyKey) {
+      const existing = this.options.plugins.findDeliveryByIdempotencyKey(pluginId, input.idempotencyKey);
+      if (existing) {
+        return mapPluginDeliveryListItem(existing);
+      }
+    }
+
+    const deliveryId = `delivery_${pluginId.replace(/[^a-z0-9]+/gi, "_")}_${randomBytes(6).toString("hex")}`;
+    this.options.plugins.upsertDelivery({
+      id: deliveryId,
+      pluginId,
+      status: "queued",
+      method: request.method,
+      url: request.url,
+      requestJson: JSON.stringify(request),
+      idempotencyKey: input.idempotencyKey ?? null,
+      now: this.now()
+    });
+    const job = this.options.jobs.enqueue({
+      id: `plugin_delivery_${pluginId.replace(/[^a-z0-9]+/gi, "_")}_${randomBytes(6).toString("hex")}`,
+      type: `plugin:${pluginId}:${PLUGIN_DELIVERY_TASK_ID}`,
+      payloadJson: JSON.stringify({ deliveryId }),
+      maxAttempts: Math.min(Math.max(Math.trunc(input.maxAttempts ?? 5), 1), 10),
+      now: this.now()
+    });
+    const delivery = this.options.plugins.updateDeliveryStatus(deliveryId, {
+      status: "queued",
+      jobId: job.id,
+      now: this.now()
+    });
+    if (!delivery) {
+      throw new PluginServiceError(500, "INTERNAL_ERROR", "Failed to create plugin delivery");
+    }
+    return mapPluginDeliveryListItem(delivery);
+  }
+
+  private cancelDelivery(pluginId: string, deliveryId: string): PluginDeliveryListItem {
+    const delivery = this.options.plugins.findDelivery(deliveryId);
+    if (!delivery || delivery.pluginId !== pluginId) {
+      throw new PluginServiceError(404, "NOT_FOUND", "Plugin delivery not found");
+    }
+    if (delivery.jobId) {
+      this.options.jobs.cancel(delivery.jobId, "Cancelled by plugin", this.now());
+    }
+    const updated = this.options.plugins.updateDeliveryStatus(deliveryId, {
+      status: "cancelled",
+      error: "Cancelled by plugin",
+      finishedAt: this.now(),
+      now: this.now()
+    });
+    return mapPluginDeliveryListItem(updated ?? delivery);
+  }
+
+  private async handleDeliveryJob(pluginId: string, job: JobRow): Promise<void> {
+    const payload = parseJsonObject(job.payloadJson);
+    const deliveryId = stringOrNull(payload?.deliveryId);
+    if (!deliveryId) {
+      throw new PermanentJobFailure("Invalid plugin delivery job payload");
+    }
+    const delivery = this.options.plugins.findDelivery(deliveryId);
+    if (!delivery || delivery.pluginId !== pluginId) {
+      throw new PermanentJobFailure("Plugin delivery not found");
+    }
+    if (delivery.status === "cancelled" || delivery.status === "succeeded") {
+      return;
+    }
+    const request = parseDeliveryStoredRequest(delivery.requestJson);
+    this.options.plugins.updateDeliveryStatus(delivery.id, { status: "running", now: this.now() });
+
+    const startedAt = this.now();
+    let attemptRecorded = false;
+    try {
+      const headers = { ...request.headers };
+      for (const [headerName, secretRef] of Object.entries(request.secretHeaders)) {
+        const secret = this.readSecret(pluginId, secretRef.key);
+        if (!secret) {
+          throw new PermanentJobFailure(`Plugin secret not found: ${secretRef.key}`);
+        }
+        headers[headerName] = `${secretRef.prefix ?? ""}${secret}`;
+      }
+      const response = await performPluginFetch({
+        input: {
+          method: request.method,
+          url: request.url,
+          headers,
+          body: request.body,
+          timeoutMs: request.timeoutMs
+        },
+        fetcher: this.fetcher
+      });
+      const durationMs = Math.max(this.now() - startedAt, 0);
+      const responseJson = JSON.stringify(redactedFetchResponse(response));
+      const requestJson = JSON.stringify(redactedDeliveryRequest(request));
+      const ok = response.status >= 200 && response.status < 300;
+      this.options.plugins.insertDeliveryAttempt({
+        id: `attempt_${delivery.id}_${job.attempts}`,
+        deliveryId: delivery.id,
+        attempt: job.attempts,
+        status: ok ? "succeeded" : "failed",
+        statusCode: response.status,
+        durationMs,
+        requestJson,
+        responseJson,
+        error: ok ? null : `HTTP ${response.status}`,
+        now: this.now()
+      });
+      attemptRecorded = true;
+      if (ok) {
+        this.options.plugins.updateDeliveryStatus(delivery.id, {
+          status: "succeeded",
+          responseJson,
+          error: null,
+          finishedAt: this.now(),
+          now: this.now()
+        });
+        return;
+      }
+      const finalAttempt = job.attempts >= job.maxAttempts || (response.status >= 400 && response.status < 500);
+      this.options.plugins.updateDeliveryStatus(delivery.id, {
+        status: finalAttempt ? "failed" : "queued",
+        responseJson,
+        error: `HTTP ${response.status}`,
+        finishedAt: finalAttempt ? this.now() : null,
+        now: this.now()
+      });
+      if (finalAttempt) {
+        throw new PermanentJobFailure(`Plugin delivery failed: HTTP ${response.status}`);
+      }
+      throw new Error(`Plugin delivery failed: HTTP ${response.status}`);
+    } catch (error) {
+      if (error instanceof PermanentJobFailure) {
+        this.options.plugins.updateDeliveryStatus(delivery.id, {
+          status: "failed",
+          error: redactText(error.message),
+          finishedAt: this.now(),
+          now: this.now()
+        });
+        throw error;
+      }
+      const finalAttempt = job.attempts >= job.maxAttempts;
+      if (!attemptRecorded) {
+        this.options.plugins.insertDeliveryAttempt({
+          id: `attempt_${delivery.id}_${job.attempts}`,
+          deliveryId: delivery.id,
+          attempt: job.attempts,
+          status: "failed",
+          durationMs: Math.max(this.now() - startedAt, 0),
+          requestJson: JSON.stringify(redactedDeliveryRequest(request)),
+          error: redactText(errorMessage(error)),
+          now: this.now()
+        });
+      }
+      this.options.plugins.updateDeliveryStatus(delivery.id, {
+        status: finalAttempt ? "failed" : "queued",
+        error: redactText(errorMessage(error)),
+        finishedAt: finalAttempt ? this.now() : null,
+        now: this.now()
+      });
+      throw error;
+    }
   }
 
   private listRankedWinners(input: { windowMs: number; limit: number }): RankedWinner[] {
@@ -1041,6 +1417,15 @@ export class PluginService {
   private openableArticleSummary(articleId: string): RankedWinner | null {
     const rows = this.listRankedWinners({ windowMs: 365 * 24 * 60 * 60 * 1000, limit: 250 });
     return rows.find((row) => row.articleId === articleId) ?? null;
+  }
+
+  private requireCapability(pluginId: string, capability: string): PluginInstallRow {
+    const install = this.requireInstall(pluginId);
+    const manifest = parseStoredManifest(install);
+    if (!manifest.capabilities.includes(capability)) {
+      throw new PluginServiceError(403, "FORBIDDEN", `Plugin capability required: ${capability}`);
+    }
+    return install;
   }
 
   private enabledInstallsForHook(hook: string): PluginInstallRow[] {
@@ -1457,6 +1842,17 @@ function parsePluginManifest(input: unknown): PluginManifest {
       throw new PluginServiceError(400, "VALIDATION_ERROR", `Unsupported plugin capability: ${String(capability)}`);
     }
   }
+  const contributes = normalizeContributions(manifest.contributes);
+  for (const hook of contributes.hooks ?? []) {
+    if (!PLUGIN_EVENT_SET.has(hook)) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", `Unsupported plugin hook: ${hook}`);
+    }
+  }
+  for (const event of contributes.events ?? []) {
+    if (!PLUGIN_EVENT_SET.has(event)) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", `Unsupported plugin event: ${event}`);
+    }
+  }
   return {
     manifestVersion: 1,
     id,
@@ -1469,7 +1865,7 @@ function parsePluginManifest(input: unknown): PluginManifest {
     },
     entry: manifest.entry,
     capabilities,
-    contributes: normalizeContributions(manifest.contributes)
+    contributes
   };
 }
 
@@ -1486,6 +1882,9 @@ function normalizeContributions(
     actions: Array.isArray(contributes.actions) ? contributes.actions : [],
     hooks: Array.isArray(contributes.hooks)
       ? contributes.hooks.filter((hook): hook is string => typeof hook === "string")
+      : [],
+    events: Array.isArray(contributes.events)
+      ? contributes.events.filter((event): event is string => typeof event === "string")
       : [],
     tasks: Array.isArray(contributes.tasks) ? contributes.tasks : [],
     setupSteps: Array.isArray(contributes.setupSteps) ? contributes.setupSteps : []
@@ -1841,6 +2240,291 @@ function normalizeApiPath(path: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+class PluginSecretCodec {
+  constructor(private readonly key: Buffer) {}
+
+  encrypt(value: string): string {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+    const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `aes-256-gcm:v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+  }
+
+  decrypt(value: string): string {
+    const [, version, ivText, tagText, encryptedText] = value.split(":");
+    if (version !== "v1" || !ivText || !tagText || !encryptedText) {
+      throw new PluginServiceError(500, "INTERNAL_ERROR", "Plugin secret ciphertext is invalid");
+    }
+    const decipher = createDecipheriv("aes-256-gcm", this.key, Buffer.from(ivText, "base64url"));
+    decipher.setAuthTag(Buffer.from(tagText, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedText, "base64url")),
+      decipher.final()
+    ]).toString("utf8");
+  }
+}
+
+function resolvePluginSecretKey(input: {
+  secretKey?: string;
+  pluginDataDir: string;
+}): { key: Buffer; source: "environment" | "fallback_file" | "ephemeral"; persistent: boolean } {
+  const configured = input.secretKey ?? process.env.DIBAO_PLUGIN_SECRET_KEY;
+  if (configured) {
+    return { key: createHash("sha256").update(configured).digest(), source: "environment", persistent: true };
+  }
+
+  const keyDir = join(input.pluginDataDir, "secrets");
+  const keyPath = join(keyDir, "plugin-secret.key");
+  if (existsSync(keyPath)) {
+    return { key: createHash("sha256").update(readFileSync(keyPath, "utf8").trim()).digest(), source: "fallback_file", persistent: true };
+  }
+  const generated = randomBytes(32).toString("base64url");
+  try {
+    mkdirSync(keyDir, { recursive: true });
+    writeFileSync(keyPath, `${generated}\n`, { mode: 0o600 });
+    return { key: createHash("sha256").update(generated).digest(), source: "fallback_file", persistent: true };
+  } catch {
+    // Read-only deployments and tests can still boot; configured env keys remain preferred for durable secrets.
+  }
+  return { key: createHash("sha256").update(generated).digest(), source: "ephemeral", persistent: false };
+}
+
+function normalizeSecretKey(key: string): string {
+  const normalized = key.trim();
+  if (!/^[a-zA-Z0-9_.:-]{1,128}$/u.test(normalized)) {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin secret key is invalid");
+  }
+  return normalized;
+}
+
+function normalizeOutboundFetchInput(input: PluginOutboundFetchInput): Required<PluginOutboundFetchInput> {
+  if (!input || typeof input !== "object") {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin network request is required");
+  }
+  const method = normalizeDeliveryMethod(input.method ?? "GET");
+  const url = normalizePluginOutboundUrl(input.url);
+  const headers = normalizeHeaders(input.headers ?? {});
+  const timeoutMs = Math.min(Math.max(Math.trunc(input.timeoutMs ?? PLUGIN_OUTBOUND_TIMEOUT_MS), 500), 30_000);
+  return { method, url, headers, body: input.body ?? null, timeoutMs };
+}
+
+function normalizeDeliveryRequest(input: PluginDeliveryEnqueueInput): PluginDeliveryStoredRequest {
+  const normalized = normalizeOutboundFetchInput(input);
+  for (const headerName of Object.keys(normalized.headers)) {
+    if (isSensitiveHeader(headerName)) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", "Sensitive delivery headers must reference plugin secrets");
+    }
+  }
+  const secretHeaders: Record<string, { key: string; prefix?: string }> = {};
+  for (const [headerName, value] of Object.entries(input.secretHeaders ?? {})) {
+    const normalizedHeaderName = normalizeHeaderName(headerName);
+    secretHeaders[normalizedHeaderName] = {
+      key: normalizeSecretKey(value.key),
+      prefix: typeof value.prefix === "string" ? value.prefix : undefined
+    };
+  }
+  return {
+    method: normalized.method as PluginDeliveryMethod,
+    url: normalized.url,
+    headers: normalized.headers,
+    secretHeaders,
+    body: normalized.body,
+    timeoutMs: normalized.timeoutMs
+  };
+}
+
+function normalizeDeliveryMethod(method: string): PluginDeliveryMethod {
+  const normalized = method.toUpperCase();
+  if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(normalized)) {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin request method is unsupported");
+  }
+  return normalized as PluginDeliveryMethod;
+}
+
+function normalizePluginOutboundUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin request URL is invalid");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin request URL must use HTTP or HTTPS");
+  }
+  return url.toString();
+}
+
+function normalizeHeaders(headers: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    normalized[normalizeHeaderName(name)] = String(value);
+  }
+  return normalized;
+}
+
+function normalizeHeaderName(name: string): string {
+  const normalized = name.trim().toLowerCase();
+  if (!/^[a-z0-9!#$%&'*+.^_`|~-]+$/u.test(normalized)) {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin request header name is invalid");
+  }
+  return normalized;
+}
+
+async function performPluginFetch(input: {
+  input: Required<PluginOutboundFetchInput>;
+  fetcher: typeof fetch;
+  redirects?: number;
+}): Promise<{ ok: boolean; status: number; headers: Record<string, string>; bodyText: string }> {
+  const redirects = input.redirects ?? 0;
+  const body = encodePluginRequestBody(input.input.body);
+  if (body && Buffer.byteLength(body, "utf8") > PLUGIN_OUTBOUND_MAX_REQUEST_BYTES) {
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin request body is too large");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), input.input.timeoutMs);
+  try {
+    const response = await input.fetcher(input.input.url, {
+      method: input.input.method,
+      headers: {
+        ...input.input.headers,
+        ...(body ? { "content-type": input.input.headers["content-type"] ?? "application/json" } : {})
+      },
+      body: body ?? undefined,
+      redirect: "manual",
+      signal: controller.signal
+    });
+    const location = response.headers.get("location");
+    if (isRedirectStatus(response.status) && location) {
+      if (redirects >= PLUGIN_OUTBOUND_MAX_REDIRECTS) {
+        throw new PluginServiceError(502, "PROVIDER_ERROR", "Plugin request exceeded redirect limit");
+      }
+      return await performPluginFetch({
+        input: {
+          ...input.input,
+          url: normalizePluginOutboundUrl(new URL(location, input.input.url).toString())
+        },
+        fetcher: input.fetcher,
+        redirects: redirects + 1
+      });
+    }
+    const contentLength = Number(response.headers.get("content-length") ?? "0");
+    if (contentLength > PLUGIN_OUTBOUND_MAX_RESPONSE_BYTES) {
+      throw new PluginServiceError(502, "PROVIDER_ERROR", "Plugin response is too large");
+    }
+    const bodyText = await response.text();
+    if (Buffer.byteLength(bodyText, "utf8") > PLUGIN_OUTBOUND_MAX_RESPONSE_BYTES) {
+      throw new PluginServiceError(502, "PROVIDER_ERROR", "Plugin response is too large");
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      headers: redactHeaders(Object.fromEntries(response.headers.entries())),
+      bodyText
+    };
+  } catch (error) {
+    if (error instanceof PluginServiceError) {
+      throw error;
+    }
+    throw new PluginServiceError(502, "PROVIDER_ERROR", redactText(errorMessage(error)));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function encodePluginRequestBody(body: unknown): string | null {
+  if (body === null || body === undefined) {
+    return null;
+  }
+  return typeof body === "string" ? body : JSON.stringify(body);
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function parseDeliveryStoredRequest(value: string): PluginDeliveryStoredRequest {
+  const parsed = parseJsonObject(value);
+  if (!parsed) {
+    throw new PermanentJobFailure("Plugin delivery request is invalid");
+  }
+  return normalizeDeliveryRequest(parsed as PluginDeliveryEnqueueInput);
+}
+
+function redactedDeliveryRequest(request: PluginDeliveryStoredRequest): Record<string, unknown> {
+  return {
+    method: request.method,
+    url: request.url,
+    headers: redactHeaders(request.headers),
+    secretHeaders: Object.fromEntries(Object.keys(request.secretHeaders).map((header) => [header, { hasValue: true }])),
+    bodyBytes: Buffer.byteLength(encodePluginRequestBody(request.body) ?? "", "utf8"),
+    timeoutMs: request.timeoutMs
+  };
+}
+
+function redactedFetchResponse(response: { ok: boolean; status: number; headers: Record<string, string>; bodyText: string }): Record<string, unknown> {
+  return {
+    ok: response.ok,
+    status: response.status,
+    headers: redactHeaders(response.headers),
+    bodyPreview: redactText(response.bodyText).slice(0, 2048),
+    bodyBytes: Buffer.byteLength(response.bodyText, "utf8")
+  };
+}
+
+function redactHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name, isSensitiveHeader(name) ? "[redacted]" : redactText(value)])
+  );
+}
+
+function isSensitiveHeader(name: string): boolean {
+  return /authorization|cookie|api[-_]?key|token|secret|signature/iu.test(name);
+}
+
+function redactText(value: string): string {
+  return value.replace(/(authorization|api[-_]?key|token|secret|signature)(["'\s:=]+)([^"',\s]+)/giu, "$1$2[redacted]");
+}
+
+function mapPluginSecretMetadataItem(metadata: PluginSecretMetadata): PluginSecretMetadataItem {
+  return {
+    key: metadata.key,
+    hasValue: metadata.hasValue,
+    hint: metadata.hint,
+    createdAt: new Date(metadata.createdAt).toISOString(),
+    updatedAt: new Date(metadata.updatedAt).toISOString()
+  };
+}
+
+function mapPluginDeliveryListItem(delivery: PluginDeliveryRow): PluginDeliveryListItem {
+  return {
+    id: delivery.id,
+    pluginId: delivery.pluginId,
+    status: delivery.status,
+    method: delivery.method,
+    url: delivery.url,
+    request: safeParseJson(delivery.requestJson),
+    response: safeParseJson(delivery.responseJson),
+    error: delivery.error,
+    idempotencyKey: delivery.idempotencyKey,
+    jobId: delivery.jobId,
+    createdAt: new Date(delivery.createdAt).toISOString(),
+    updatedAt: new Date(delivery.updatedAt).toISOString(),
+    finishedAt: delivery.finishedAt ? new Date(delivery.finishedAt).toISOString() : null
+  };
+}
+
+function safeParseJson(value: string | null): unknown {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

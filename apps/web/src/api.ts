@@ -505,6 +505,7 @@ export type PluginContribution = {
     order?: number;
   }>;
   hooks?: string[];
+  events?: string[];
   tasks?: Array<{
     id: string;
     kind: "foreground" | "background";
@@ -584,6 +585,32 @@ export type PluginTaskRun = {
 };
 
 export type JobListItem = PluginTaskRun;
+
+export type PluginSecretMetadata = {
+  key: string;
+  hasValue: boolean;
+  hint: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PluginDeliveryStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type PluginDelivery = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryStatus;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  url: string;
+  request: unknown;
+  response: unknown;
+  error: string | null;
+  idempotencyKey: string | null;
+  jobId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+};
 
 export type EmbeddingProviderType =
   | "embedded_local"
@@ -1425,6 +1452,66 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
             method: "PATCH",
             body: JSON.stringify(input)
           }
+        )
+      ).data;
+    },
+
+    async listPluginSecrets(pluginId: string): Promise<PluginSecretMetadata[]> {
+      return (
+        await request<PluginSecretMetadata[]>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/secrets`
+        )
+      ).data;
+    },
+
+    async setPluginSecret(
+      pluginId: string,
+      key: string,
+      input: { value: string; hint?: string | null }
+    ): Promise<PluginSecretMetadata> {
+      return (
+        await request<PluginSecretMetadata>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/secrets/${encodeURIComponent(key)}`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
+    },
+
+    async deletePluginSecret(pluginId: string, key: string): Promise<DeleteResponse> {
+      return (
+        await request<DeleteResponse>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/secrets/${encodeURIComponent(key)}`,
+          { method: "DELETE" }
+        )
+      ).data;
+    },
+
+    async listPluginDeliveries(
+      pluginId: string,
+      input: { status?: PluginDeliveryStatus; limit?: number } = {}
+    ): Promise<PluginDelivery[]> {
+      const params = new URLSearchParams();
+      if (input.status) {
+        params.set("status", input.status);
+      }
+      if (input.limit) {
+        params.set("limit", String(input.limit));
+      }
+      const query = params.toString();
+      return (
+        await request<PluginDelivery[]>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/deliveries${query ? `?${query}` : ""}`
+        )
+      ).data;
+    },
+
+    async getPluginDelivery(pluginId: string, deliveryId: string): Promise<PluginDelivery> {
+      return (
+        await request<PluginDelivery>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/deliveries/${encodeURIComponent(deliveryId)}`
         )
       ).data;
     },

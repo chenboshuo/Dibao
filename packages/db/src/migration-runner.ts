@@ -63,6 +63,9 @@ const pluginSchedulesPath = fileURLToPath(
 const interestFamilyLabelsPath = fileURLToPath(
   new URL("../migrations/021_interest_family_labels.sql", import.meta.url)
 );
+const pluginSecretsAndDeliveriesPath = fileURLToPath(
+  new URL("../migrations/022_plugin_secrets_and_deliveries.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -165,6 +168,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "021",
       name: "interest_family_labels",
       sql: readFileSync(interestFamilyLabelsPath, "utf8")
+    },
+    {
+      version: "022",
+      name: "plugin_secrets_and_deliveries",
+      sql: readFileSync(pluginSecretsAndDeliveriesPath, "utf8")
     }
   ];
 }

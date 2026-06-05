@@ -235,6 +235,217 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("supports outbound webhook plugin primitives without exposing secrets", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const receivedAuthorizations: Array<string | null> = [];
+    const packageContent = JSON.stringify({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.webhook",
+        name: "Webhook Primitives",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [
+          "network:outbound",
+          "secrets:plugin",
+          "deliveries:read",
+          "deliveries:write"
+        ],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": `
+          export async function activate(ctx) {
+            ctx.api.post("/network", async ({ body }) => {
+              return await ctx.network.fetch({
+                method: "POST",
+                url: body.url,
+                body: { ok: true },
+                headers: { "x-test": "yes" }
+              });
+            });
+            ctx.api.post("/delivery", ({ body }) => ctx.deliveries.enqueue({
+              method: "POST",
+              url: body.url,
+              body: { event: "article.created" },
+              secretHeaders: {
+                authorization: { key: "webhook.token", prefix: "Bearer " }
+              },
+              idempotencyKey: body.idempotencyKey,
+              maxAttempts: 1
+            }));
+            ctx.api.get("/deliveries", () => ctx.deliveries.list());
+          }
+        `
+      }
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      pluginSecretKey: "test-plugin-secret-key",
+      pluginFetcher: async (_input, init) => {
+        receivedAuthorizations.push(new Headers(init?.headers).get("authorization"));
+        return new Response("delivered", {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        });
+      },
+      backgroundJobs: true,
+      jobRunnerIntervalMs: 1,
+      jobRetryDelayMs: 1,
+      now: Date.now
+    });
+
+    try {
+      expect((await injectJson(app, "POST", "/api/plugins/install", { package: packageContent })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/api/plugins/com.example.webhook/enable" })).statusCode).toBe(200);
+
+      const secret = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/secrets/webhook.token",
+        { value: "secret-token", hint: "sec..." }
+      );
+      expect(secret.statusCode, secret.body).toBe(200);
+      expect(secret.json().data).toMatchObject({
+        key: "webhook.token",
+        hasValue: true,
+        hint: "sec..."
+      });
+      expect(secret.body).not.toContain("secret-token");
+      expect(
+        db.prepare("select ciphertext from plugin_secrets where plugin_id = ? and key = ?")
+          .get("com.example.webhook", "webhook.token")
+      ).not.toEqual({ ciphertext: "secret-token" });
+
+      const network = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/network",
+        { url: "https://hooks.example.test/network" }
+      );
+      expect(network.statusCode, network.body).toBe(200);
+      expect(network.json().data).toMatchObject({ status: 200, bodyText: "delivered" });
+
+      const delivery = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/delivery",
+        { url: "https://hooks.example.test/delivery", idempotencyKey: "event-1" }
+      );
+      expect(delivery.statusCode, delivery.body).toBe(200);
+      expect(delivery.json().data).toMatchObject({
+        status: "queued",
+        idempotencyKey: "event-1"
+      });
+      const duplicateDelivery = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/delivery",
+        { url: "https://hooks.example.test/delivery", idempotencyKey: "event-1" }
+      );
+      expect(duplicateDelivery.statusCode, duplicateDelivery.body).toBe(200);
+      expect(duplicateDelivery.json().data.id).toBe(delivery.json().data.id);
+
+      await waitForCondition(async () => {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/plugins/com.example.webhook/deliveries/${delivery.json().data.id}`
+        });
+        return response.json().data.status === "succeeded";
+      });
+      expect(receivedAuthorizations).toContain("Bearer secret-token");
+
+      const listed = await app.inject({
+        method: "GET",
+        url: "/api/plugins/com.example.webhook/deliveries"
+      });
+      expect(listed.statusCode, listed.body).toBe(200);
+      expect(listed.body).not.toContain("secret-token");
+      expect(listed.json().data[0]).toMatchObject({
+        status: "succeeded",
+        response: expect.objectContaining({
+          status: 200
+        })
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("rejects plugin packages that subscribe to unknown events", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, pluginDataDir: createTempDir() });
+    try {
+      const response = await injectJson(app, "POST", "/api/plugins/install", {
+        package: JSON.stringify({
+          manifest: {
+            manifestVersion: 1,
+            id: "com.example.bad-hooks",
+            name: "Bad Hooks",
+            version: "1.0.0",
+            publisher: "Example",
+            dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+            capabilities: [],
+            contributes: { hooks: ["unknown.event"] }
+          }
+        })
+      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.body).toContain("Unsupported plugin hook");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("enforces outbound network capability at runtime", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir: createTempDir(),
+      pluginFetcher: async () => new Response("ok")
+    });
+    try {
+      const response = await injectJson(app, "POST", "/api/plugins/install", {
+        package: JSON.stringify({
+          manifest: {
+            manifestVersion: 1,
+            id: "com.example.no-network",
+            name: "No Network",
+            version: "1.0.0",
+            publisher: "Example",
+            dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+            entry: { server: "server/index.mjs" },
+            capabilities: [],
+            contributes: {}
+          },
+          files: {
+            "server/index.mjs": `
+              export async function activate(ctx) {
+                ctx.api.post("/network", () => ctx.network.fetch({ url: "https://example.com" }));
+              }
+            `
+          }
+        })
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      await app.inject({ method: "POST", url: "/api/plugins/com.example.no-network/enable" });
+      const denied = await injectJson(app, "POST", "/api/plugins/com.example.no-network/api/network", {});
+      expect(denied.statusCode, denied.body).toBe(403);
+      expect(denied.body).toContain("network:outbound");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("installs plugin packages from update metadata URLs", async () => {
     const db = createEmptyDatabase();
     const pluginDataDir = createTempDir();
@@ -8672,4 +8883,15 @@ function waitForDeferredPostActionWork(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
 }

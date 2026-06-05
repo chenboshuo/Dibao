@@ -48,6 +48,8 @@ export type FeedRefreshResult = {
   jobId: string;
   feed: FeedRow;
   articleIds: string[];
+  createdArticleIds: string[];
+  updatedArticleIds: string[];
   effectiveContentChangedArticleIds: string[];
   articlesSeen: number;
   articlesCreated: number;
@@ -179,6 +181,8 @@ export class FeedRefreshService {
       let articlesCreated = 0;
       let articlesUpdated = 0;
       const articleIds: string[] = [];
+      const createdArticleIds: string[] = [];
+      const updatedArticleIds: string[] = [];
       const records: Array<{
         article: ArticleRow;
         existingContentHash: string | null;
@@ -216,8 +220,10 @@ export class FeedRefreshService {
 
         if (existing) {
           articlesUpdated += 1;
+          updatedArticleIds.push(article.id);
         } else {
           articlesCreated += 1;
+          createdArticleIds.push(article.id);
         }
       }
 
@@ -231,6 +237,8 @@ export class FeedRefreshService {
         jobId: syncJobId(feed.id, fetchedAt),
         feed: updatedFeed,
         articleIds,
+        createdArticleIds,
+        updatedArticleIds,
         records,
         articlesSeen: input.parsed.items.length,
         articlesCreated,
@@ -314,6 +322,8 @@ export class FeedRefreshService {
       jobId: result.jobId,
       feed: updatedFeed,
       articleIds: result.articleIds,
+      createdArticleIds: result.createdArticleIds,
+      updatedArticleIds: result.updatedArticleIds,
       effectiveContentChangedArticleIds,
       articlesSeen: result.articlesSeen,
       articlesCreated: result.articlesCreated,

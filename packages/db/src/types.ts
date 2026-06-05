@@ -174,6 +174,100 @@ export type UpsertPluginUpdateCheckInput = {
   now?: number;
 };
 
+export type PluginSecretRow = {
+  pluginId: string;
+  key: string;
+  ciphertext: string;
+  hint: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type PluginSecretMetadata = {
+  pluginId: string;
+  key: string;
+  hasValue: boolean;
+  hint: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type UpsertPluginSecretInput = {
+  pluginId: string;
+  key: string;
+  ciphertext: string;
+  hint?: string | null;
+  now?: number;
+};
+
+export type PluginDeliveryStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type PluginDeliveryMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export type PluginDeliveryRow = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryStatus;
+  method: PluginDeliveryMethod;
+  url: string;
+  requestJson: string;
+  responseJson: string | null;
+  error: string | null;
+  idempotencyKey: string | null;
+  jobId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+};
+
+export type UpsertPluginDeliveryInput = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryStatus;
+  method: PluginDeliveryMethod;
+  url: string;
+  requestJson: string;
+  responseJson?: string | null;
+  error?: string | null;
+  idempotencyKey?: string | null;
+  jobId?: string | null;
+  finishedAt?: number | null;
+  now?: number;
+};
+
+export type PluginDeliveryListInput = {
+  pluginId: string;
+  status?: PluginDeliveryStatus;
+  limit?: number;
+};
+
+export type PluginDeliveryAttemptStatus = "running" | "succeeded" | "failed";
+
+export type PluginDeliveryAttemptRow = {
+  id: string;
+  deliveryId: string;
+  attempt: number;
+  status: PluginDeliveryAttemptStatus;
+  statusCode: number | null;
+  durationMs: number | null;
+  requestJson: string;
+  responseJson: string | null;
+  error: string | null;
+  createdAt: number;
+};
+
+export type InsertPluginDeliveryAttemptInput = {
+  id: string;
+  deliveryId: string;
+  attempt: number;
+  status: PluginDeliveryAttemptStatus;
+  statusCode?: number | null;
+  durationMs?: number | null;
+  requestJson: string;
+  responseJson?: string | null;
+  error?: string | null;
+  now?: number;
+};
+
 export type ArticleRetentionCandidateRow = {
   articleId: string;
   retainedAt: number;
