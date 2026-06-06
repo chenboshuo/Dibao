@@ -145,6 +145,26 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("serves the Core-owned plugin UI stylesheet", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/plugins/ui.css"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/css");
+      expect(response.body).toContain("body.dibao-plugin");
+      expect(response.body).toContain(".dibao-plugin .button");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("installs and manages plugin packages through the plugin API", async () => {
     const db = createEmptyDatabase();
     const pluginDataDir = createTempDir();

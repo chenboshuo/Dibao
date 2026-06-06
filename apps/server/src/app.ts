@@ -141,6 +141,7 @@ import { JobRunner } from "./job-runner.js";
 import { LatestReleaseService } from "./latest-release-service.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
 import { PluginService, PluginServiceError } from "./plugin-service.js";
+import { pluginUiCss } from "./plugin-ui.js";
 import {
   DEFAULT_PROFILE_DECAY_INTERVAL_MS,
   ProfileDecayJobService,
@@ -2427,6 +2428,13 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
     }
   );
+
+  app.get("/api/plugins/ui.css", async (_request, reply) => {
+    return reply
+      .header("cache-control", "public, max-age=3600")
+      .type("text/css; charset=utf-8")
+      .send(pluginUiCss);
+  });
 
   app.get<{ Params: PluginAssetParams }>("/api/plugins/:id/assets/*", async (request, reply) => {
     try {

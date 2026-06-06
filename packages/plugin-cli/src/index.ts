@@ -72,7 +72,27 @@ function createPlugin(targetDir: string): void {
   writeFileSync(join(targetDir, "server/index.mjs"), "export default { activate() {} };\n");
   writeFileSync(
     join(targetDir, "web/index.html"),
-    "<!doctype html><html><body><h1>Dibao Plugin</h1></body></html>\n"
+    `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dibao Plugin</title>
+    <link rel="stylesheet" href="/api/plugins/ui.css" />
+  </head>
+  <body class="dibao-plugin">
+    <main class="page">
+      <section class="header">
+        <div>
+          <p class="kicker">Plugin</p>
+          <h1>Dibao Plugin</h1>
+          <p>Use Core-provided plugin UI classes for controls, cards, forms, and empty states.</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+`
   );
   console.log(`Created plugin template in ${targetDir}`);
 }

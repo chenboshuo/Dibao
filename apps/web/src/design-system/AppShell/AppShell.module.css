@@ -919,14 +919,17 @@
 
 .pluginSettingsPanel {
   min-height: min(760px, calc(100vh - 210px));
-  align-content: stretch;
+  display: grid;
+}
+
+.pluginSettingsPanel[hidden] {
+  display: none;
 }
 
 .pluginSettingsFrame {
   width: 100%;
-  min-height: 640px;
-  border: var(--border-default);
-  border-radius: var(--radius-md);
+  min-height: min(760px, calc(100vh - 210px));
+  border: 0;
   background: var(--color-surface);
 }
 

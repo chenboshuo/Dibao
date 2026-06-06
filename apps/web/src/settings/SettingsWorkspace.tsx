@@ -1427,18 +1427,14 @@ function PluginSettingsTabPanel(props: {
 
   return (
     <section
-      className={classNames(styles.settingsSection, styles.pluginSettingsPanel, "settings-card")}
+      className={styles.pluginSettingsPanel}
       hidden={!props.active}
       aria-labelledby={`settings-plugin-${props.plugin.id}-${props.tab.id}`}
     >
-      <div>
-        <h3 id={`settings-plugin-${props.plugin.id}-${props.tab.id}`}>{props.tab.label}</h3>
-        <p>{props.plugin.name}</p>
-      </div>
       <iframe
         className={styles.pluginSettingsFrame}
         src={`${baseUrl}?${params.toString()}`}
-        title={`${props.plugin.name} ${props.tab.label}`}
+        title={props.tab.label}
       />
     </section>
   );
