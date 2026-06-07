@@ -69,17 +69,22 @@ export type RetentionCleanupSchedulerOptions = {
 export class RetentionCleanupScheduler {
   private readonly intervalMs: number;
   private interval: ReturnType<typeof setInterval> | null = null;
+  private initialTick: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: RetentionCleanupSchedulerOptions) {
     this.intervalMs = options.intervalMs ?? DEFAULT_RETENTION_CLEANUP_INTERVAL_MS;
   }
 
   start(): void {
-    if (this.interval || this.intervalMs <= 0) {
+    if (this.interval || this.initialTick || this.intervalMs <= 0) {
       return;
     }
 
-    void this.tick().catch((error) => this.options.onError?.(error));
+    this.initialTick = setTimeout(() => {
+      this.initialTick = null;
+      void this.tick().catch((error) => this.options.onError?.(error));
+    }, 0);
+    this.initialTick.unref?.();
     this.interval = setInterval(() => {
       void this.tick().catch((error) => this.options.onError?.(error));
     }, this.intervalMs);
@@ -87,6 +92,10 @@ export class RetentionCleanupScheduler {
   }
 
   stop(): void {
+    if (this.initialTick) {
+      clearTimeout(this.initialTick);
+      this.initialTick = null;
+    }
     if (!this.interval) {
       return;
     }

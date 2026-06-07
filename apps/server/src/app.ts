@@ -421,6 +421,7 @@ type BuildServerOptions = {
   profileDecayIntervalMs?: number;
   recommendationMaintenanceIntervalMs?: number;
   jobRunnerIntervalMs?: number;
+  jobRunnerMaxJobsPerDrain?: number;
   jobRetryDelayMs?: number;
   embeddingFetcher?: typeof fetch;
   fullContentFetcher?: typeof fetch;
@@ -822,6 +823,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const authRequired = options.authRequired ?? true;
   const backgroundJobs = options.backgroundJobs ?? false;
   let maintenanceTickTimer: NodeJS.Timeout | null = null;
+  let maintenanceInitialTickTimer: NodeJS.Timeout | null = null;
 
   const jobRunner = new JobRunner({
     jobs,
@@ -869,6 +871,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     now: options.now,
     pollIntervalMs: options.jobRunnerIntervalMs,
     retryDelayMs: options.jobRetryDelayMs,
+    maxJobsPerDrain: options.jobRunnerMaxJobsPerDrain,
     onError: (error) => app.log.error(error)
   });
   drainDueJobsForPlugins = async () => await jobRunner.drainDue();
@@ -1083,7 +1086,11 @@ export function buildServer(options: BuildServerOptions = {}) {
           .then(() => jobRunner.drainDue())
           .catch((error) => app.log.error(error));
       };
-      emitMaintenanceTick();
+      maintenanceInitialTickTimer = setTimeout(() => {
+        maintenanceInitialTickTimer = null;
+        emitMaintenanceTick();
+      }, 0);
+      maintenanceInitialTickTimer.unref?.();
       maintenanceTickTimer = setInterval(emitMaintenanceTick, intervalMs);
       maintenanceTickTimer.unref?.();
     }
@@ -1127,6 +1134,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (maintenanceTickTimer) {
       clearInterval(maintenanceTickTimer);
       maintenanceTickTimer = null;
+    }
+    if (maintenanceInitialTickTimer) {
+      clearTimeout(maintenanceInitialTickTimer);
+      maintenanceInitialTickTimer = null;
     }
   });
 

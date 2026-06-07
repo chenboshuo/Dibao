@@ -9,6 +9,7 @@ export type JobRunnerOptions = {
   now?: () => number;
   pollIntervalMs?: number;
   retryDelayMs?: number;
+  maxJobsPerDrain?: number;
   onError?: (error: unknown) => void;
 };
 
@@ -30,6 +31,7 @@ export class JobRunner {
   private readonly now: () => number;
   private readonly pollIntervalMs: number;
   private readonly retryDelayMs: number;
+  private readonly maxJobsPerDrain: number;
   private interval: ReturnType<typeof setInterval> | null = null;
   private isDraining = false;
 
@@ -37,6 +39,10 @@ export class JobRunner {
     this.now = options.now ?? Date.now;
     this.pollIntervalMs = options.pollIntervalMs ?? 30_000;
     this.retryDelayMs = options.retryDelayMs ?? 60_000;
+    this.maxJobsPerDrain =
+      options.maxJobsPerDrain && options.maxJobsPerDrain > 0
+        ? Math.floor(options.maxJobsPerDrain)
+        : Number.POSITIVE_INFINITY;
   }
 
   start(): void {
@@ -73,7 +79,7 @@ export class JobRunner {
     let completed = 0;
 
     try {
-      while (await this.runDueOnce()) {
+      while (completed < this.maxJobsPerDrain && (await this.runDueOnce())) {
         completed += 1;
         await yieldToEventLoop();
       }

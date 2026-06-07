@@ -149,6 +149,48 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("limits each drain pass when maxJobsPerDrain is configured", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    const calls: string[] = [];
+
+    try {
+      for (const id of ["job_1", "job_2", "job_3"]) {
+        jobs.enqueue({
+          id,
+          type: "feed_refresh",
+          payloadJson: JSON.stringify({ feedId: id }),
+          maxAttempts: 1,
+          runAfter: 1000,
+          now: 1000
+        });
+      }
+
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          feed_refresh: (job) => {
+            calls.push(job.id);
+          }
+        },
+        maxJobsPerDrain: 2,
+        now: () => 2000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(2);
+      expect(calls).toEqual(["job_1", "job_2"]);
+      expect(jobs.findById("job_1")).toMatchObject({ status: "succeeded" });
+      expect(jobs.findById("job_2")).toMatchObject({ status: "succeeded" });
+      expect(jobs.findById("job_3")).toMatchObject({ status: "queued" });
+
+      await expect(runner.drainDue()).resolves.toBe(1);
+      expect(calls).toEqual(["job_1", "job_2", "job_3"]);
+      expect(jobs.findById("job_3")).toMatchObject({ status: "succeeded" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("fails invalid feed refresh payloads without crashing the runner", async () => {
     const db = createEmptyDatabase();
     const jobs = new SqliteJobRepository(db);
@@ -1121,6 +1163,8 @@ describe("job runner foundation", () => {
     });
 
     scheduler.start();
+    expect(enqueued).toBe(0);
+    expect(drained).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
     scheduler.stop();
 

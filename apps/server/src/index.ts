@@ -10,7 +10,9 @@ const server = buildServer({
     process.env.DIBAO_RETENTION_CLEANUP_INTERVAL_MS
   ),
   profileDecayIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_PROFILE_DECAY_INTERVAL_MS),
-  jobRunnerIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_INTERVAL_MS)
+  jobRunnerIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_INTERVAL_MS),
+  jobRunnerMaxJobsPerDrain:
+    parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_MAX_JOBS_PER_DRAIN) ?? 5
 });
 
 try {
