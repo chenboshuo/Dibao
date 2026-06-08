@@ -1,5 +1,5 @@
-import type { FormEvent, RefObject } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, RefObject, SyntheticEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ArticleDetail, ArticleListItem, ArticleSearchSort, ArticleSearchState, ArticleState, ArticleTimeWindow, ArticleView, FavoriteArticleSort, Feed, FeedDiagnosticItem, FeedFolder, PluginContributions, RankExplanation, RankExplanationReason, ReaderCommandMarkScopeReadPreviewResponse, ReaderSettings, ReadLaterArticleSort, RecommendationStatus } from "../api.js";
 import { useI18n, type Dictionary, type NavigationItemKey } from "../i18n.js";
 import styles from "../design-system/AppShell/AppShell.module.css";
@@ -176,11 +176,12 @@ export function ArticleListPanel(props: {
   unreadCount: number;
   unreadOnly: boolean;
 }) {
-  const { t, formatDate } = useI18n();
+  const { t, formatDate, formatArticleDate } = useI18n();
   const scrollContainerRef = useRef<HTMLElement>(null);
   const listScrollKey = props.listScrollKey ?? `dibao:list-scroll:${props.articleView}`;
   const sourceTitle =
     props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
+  const isSourceFiltered = props.selectedFeed !== null || props.selectedFolder !== null;
 
   useArticleListIgnoreTelemetry({
     articles: props.articles,
@@ -214,12 +215,24 @@ export function ArticleListPanel(props: {
             onRun={(action) => props.onPluginAction?.(action, { slot: action.slot })}
           />
           <button
-            aria-label={t.feeds.openSourcesLabel}
-            className={styles.mobileSourceButton}
+            aria-label={
+              isSourceFiltered
+                ? `${t.feeds.openSourcesLabel}: ${sourceTitle}`
+                : t.feeds.openSourcesLabel
+            }
+            aria-pressed={isSourceFiltered}
+            className={classNames(
+              styles.mobileSourceButton,
+              isSourceFiltered ? styles.mobileSourceButtonActive : null
+            )}
             onClick={props.onOpenSources}
+            title={isSourceFiltered ? sourceTitle : undefined}
             type="button"
           >
-            {t.feeds.openSources}
+            <span className={styles.mobileSourceButtonText}>{t.feeds.openSources}</span>
+            {isSourceFiltered ? (
+              <span className={styles.mobileSourceButtonStatus}>{sourceTitle}</span>
+            ) : null}
           </button>
           {props.articleView === "favorites" || props.articleView === "read_later" ? (
             <label
@@ -345,7 +358,7 @@ export function ArticleListPanel(props: {
               >
                 <span className={styles.meta}>
                   {t.articles.itemMeta(
-                    formatDate(article.publishedAt ?? article.discoveredAt),
+                    formatArticleDate(article.publishedAt ?? article.discoveredAt),
                     article.feedTitle
                   )}
                 </span>
@@ -587,7 +600,7 @@ export function SearchResultsPanel(props: {
   selectedArticleId: string | null;
   unreadCount: number;
 }) {
-  const { t, formatDate } = useI18n();
+  const { t, formatDate, formatArticleDate } = useI18n();
   const [isAdvancedSearchOpen, setIsAdvancedSearchOpen] = useState(false);
 
   function update(patch: Partial<SearchFormState>) {
@@ -794,7 +807,7 @@ export function SearchResultsPanel(props: {
               >
                 <span className={styles.meta}>
                   {t.articles.itemMeta(
-                    formatDate(article.publishedAt ?? article.discoveredAt),
+                    formatArticleDate(article.publishedAt ?? article.discoveredAt),
                     article.feedTitle
                   )}
                 </span>
@@ -1152,6 +1165,37 @@ function articleItemClassName(article: ArticleListItem, selectedArticleId: strin
   return status === "read" || status === "ignored" ? styles.articleItemRead : styles.articleItem;
 }
 
+const ArticleHtmlBody = memo(function ArticleHtmlBody(props: {
+  safeHtml: string | null;
+  fallback: string;
+}) {
+  if (props.safeHtml) {
+    return (
+      <div
+        className={styles.readerBody}
+        dangerouslySetInnerHTML={{ __html: props.safeHtml }}
+        onErrorCapture={handleReaderMediaError}
+      />
+    );
+  }
+
+  return (
+    <div className={styles.readerBody}>
+      <p>{props.fallback}</p>
+    </div>
+  );
+});
+
+function handleReaderMediaError(event: SyntheticEvent<HTMLDivElement>): void {
+  if (!(event.target instanceof HTMLImageElement)) {
+    return;
+  }
+
+  event.target.dataset.dibaoLoadState = "failed";
+  event.target.removeAttribute("src");
+  event.target.removeAttribute("srcset");
+}
+
 export function ArticleDetailPanel(props: {
   actionError: string | null;
   article: ArticleDetail | null;
@@ -1178,7 +1222,7 @@ export function ArticleDetailPanel(props: {
   pluginToolbarActions?: PluginActionButton[];
   readerSettings: ReaderSettings;
 }) {
-  const { t, formatDate } = useI18n();
+  const { t, formatArticleDate } = useI18n();
   const readerPanelRef = useRef<HTMLElement>(null);
   const safeHtml = useMemo(
     () =>
@@ -1232,7 +1276,9 @@ export function ArticleDetailPanel(props: {
             <p>
               {t.reader.meta(
                 props.article.feedTitle,
-                props.article.publishedAt ? formatDate(props.article.publishedAt) : undefined,
+                props.article.publishedAt
+                  ? formatArticleDate(props.article.publishedAt)
+                  : undefined,
                 props.article.author
               )}
             </p>
@@ -1254,16 +1300,10 @@ export function ArticleDetailPanel(props: {
             />
           </header>
 
-          {safeHtml ? (
-            <div
-              className={styles.readerBody}
-              dangerouslySetInnerHTML={{ __html: safeHtml }}
-            />
-          ) : (
-            <div className={styles.readerBody}>
-              <p>{props.article.contentText ?? props.article.summary ?? t.reader.noContent}</p>
-            </div>
-          )}
+          <ArticleHtmlBody
+            fallback={props.article.contentText ?? props.article.summary ?? t.reader.noContent}
+            safeHtml={safeHtml}
+          />
           <ArticleActionControls
             actionError={null}
             article={props.article}

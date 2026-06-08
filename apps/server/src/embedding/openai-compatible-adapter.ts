@@ -6,6 +6,7 @@ import {
   type EmbeddingTestResult,
   type EmbeddingVector
 } from "./types.js";
+import { providerHttpError, providerNetworkError } from "./provider-http-errors.js";
 
 export const OPENAI_COMPATIBLE_TEST_TEXT = "Dibao embedding provider test";
 export const OPENAI_COMPATIBLE_TIMEOUT_MS = 30_000;
@@ -94,10 +95,7 @@ export class OpenAiCompatibleEmbeddingAdapter implements EmbeddingProviderAdapte
           "content-type": "application/json",
           ...(provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {})
         },
-        body: JSON.stringify({
-          model: provider.model,
-          input: texts
-        }),
+        body: JSON.stringify(embeddingRequestBody(provider, texts)),
         signal: controller.signal
       });
 
@@ -105,14 +103,12 @@ export class OpenAiCompatibleEmbeddingAdapter implements EmbeddingProviderAdapte
       const payload = parseJson(text);
 
       if (!response.ok) {
-        throw new EmbeddingProviderError(
-          "Provider request failed",
-          response.status === 429 || response.status >= 500,
-          {
-            status: response.status,
-            body: payload ?? text.slice(0, 500)
-          }
-        );
+        throw providerHttpError({
+          providerLabel: "OpenAI-compatible",
+          status: response.status,
+          payload,
+          text
+        });
       }
 
       return payload;
@@ -121,18 +117,41 @@ export class OpenAiCompatibleEmbeddingAdapter implements EmbeddingProviderAdapte
         throw error;
       }
 
-      throw new EmbeddingProviderError(
-        error instanceof Error && error.name === "AbortError"
-          ? "Provider request timed out"
-          : "Provider request failed",
-        true,
-        {
-          cause: error instanceof Error ? error.message : String(error)
-        }
-      );
+      throw providerNetworkError({ providerLabel: "OpenAI-compatible", error });
     } finally {
       clearTimeout(timeout);
     }
+  }
+}
+
+function embeddingRequestBody(
+  provider: EmbeddingProviderConfig,
+  texts: string[]
+): { model: string; input: string[]; dimensions?: number } {
+  return {
+    model: provider.model,
+    input: texts,
+    ...(shouldRequestOpenAiCompatibleDimensions(provider)
+      ? { dimensions: provider.dimension }
+      : {})
+  };
+}
+
+function shouldRequestOpenAiCompatibleDimensions(provider: EmbeddingProviderConfig): boolean {
+  const model = provider.model.trim().toLowerCase();
+  if (model.startsWith("gemini-embedding")) {
+    return true;
+  }
+
+  if (!provider.baseUrl) {
+    return false;
+  }
+
+  try {
+    const url = new URL(provider.baseUrl);
+    return url.hostname.endsWith("googleapis.com") && url.pathname.includes("/openai");
+  } catch {
+    return false;
   }
 }
 
@@ -149,7 +168,10 @@ function parseOpenAiEmbeddingResponse(
   items: EmbeddingInput[]
 ): EmbeddingVector[] {
   if (!isOpenAiEmbeddingResponse(payload) || !Array.isArray(payload.data)) {
-    throw new EmbeddingProviderError("Provider response must include data array", false);
+    throw new EmbeddingProviderError(
+      "OpenAI-compatible provider returned a malformed response: missing data array",
+      false
+    );
   }
 
   if (payload.data.length !== items.length) {
@@ -165,9 +187,13 @@ function parseOpenAiEmbeddingResponse(
 
   return payload.data.map((item, index) => {
     if (!Array.isArray(item.embedding) || !item.embedding.every(isFiniteNumber)) {
-      throw new EmbeddingProviderError("Provider embedding must be a number array", false, {
-        index
-      });
+      throw new EmbeddingProviderError(
+        "OpenAI-compatible provider returned a malformed response: embedding must be a number array",
+        false,
+        {
+          index
+        }
+      );
     }
 
     return {

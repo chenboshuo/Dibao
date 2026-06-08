@@ -498,6 +498,42 @@
   line-height: 1.25;
 }
 
+.managementDialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(32 36 33 / 0.22);
+}
+
+.managementDialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  display: grid;
+  overflow: auto;
+  border: var(--border-default);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.managementDialogHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: var(--border-default);
+  padding: var(--space-4);
+  background: var(--color-paper);
+}
+
+.managementDialogHeader h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.25;
+}
+
 .managementForm {
   display: grid;
   gap: var(--space-2);
@@ -2426,9 +2462,47 @@
 
 .mobileSourceButton,
 .mobileSourceCloseButton {
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.mobileSourceButton {
+  max-width: min(280px, 42vw);
+  gap: var(--space-1);
+}
+
+.mobileSourceButtonActive {
+  border-color: var(--color-pine);
+  background: var(--color-pine-soft);
+  color: var(--color-pine);
+}
+
+.mobileSourceButtonText,
+.mobileSourceButtonStatus {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileSourceButtonStatus {
+  max-width: 160px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-size: var(--text-xs);
+}
+
+.mobileSourceButtonStatus::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .feedList > .mobileSourceCloseButton {
@@ -3760,6 +3834,14 @@
     min-height: 32px;
     padding-inline: var(--space-2);
     font-size: 12px;
+  }
+
+  .mobileSourceButton {
+    max-width: 48vw;
+  }
+
+  .mobileSourceButtonStatus {
+    max-width: 24vw;
   }
 
   .articleItem,

@@ -2507,8 +2507,12 @@ describe("server API vertical slice", () => {
 
   it("creates, tests, and lists OpenAI-compatible embedding providers", async () => {
     const db = createEmptyDatabase();
-    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
-      [];
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
     const app = buildServer({
       db,
       logger: false,
@@ -2604,7 +2608,8 @@ describe("server API vertical slice", () => {
         {
           url: "https://api.example.com/v1/embeddings",
           authorization: "Bearer secret",
-          inputCount: 1
+          inputCount: 1,
+          dimensions: null
         }
       ]);
     } finally {
@@ -2651,6 +2656,7 @@ describe("server API vertical slice", () => {
             baseUrl: "http://127.0.0.1:11434",
             model: "nomic-embed-text",
             dimension: 3,
+            textMaxChars: 4000,
             enabled: true,
             qualityTier: "basic",
             hasApiKey: false
@@ -2691,6 +2697,7 @@ describe("server API vertical slice", () => {
       apiKey: string | null;
       inputCount: number;
       model: string;
+      outputDimensionality: number | null;
     }> = [];
     const app = buildServer({
       db,
@@ -2751,7 +2758,63 @@ describe("server API vertical slice", () => {
           url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
           apiKey: "gemini-secret",
           inputCount: 1,
-          model: "models/gemini-embedding-001"
+          model: "models/gemini-embedding-001",
+          outputDimensionality: 3
+        }
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("requests configured dimensions for Gemini through OpenAI-compatible providers", async () => {
+    const db = createEmptyDatabase();
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => 1000,
+      embeddingFetcher: embeddingFetcherFixture(embeddingCalls, 3072)
+    });
+
+    try {
+      const created = await postJson(app, "/api/embedding/providers", {
+        type: "openai_compatible",
+        name: "Google AI Studio",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        model: "gemini-embedding-001",
+        dimension: 768,
+        apiKey: "google-secret",
+        enabled: true,
+        qualityTier: "recommended"
+      });
+      expect(created.statusCode, created.body).toBe(200);
+      const providerId = (created.json() as { data: { id: string } }).data.id;
+
+      const test = await app.inject({
+        method: "POST",
+        url: `/api/embedding/providers/${providerId}/test`
+      });
+      expect(test.statusCode, test.body).toBe(200);
+      expect(test.json()).toMatchObject({
+        data: {
+          status: "success",
+          dimension: 768,
+          latencyMs: expect.any(Number)
+        }
+      });
+      expect(embeddingCalls).toEqual([
+        {
+          url: "https://generativelanguage.googleapis.com/v1beta/openai/embeddings",
+          authorization: "Bearer google-secret",
+          inputCount: 1,
+          dimensions: 768
         }
       ]);
     } finally {
@@ -2822,8 +2885,12 @@ describe("server API vertical slice", () => {
 
   it("records provider test failures without storing errors on indexes", async () => {
     const db = createEmptyDatabase();
-    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
-      [];
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
     const app = buildServer({
       db,
       logger: false,
@@ -2875,6 +2942,171 @@ describe("server API vertical slice", () => {
     } finally {
       await app.close();
       db.close();
+    }
+  });
+
+  it("classifies embedding provider test failures with actionable public errors", async () => {
+    const cases: Array<{
+      name: string;
+      fetcher: typeof fetch;
+      expectedMessage: string;
+      expectedCategory?: string;
+      expectedStatus?: number;
+    }> = [
+      {
+        name: "authentication",
+        fetcher: embeddingErrorFetcher(401, {
+          error: {
+            message: "invalid api_key sk-test-secret",
+            code: "invalid_api_key"
+          }
+        }),
+        expectedMessage: "authentication failed",
+        expectedCategory: "authentication",
+        expectedStatus: 401
+      },
+      {
+        name: "permission",
+        fetcher: embeddingErrorFetcher(403, {
+          error: {
+            message: "permission denied"
+          }
+        }),
+        expectedMessage: "authentication failed",
+        expectedCategory: "authentication",
+        expectedStatus: 403
+      },
+      {
+        name: "missing model",
+        fetcher: embeddingErrorFetcher(404, {
+          error: {
+            message: "model fixture-embedding was not found"
+          }
+        }),
+        expectedMessage: "endpoint or model was not found",
+        expectedCategory: "not_found",
+        expectedStatus: 404
+      },
+      {
+        name: "rate limit",
+        fetcher: embeddingErrorFetcher(429, {
+          error: {
+            message: "rate limit exceeded"
+          }
+        }),
+        expectedMessage: "rate limit was reached",
+        expectedCategory: "rate_limit",
+        expectedStatus: 429
+      },
+      {
+        name: "unavailable",
+        fetcher: embeddingErrorFetcher(503, {
+          error: {
+            message: "upstream is overloaded"
+          }
+        }),
+        expectedMessage: "provider is unavailable",
+        expectedCategory: "provider_unavailable",
+        expectedStatus: 503
+      },
+      {
+        name: "network",
+        fetcher: async () => {
+          throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
+        },
+        expectedMessage: "could not be reached",
+        expectedCategory: "network"
+      },
+      {
+        name: "malformed response",
+        fetcher: async () =>
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }),
+        expectedMessage: "malformed response"
+      }
+    ];
+
+    for (const scenario of cases) {
+      const db = createEmptyDatabase();
+      const app = buildServer({
+        db,
+        logger: false,
+        embeddingFetcher: scenario.fetcher
+      });
+
+      try {
+        const created = await postJson(app, "/api/embedding/providers", {
+          type: "openai_compatible",
+          name: `OpenAI Compatible ${scenario.name}`,
+          baseUrl: "https://api.example.com/v1",
+          model: "fixture-embedding",
+          dimension: 3,
+          enabled: true,
+          apiKey: "secret"
+        });
+        const providerId = (created.json() as { data: { id: string } }).data.id;
+
+        const failed = await app.inject({
+          method: "POST",
+          url: `/api/embedding/providers/${providerId}/test`
+        });
+        expect(failed.statusCode, `${scenario.name}: ${failed.body}`).toBe(502);
+        expect(failed.json()).toMatchObject({
+          error: {
+            code: "PROVIDER_ERROR",
+            message: expect.stringContaining(scenario.expectedMessage)
+          }
+        });
+        if (scenario.expectedCategory) {
+          expect(failed.json()).toMatchObject({
+            error: {
+              details: {
+                category: scenario.expectedCategory
+              }
+            }
+          });
+        }
+        if (scenario.expectedStatus) {
+          expect(failed.json()).toMatchObject({
+            error: {
+              details: {
+                status: scenario.expectedStatus
+              }
+            }
+          });
+        }
+        expect(failed.body).not.toContain("sk-test-secret");
+        expect(failed.body).not.toContain("Bearer secret");
+
+        const providers = await app.inject({
+          method: "GET",
+          url: "/api/embedding/providers"
+        });
+        expect(providers.json()).toMatchObject({
+          data: [
+            {
+              id: providerId,
+              lastTestStatus: "failed",
+              lastTestError: expect.stringContaining(scenario.expectedMessage)
+            }
+          ]
+        });
+        expect(providers.body).not.toContain("sk-test-secret");
+
+        const indexes = await app.inject({
+          method: "GET",
+          url: "/api/embedding/indexes"
+        });
+        expect(indexes.body).not.toContain("lastTestError");
+        expect(indexes.body).not.toContain("providerMessage");
+      } finally {
+        await app.close();
+        db.close();
+      }
     }
   });
 
@@ -3286,8 +3518,12 @@ describe("server API vertical slice", () => {
 
   it("queues embedding jobs for newly refreshed articles without calling the provider inline", async () => {
     const db = createEmptyDatabase();
-    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
-      [];
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
     const app = buildServer({
       db,
       logger: false,
@@ -9068,24 +9304,38 @@ function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
 }
 
 function embeddingFetcherFixture(
-  calls: Array<{ url: string; authorization: string | null; inputCount: number }>,
+  calls: Array<{
+    url: string;
+    authorization: string | null;
+    inputCount: number;
+    dimensions: number | null;
+  }>,
   dimension: number
 ): typeof fetch {
   return async (input, init) => {
-    const body = JSON.parse(String(init?.body ?? "{}")) as { input?: unknown };
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      input?: unknown;
+      dimensions?: unknown;
+    };
     const values = Array.isArray(body.input) ? body.input : [body.input];
+    const outputDimensions =
+      typeof body.dimensions === "number" ? body.dimensions : dimension;
     const headers = new Headers(init?.headers);
     calls.push({
       url: String(input),
       authorization: headers.get("authorization"),
-      inputCount: values.length
+      inputCount: values.length,
+      dimensions: typeof body.dimensions === "number" ? body.dimensions : null
     });
 
     return new Response(
       JSON.stringify({
         data: values.map((_, index) => ({
           index,
-          embedding: Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
+          embedding: Array.from(
+            { length: outputDimensions },
+            (_value, vectorIndex) => vectorIndex + 1
+          )
         }))
       }),
       {
@@ -9096,6 +9346,16 @@ function embeddingFetcherFixture(
       }
     );
   };
+}
+
+function embeddingErrorFetcher(status: number, payload: unknown): typeof fetch {
+  return async () =>
+    new Response(JSON.stringify(payload), {
+      status,
+      headers: {
+        "content-type": "application/json"
+      }
+    });
 }
 
 function ollamaEmbeddingFetcherFixture(
@@ -9131,26 +9391,44 @@ function ollamaEmbeddingFetcherFixture(
 }
 
 function geminiEmbeddingFetcherFixture(
-  calls: Array<{ url: string; apiKey: string | null; inputCount: number; model: string }>,
+  calls: Array<{
+    url: string;
+    apiKey: string | null;
+    inputCount: number;
+    model: string;
+    outputDimensionality: number | null;
+  }>,
   dimension: number
 ): typeof fetch {
   return async (input, init) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as {
-      requests?: Array<{ model?: unknown; content?: { parts?: Array<{ text?: unknown }> } }>;
+      requests?: Array<{
+        model?: unknown;
+        outputDimensionality?: unknown;
+        content?: { parts?: Array<{ text?: unknown }> };
+      }>;
     };
     const requests = Array.isArray(body.requests) ? body.requests : [];
+    const outputDimensionality =
+      typeof requests[0]?.outputDimensionality === "number"
+        ? requests[0].outputDimensionality
+        : null;
     const headers = new Headers(init?.headers);
     calls.push({
       url: String(input),
       apiKey: headers.get("x-goog-api-key"),
       inputCount: requests.length,
-      model: typeof requests[0]?.model === "string" ? requests[0].model : ""
+      model: typeof requests[0]?.model === "string" ? requests[0].model : "",
+      outputDimensionality
     });
 
     return new Response(
       JSON.stringify({
         embeddings: requests.map(() => ({
-          values: Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
+          values: Array.from(
+            { length: outputDimensionality ?? dimension },
+            (_value, vectorIndex) => vectorIndex + 1
+          )
         }))
       }),
       {

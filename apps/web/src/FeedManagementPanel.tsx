@@ -100,8 +100,10 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
   const [confirmDeleteFolderId, setConfirmDeleteFolderId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingManagementAction | null>(null);
   const [diagnosticFilter, setDiagnosticFilter] = useState<FeedDiagnosticFilter>("all");
+  const [isAddFeedDialogOpen, setIsAddFeedDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [backfillResult, setBackfillResult] = useState<FullContentBackfillResponse | null>(null);
+  const wasAddingFeedRef = useRef(false);
   const visibleFeeds = useMemo(
     () =>
       props.feeds.filter((feed) =>
@@ -132,6 +134,19 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
     setConfirmDeleteFeedId(null);
     setBackfillResult(null);
   }, [selectedFeedIdentity]);
+
+  useEffect(() => {
+    if (
+      isAddFeedDialogOpen &&
+      wasAddingFeedRef.current &&
+      !props.isAddingFeed &&
+      !props.feedError &&
+      !props.feedDiscovery
+    ) {
+      setIsAddFeedDialogOpen(false);
+    }
+    wasAddingFeedRef.current = props.isAddingFeed;
+  }, [isAddFeedDialogOpen, props.feedDiscovery, props.feedError, props.isAddingFeed]);
 
   async function runManagementAction(action: PendingManagementAction, fn: () => Promise<void>) {
     setPendingAction(action);
@@ -272,6 +287,13 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
         </div>
 
         <div className={styles.opmlActions}>
+          <button
+            className={styles.primaryButton}
+            onClick={() => setIsAddFeedDialogOpen(true)}
+            type="button"
+          >
+            {t.feedManagement.feeds.addFeed}
+          </button>
           <input
             accept=".opml,.xml,text/xml,application/xml"
             className={styles.fileInput}
@@ -315,6 +337,66 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
             </button>
           ))}
         </div>
+
+        {isAddFeedDialogOpen ? (
+          <div
+            className={styles.managementDialogOverlay}
+            onClick={() => setIsAddFeedDialogOpen(false)}
+            role="presentation"
+          >
+            <div
+              aria-labelledby="add-feed-dialog-title"
+              aria-modal="true"
+              className={styles.managementDialog}
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+            >
+              <div className={styles.managementDialogHeader}>
+                <div>
+                  <p className={styles.kicker}>{t.feedManagement.feeds.kicker}</p>
+                  <h3 id="add-feed-dialog-title">{t.feedManagement.feeds.addFeed}</h3>
+                </div>
+                <button
+                  className={styles.secondaryButton}
+                  onClick={() => setIsAddFeedDialogOpen(false)}
+                  type="button"
+                >
+                  {t.feedManagement.actions.cancel}
+                </button>
+              </div>
+
+              <form className={styles.managementForm} onSubmit={props.onAddFeed}>
+                <label htmlFor="managed-new-feed-url">{t.feeds.inputLabel}</label>
+                <div className={styles.managementInlineForm}>
+                  <input
+                    id="managed-new-feed-url"
+                    inputMode="url"
+                    onChange={(event) => props.onUpdateFeedUrl(event.target.value)}
+                    placeholder={t.feeds.inputPlaceholder}
+                    type="url"
+                    value={props.feedUrl}
+                  />
+                  <button
+                    className={styles.primaryButton}
+                    disabled={props.isAddingFeed || props.isDiscoveringFeeds}
+                    type="submit"
+                  >
+                    {props.isDiscoveringFeeds ? t.feedDiscovery.checking : t.feedDiscovery.check}
+                  </button>
+                </div>
+              </form>
+
+              <ManagementFeedDiscoveryPanel
+                discovery={props.feedDiscovery}
+                error={props.feedDiscoveryError}
+                isAddingFeed={props.isAddingFeed}
+                onAddCandidate={props.onAddCandidate}
+              />
+
+              {props.feedError ? <p className={styles.errorText}>{props.feedError}</p> : null}
+            </div>
+          </div>
+        ) : null}
 
         {props.opmlSummary ? (
           <div className={styles.opmlSummary}>
@@ -457,34 +539,6 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
           <span className={styles.count}>{props.feeds.length}</span>
         </div>
 
-        <form className={styles.managementForm} onSubmit={props.onAddFeed}>
-          <label htmlFor="managed-new-feed-url">{t.feeds.inputLabel}</label>
-          <div className={styles.managementInlineForm}>
-            <input
-              id="managed-new-feed-url"
-              inputMode="url"
-              onChange={(event) => props.onUpdateFeedUrl(event.target.value)}
-              placeholder={t.feeds.inputPlaceholder}
-              type="url"
-              value={props.feedUrl}
-            />
-            <button
-              className={styles.primaryButton}
-              disabled={props.isAddingFeed || props.isDiscoveringFeeds}
-              type="submit"
-            >
-              {props.isDiscoveringFeeds ? t.feedDiscovery.checking : t.feedDiscovery.check}
-            </button>
-          </div>
-        </form>
-
-        <ManagementFeedDiscoveryPanel
-          discovery={props.feedDiscovery}
-          error={props.feedDiscoveryError}
-          isAddingFeed={props.isAddingFeed}
-          onAddCandidate={props.onAddCandidate}
-        />
-
         <section className={styles.feedDiagnosticsPanel} aria-labelledby="feed-diagnostics-title">
           <div className={styles.feedDiagnosticsHeader}>
             <div>
@@ -526,7 +580,6 @@ export function FeedManagementWorkspace(props: FeedManagementWorkspaceProps) {
           </div>
         </section>
 
-        {props.feedError ? <p className={styles.errorText}>{props.feedError}</p> : null}
         {error ? <p className={styles.errorText}>{error}</p> : null}
 
         <div className={styles.feedManagementGrid}>

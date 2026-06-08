@@ -457,7 +457,7 @@ export function defaultEmbeddingProviderDraft(type: SupportedEmbeddingProviderTy
       baseUrl: "http://127.0.0.1:11434",
       model: "nomic-embed-text",
       dimension: 768,
-      textMaxChars: 8000
+      textMaxChars: 4000
     };
   }
 

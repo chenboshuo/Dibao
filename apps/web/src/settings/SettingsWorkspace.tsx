@@ -1026,6 +1026,11 @@ export function SettingsWorkspace(props: {
               step={500}
               value={providerDraft.textMaxChars}
             />
+            {providerDraft.type === "ollama" ? (
+              <p className={styles.managementHint}>
+                {t.settings.sections.provider.ollamaTextMaxCharsHint}
+              </p>
+            ) : null}
 
             <NumberSettingField
               id="settings-provider-qpm"

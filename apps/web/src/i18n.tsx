@@ -36,6 +36,12 @@ export const zhCN = {
       favorites: "收藏文章",
       read_later: "稍后读"
     },
+    pageKickers: {
+      latest: "Latest",
+      recommended: "For You",
+      favorites: "Favorites",
+      read_later: "Read Later"
+    },
     loadingArticles: "正在加载文章",
     latestView: "最新视图",
     viewStatus: {
@@ -46,6 +52,7 @@ export const zhCN = {
     }
   },
   search: {
+    kicker: "Search",
     pageTitle: "搜索",
     title: "搜索文章",
     body: "在本地文章库中搜索标题、摘要和正文。",
@@ -250,6 +257,7 @@ export const zhCN = {
     feedCount: (count: number) => `${count} 个订阅源`
   },
   feedManagement: {
+    kicker: "Feed Management",
     pageTitle: "订阅源管理",
     loading: "正在加载订阅源",
     status: (feedCount: number, folderCount: number) =>
@@ -274,6 +282,7 @@ export const zhCN = {
     feeds: {
       kicker: "Feeds",
       title: "订阅源",
+      addFeed: "添加订阅源",
       emptyTitle: "还没有订阅源",
       emptyBody: "可以在阅读器侧栏添加 RSS / Atom 源，或导入 OPML。",
       ungrouped: "未分组",
@@ -338,6 +347,7 @@ export const zhCN = {
     }
   },
   settings: {
+    kicker: "Settings",
     pageTitle: "设置",
     loading: "正在加载设置",
     status: "设置已就绪",
@@ -482,6 +492,7 @@ export const zhCN = {
         geminiApiKeyHint: "Gemini AI Studio 使用 x-goog-api-key 调用 Gemini embedding API。",
         modelHint: "警示：切换到不同模型族、维度或切片长度会创建新的向量空间，已有向量不会复用，新 index 需要重新生成向量后推荐语义能力才会恢复。",
         textMaxCharsHint: "警示：修改切片长度会让已有向量与新策略不一致；保存并设为当前 Provider 后会创建新的 active index，请重新索引/补齐向量。",
+        ollamaTextMaxCharsHint: "中文内容建议不超过 4000 字符；如果 bge-m3 等模型仍提示超出上下文，请降到 3000。",
         rateLimitHint: "QPM/QPD 按 batch 请求计数；达到 QPM 会延后到下一分钟，达到 QPD 会暂停到本地时间第二天继续队列。留空表示不限制。",
         activateHint: "保存只会保存配置档；只有点击“设为当前 Provider”才会切换 embedding 生成、active index 和推荐使用的 Provider。",
         activeTitle: "当前生效 Provider",
@@ -689,6 +700,7 @@ export const zhCN = {
     }
   },
   algorithmTransparency: {
+    kicker: "Personalization Details",
     pageTitle: "算法透明说明",
     status: "算法说明已就绪",
     backToSettings: "返回设置",
@@ -1336,6 +1348,12 @@ export const enUS = {
       favorites: "Favorites",
       read_later: "Read Later"
     },
+    pageKickers: {
+      latest: "Latest",
+      recommended: "For You",
+      favorites: "Favorites",
+      read_later: "Read Later"
+    },
     loadingArticles: "Loading articles",
     latestView: "Latest",
     viewStatus: {
@@ -1346,6 +1364,7 @@ export const enUS = {
     }
   },
   search: {
+    kicker: "Search",
     pageTitle: "Search",
     title: "Search Articles",
     body: "Search titles, summaries, and full text in your local article library.",
@@ -1550,6 +1569,7 @@ export const enUS = {
     feedCount: (count: number) => `${count} ${count === 1 ? "feed" : "feeds"}`
   },
   feedManagement: {
+    kicker: "Feed Management",
     pageTitle: "Feed Management",
     loading: "Loading feeds",
     status: (feedCount: number, folderCount: number) =>
@@ -1574,6 +1594,7 @@ export const enUS = {
     feeds: {
       kicker: "Feeds",
       title: "Feeds",
+      addFeed: "Add feed",
       emptyTitle: "No feeds yet",
       emptyBody: "Add an RSS / Atom feed in the reader sidebar, or import OPML.",
       ungrouped: "Ungrouped",
@@ -1639,6 +1660,7 @@ export const enUS = {
     }
   },
   settings: {
+    kicker: "Settings",
     pageTitle: "Settings",
     loading: "Loading settings",
     status: "Settings ready",
@@ -1784,6 +1806,7 @@ export const enUS = {
         geminiApiKeyHint: "Gemini AI Studio uses x-goog-api-key when calling the Gemini embedding API.",
         modelHint: "Warning: switching to a different model family, dimension, or text slice length creates a new vector space. Existing vectors are not reused; semantic ranking resumes after the new index is generated.",
         textMaxCharsHint: "Warning: changing the text slice length makes existing vectors inconsistent with the new strategy. Saving and setting the provider current creates a new active index; regenerate/backfill vectors afterwards.",
+        ollamaTextMaxCharsHint: "For Chinese content, keep Ollama slices at 4000 chars or lower; if models such as bge-m3 still report context length errors, try 3000.",
         rateLimitHint: "QPM/QPD count batch requests. QPM pauses jobs until the next minute; QPD pauses them until the next local day. Leave blank for no limit.",
         activateHint: "Saving only updates the provider profile. Use “Set as current provider” to switch embedding generation, the active index, and personalized ranking to this provider.",
         activeTitle: "Current provider",
@@ -1984,6 +2007,7 @@ export const enUS = {
     }
   },
   algorithmTransparency: {
+    kicker: "Personalization Details",
     pageTitle: "Personalization Details",
     status: "Personalization details ready",
     backToSettings: "Back to settings",
@@ -2627,6 +2651,12 @@ export const jaJP = {
       favorites: "お気に入り記事",
       read_later: "あとで読む"
     },
+    pageKickers: {
+      latest: "Latest",
+      recommended: "For You",
+      favorites: "Favorites",
+      read_later: "Read Later"
+    },
     loadingArticles: "記事を読み込んでいます",
     latestView: "最新ビュー",
     viewStatus: {
@@ -2637,6 +2667,7 @@ export const jaJP = {
     }
   },
   search: {
+    kicker: "Search",
     pageTitle: "検索",
     title: "記事を検索",
     body: "ローカルの記事ライブラリから、タイトル、要約、本文を検索します。",
@@ -2841,6 +2872,7 @@ export const jaJP = {
     feedCount: (count: number) => `${count} 件のフィード`
   },
   feedManagement: {
+    kicker: "Feed Management",
     pageTitle: "フィード管理",
     loading: "フィードを読み込んでいます",
     status: (feedCount: number, folderCount: number) =>
@@ -2865,6 +2897,7 @@ export const jaJP = {
     feeds: {
       kicker: "Feeds",
       title: "フィード",
+      addFeed: "フィードを追加",
       emptyTitle: "フィードはまだありません",
       emptyBody: "リーダーのサイドバーから RSS / Atom フィードを追加するか、OPML をインポートしてください。",
       ungrouped: "未分類",
@@ -2930,6 +2963,7 @@ export const jaJP = {
     }
   },
   settings: {
+    kicker: "Settings",
     pageTitle: "設定",
     loading: "設定を読み込んでいます",
     status: "設定は最新です",
@@ -3075,6 +3109,7 @@ export const jaJP = {
         geminiApiKeyHint: "Gemini AI Studio は Gemini embedding API 呼び出し時に x-goog-api-key を使います。",
         modelHint: "注意：モデル系列、次元数、テキスト切り出し長を変えると新しいベクトル空間が作成されます。既存のベクトルは再利用されず、新しい index の生成後に意味的なおすすめが回復します。",
         textMaxCharsHint: "注意：テキスト切り出し長を変えると既存ベクトルと新しい方針が一致しなくなります。保存して現在の Provider にすると新しい active index が作成されるため、ベクトルの再生成または補完を行ってください。",
+        ollamaTextMaxCharsHint: "中国語コンテンツでは Ollama の切り出し長を 4000 文字以下にしてください。bge-m3 などで文脈長エラーが続く場合は 3000 を試してください。",
         rateLimitHint: "QPM/QPD は batch リクエスト単位で数えます。QPM に達すると次の分まで待機し、QPD に達するとローカル日付の翌日まで停止します。空欄なら制限しません。",
         activateHint: "保存だけではプロファイルを更新するだけです。「現在の Provider にする」を押した時だけ、embedding 生成、active index、おすすめで使う Provider が切り替わります。",
         activeTitle: "現在の Provider",
@@ -3275,6 +3310,7 @@ export const jaJP = {
     }
   },
   algorithmTransparency: {
+    kicker: "Personalization Details",
     pageTitle: "アルゴリズムの透明性",
     status: "アルゴリズム情報は最新です",
     backToSettings: "設定に戻る",
@@ -3899,6 +3935,7 @@ export type I18nValue = {
   setLocale: (locale: Locale) => void;
   t: Dictionary;
   formatDate: (value: string | Date) => string;
+  formatArticleDate: (value: string | Date) => string;
 };
 
 export type DibaoI18nProviderProps = {
@@ -3968,6 +4005,7 @@ export function createI18n(
   setLocale: (locale: Locale) => void = () => undefined
 ): I18nValue {
   const formatter = createDateFormatter(locale, options);
+  const articleFormatter = createArticleDateFormatter(locale, options);
 
   return {
     locale,
@@ -3975,6 +4013,9 @@ export function createI18n(
     t: dictionaries[locale],
     formatDate(value) {
       return formatter.format(new Date(value));
+    },
+    formatArticleDate(value) {
+      return articleFormatter.format(new Date(value));
     }
   };
 }
@@ -3984,6 +4025,20 @@ export function createDateFormatter(
   options: { timeZone?: string } = {}
 ): Intl.DateTimeFormat {
   return new Intl.DateTimeFormat(locale, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(options.timeZone ? { timeZone: options.timeZone } : {})
+  });
+}
+
+export function createArticleDateFormatter(
+  locale: Locale = defaultLocale,
+  options: { timeZone?: string } = {}
+): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
