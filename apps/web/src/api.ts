@@ -2098,14 +2098,16 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async postArticleAction(
       articleId: string,
-      input: ArticleActionRequest
+      input: ArticleActionRequest,
+      options: { signal?: AbortSignal } = {}
     ): Promise<ArticleActionResponse> {
       return (
         await request<ArticleActionResponse>(
           `/api/articles/${encodeURIComponent(articleId)}/actions`,
           {
             method: "POST",
-            body: JSON.stringify(input)
+            body: JSON.stringify(input),
+            signal: options.signal
           }
         )
       ).data;

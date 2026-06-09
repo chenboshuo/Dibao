@@ -1010,7 +1010,25 @@ function useArticleListIgnoreTelemetry(props: {
     let scanAnimationFrame: number | null = null;
 
     function scanScrolledPastArticles() {
-      const rootTop = scrollRoot.getBoundingClientRect().top;
+      const rootRect = scrollRoot.getBoundingClientRect();
+      const rootTop = rootRect.top;
+      const rootBottom = rootRect.bottom;
+      for (const article of visibleCandidates) {
+        if (
+          sentIds.current.has(article.id) ||
+          selectedArticleIdRef.current === article.id ||
+          seenVisibleIds.current.has(article.id)
+        ) {
+          continue;
+        }
+        const element = scrollRoot.querySelector<HTMLElement>(
+          `[data-article-id="${cssEscape(article.id)}"]`
+        );
+        if (element && elementVisibilityRatioInRoot(element, rootTop, rootBottom) >= 0.6) {
+          seenVisibleIds.current.add(article.id);
+        }
+      }
+
       const snapshots = Array.from(seenVisibleIds.current).map((articleId) => {
         const element = scrollRoot.querySelector<HTMLElement>(
           `[data-article-id="${cssEscape(articleId)}"]`
@@ -1113,6 +1131,21 @@ export function scrolledPastArticleIdsForIgnoreTelemetry(
         candidate.hasBeenVisible && !candidate.hasBeenSent && candidate.bottom <= rootTop
     )
     .map((candidate) => candidate.articleId);
+}
+
+function elementVisibilityRatioInRoot(
+  element: HTMLElement,
+  rootTop: number,
+  rootBottom: number
+): number {
+  const rect = element.getBoundingClientRect();
+  const height = rect.height;
+  if (height <= 0) {
+    return 0;
+  }
+
+  const visibleHeight = Math.max(0, Math.min(rect.bottom, rootBottom) - Math.max(rect.top, rootTop));
+  return visibleHeight / height;
 }
 
 function usePersistedArticleListScroll(props: {

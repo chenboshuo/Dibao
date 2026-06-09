@@ -138,6 +138,15 @@ import {
 const LazySetupProviderPanel = lazy(() =>
   import("./setup/SetupProviderPanel.js").then((module) => ({ default: module.SetupProviderPanel }))
 );
+
+const IGNORE_TELEMETRY_MAX_IN_FLIGHT = 3;
+const IGNORE_TELEMETRY_TIMEOUT_MS = 8_000;
+
+type IgnoredArticleQueueItem = {
+  articleId: string;
+  state: ArticleState;
+  view: ArticleView;
+};
 const LazyFullContentPreviewPage = lazy(() =>
   import("./fullContent/FullContentPreviewPage.js").then((module) => ({ default: module.FullContentPreviewPage }))
 );
@@ -291,8 +300,8 @@ export function App() {
   const [pwaUpdateApply, setPwaUpdateApply] = useState<(() => void) | null>(null);
   const openedArticleIds = useRef(new Set<string>());
   const ignoredArticleIds = useRef(new Set<string>());
-  const ignoredArticleQueue = useRef<string[]>([]);
-  const isSendingIgnoredArticle = useRef(false);
+  const ignoredArticleQueue = useRef<IgnoredArticleQueueItem[]>([]);
+  const ignoredArticleInFlightIds = useRef(new Set<string>());
   const selectedArticleIdRef = useRef<string | null>(selectedArticleId);
   const articleStateById = useRef(new Map<string, ArticleState>());
   const locallyUpdatedArticleIds = useRef(new Set<string>());
@@ -556,6 +565,8 @@ export function App() {
     hasAppliedDefaultHomeViewForSession.current = hasExplicitUrlPageIntent.current;
     openedArticleIds.current.clear();
     ignoredArticleIds.current.clear();
+    ignoredArticleQueue.current = [];
+    ignoredArticleInFlightIds.current.clear();
     locallyUpdatedArticleIds.current.clear();
     articleRequestVersion.current += 1;
   }, [setLocale]);
@@ -742,6 +753,7 @@ export function App() {
     selectedArticleIdRef.current = selectedArticleId;
     if (selectedArticleId) {
       ignoredArticleQueue.current = [];
+      ignoredArticleInFlightIds.current.clear();
     }
   }, [selectedArticleId]);
 
@@ -2234,63 +2246,94 @@ export function App() {
   }
 
   function handleIgnoreArticle(articleId: string) {
+    const article = articlesRef.current.find((candidate) => candidate.id === articleId);
+    const state = article?.state ?? articleStateById.current.get(articleId);
+    if (!state || articleInteractionStatusForState(state) !== "unseen") {
+      return;
+    }
+
     if (
       ignoredArticleIds.current.has(articleId) ||
-      ignoredArticleQueue.current.includes(articleId)
+      ignoredArticleInFlightIds.current.has(articleId) ||
+      ignoredArticleQueue.current.some((item) => item.articleId === articleId)
     ) {
       return;
     }
 
-    ignoredArticleQueue.current.push(articleId);
+    ignoredArticleQueue.current.push({
+      articleId,
+      state,
+      view: currentArticleViewRef.current
+    });
     void drainIgnoredArticleQueue();
   }
 
-  async function drainIgnoredArticleQueue() {
-    if (isSendingIgnoredArticle.current) {
-      return;
-    }
-
-    isSendingIgnoredArticle.current = true;
-    try {
-      while (ignoredArticleQueue.current.length > 0) {
-        const articleId = ignoredArticleQueue.current.shift();
-        if (articleId) {
-          await postIgnoredArticle(articleId);
-        }
+  function drainIgnoredArticleQueue() {
+    while (
+      ignoredArticleInFlightIds.current.size < IGNORE_TELEMETRY_MAX_IN_FLIGHT &&
+      ignoredArticleQueue.current.length > 0
+    ) {
+      const item = ignoredArticleQueue.current.shift();
+      if (!item) {
+        continue;
       }
-    } finally {
-      isSendingIgnoredArticle.current = false;
+      ignoredArticleInFlightIds.current.add(item.articleId);
+      void postIgnoredArticle(item).finally(() => {
+        ignoredArticleInFlightIds.current.delete(item.articleId);
+        drainIgnoredArticleQueue();
+      });
     }
   }
 
-  async function postIgnoredArticle(articleId: string) {
-    const article = articlesRef.current.find((candidate) => candidate.id === articleId);
-    const interactionStatus = article ? articleInteractionStatusForState(article.state) : "unseen";
+  async function postIgnoredArticle(item: IgnoredArticleQueueItem) {
+    const liveState =
+      articleStateById.current.get(item.articleId) ??
+      articlesRef.current.find((candidate) => candidate.id === item.articleId)?.state ??
+      item.state;
+    const interactionStatus = articleInteractionStatusForState(liveState);
 
     if (
-      !article ||
       selectedArticleIdRef.current !== null ||
-      openedArticleIds.current.has(articleId) ||
-      ignoredArticleIds.current.has(articleId) ||
+      openedArticleIds.current.has(item.articleId) ||
+      ignoredArticleIds.current.has(item.articleId) ||
       interactionStatus !== "unseen"
     ) {
       return;
     }
 
-    ignoredArticleIds.current.add(articleId);
+    ignoredArticleIds.current.add(item.articleId);
+    const abortController =
+      typeof AbortController === "undefined" ? null : new AbortController();
+    const timeout =
+      abortController && typeof window !== "undefined"
+        ? window.setTimeout(() => abortController.abort(), IGNORE_TELEMETRY_TIMEOUT_MS)
+        : null;
 
     try {
-      const result = await dibaoApi.postArticleAction(articleId, {
-        type: "impression",
-        metadata: {
-          reason: "scrolled_past_unopened",
-          view: currentArticleViewRef.current
-        }
-      });
-      applyArticleState(articleId, result.state);
+      const result = await dibaoApi.postArticleAction(
+        item.articleId,
+        {
+          type: "impression",
+          metadata: {
+            reason: "scrolled_past_unopened",
+            view: item.view
+          }
+        },
+        abortController ? { signal: abortController.signal } : undefined
+      );
+      if (
+        selectedArticleIdRef.current === null &&
+        !openedArticleIds.current.has(item.articleId)
+      ) {
+        applyArticleState(item.articleId, result.state);
+      }
     } catch {
-      ignoredArticleIds.current.delete(articleId);
+      ignoredArticleIds.current.delete(item.articleId);
       // Passive list telemetry should not interrupt browsing.
+    } finally {
+      if (timeout !== null) {
+        window.clearTimeout(timeout);
+      }
     }
   }
 

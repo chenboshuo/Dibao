@@ -497,7 +497,7 @@ export class SqliteArticleRepository implements ArticleRepository {
     limit: number;
     offset: number;
   }): ArticleReadDbRow[] {
-    const rows = this.db
+    return this.db
       .prepare(
         `
           with ranked as (
@@ -523,16 +523,42 @@ export class SqliteArticleRepository implements ArticleRepository {
                 where active.article_id = base.article_id
                   and active.rank_context = ?
               )
+          ),
+          ranked_rows as (
+            ${baseArticleReadSelect()},
+            ranked.score as sortScore,
+            case when ranked.rerank_position is null then 1 else 0 end as sortRerankMissing,
+            ranked.rerank_position as sortRerankPosition,
+            0 as sortRankMissing,
+            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+            ${rankedArticleReadFrom()}
+            where ${input.conditions.join(" and ")}
+          ),
+          unranked_rows as (
+            ${baseArticleReadSelect()},
+            null as sortScore,
+            1 as sortRerankMissing,
+            null as sortRerankPosition,
+            1 as sortRankMissing,
+            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+            ${baseArticleReadFrom()}
+            where ${input.conditions.join(" and ")}
+              and rs.article_id is null
+              and base_rs.article_id is null
           )
-          ${baseArticleReadSelect()}
-          ${rankedArticleReadFrom()}
-          where ${input.conditions.join(" and ")}
+          select *
+          from (
+            select * from ranked_rows
+            union all
+            select * from unranked_rows
+          )
           order by
-            ranked.score desc,
-            case when ranked.rerank_position is null then 1 else 0 end,
-            ranked.rerank_position asc,
-            coalesce(a.published_at, a.discovered_at) desc,
-            a.id desc
+            sortRankMissing asc,
+            sortScore desc,
+            sortRerankMissing asc,
+            sortRerankPosition asc,
+            sortPublishedAt desc,
+            id desc
           limit ?
           offset ?
         `
@@ -546,32 +572,12 @@ export class SqliteArticleRepository implements ArticleRepository {
         input.rankContext,
         BASE_RANK_CONTEXT,
         ...input.filterParams,
+        input.rankContext,
+        BASE_RANK_CONTEXT,
+        ...input.filterParams,
         input.limit + 1,
         input.offset
       ) as ArticleReadDbRow[];
-
-    if (rows.length <= input.limit) {
-      return this.db
-        .prepare(
-          `
-            ${baseArticleReadSelect()}
-            ${baseArticleReadFrom()}
-            where ${input.conditions.join(" and ")}
-            ${orderByForView("recommended", undefined)}
-            limit ?
-            offset ?
-          `
-        )
-        .all(
-          input.rankContext,
-          BASE_RANK_CONTEXT,
-          ...input.filterParams,
-          input.limit + 1,
-          input.offset
-        ) as ArticleReadDbRow[];
-    }
-
-    return rows;
   }
 
   search(input: ArticleSearchInput): ArticleSearchResult {
