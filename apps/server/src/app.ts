@@ -472,6 +472,17 @@ export function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? true
   });
+  const backgroundJobs = options.backgroundJobs ?? false;
+  const recordForegroundActivityEnabled = options.recordForegroundActivity ?? !backgroundJobs;
+  const foregroundActivityWriteThrottleMs =
+    options.foregroundActivityWriteThrottleMs ??
+    DEFAULT_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS;
+  const foregroundQuietWindowMs = Math.max(0, options.foregroundQuietWindowMs ?? 0);
+  const backgroundStartupDelayMs = Math.max(0, options.backgroundStartupDelayMs ?? 0);
+  const backgroundInitialTickDelayMs = backgroundJobs
+    ? Math.max(backgroundStartupDelayMs, foregroundQuietWindowMs)
+    : 0;
+  let lastForegroundActivityWriteAt = 0;
   const coreDatabaseMigrationService = new CoreDatabaseMigrationService({
     db,
     now: options.now,
@@ -535,6 +546,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     profiles,
     rankings,
     getRankingSettings: () => settingsService.getSettings().ranking,
+    shouldPause: () => {
+      if (foregroundQuietWindowMs <= 0) {
+        return { pause: false };
+      }
+      const now = options.now?.() ?? Date.now();
+      const resumeAfter = foregroundQuietUntil(settings, {
+        now,
+        quietWindowMs: foregroundQuietWindowMs
+      });
+      return resumeAfter ? { pause: true, resumeAfter } : { pause: false };
+    },
     now: options.now
   });
   let drainDueJobsForPlugins: (() => Promise<number>) | null = null;
@@ -571,7 +593,9 @@ export function buildServer(options: BuildServerOptions = {}) {
           processed: record.processed,
           limit: record.limit,
           nextLimit: record.nextLimit,
-          hasNextCursor: record.nextCursor !== null
+          hasNextCursor: record.nextCursor !== null,
+          paused: record.paused,
+          resumeAfter: timestampToIso(record.resumeAfter)
         },
         "job.performance"
       );
@@ -853,17 +877,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     secure: resolveCookieSecure(options.cookieSecure)
   };
   const authRequired = options.authRequired ?? true;
-  const backgroundJobs = options.backgroundJobs ?? false;
-  const recordForegroundActivityEnabled = options.recordForegroundActivity ?? !backgroundJobs;
-  const foregroundActivityWriteThrottleMs =
-    options.foregroundActivityWriteThrottleMs ??
-    DEFAULT_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS;
-  const foregroundQuietWindowMs = Math.max(0, options.foregroundQuietWindowMs ?? 0);
-  const backgroundStartupDelayMs = Math.max(0, options.backgroundStartupDelayMs ?? 0);
-  const backgroundInitialTickDelayMs = backgroundJobs
-    ? Math.max(backgroundStartupDelayMs, foregroundQuietWindowMs)
-    : 0;
-  let lastForegroundActivityWriteAt = 0;
   let maintenanceTickTimer: NodeJS.Timeout | null = null;
   let maintenanceInitialTickTimer: NodeJS.Timeout | null = null;
   let backgroundStartupTimer: NodeJS.Timeout | null = null;
@@ -878,11 +891,13 @@ export function buildServer(options: BuildServerOptions = {}) {
       [PROFILE_EVENT_PROCESS_JOB_TYPE]: (job) =>
         profileEventJobService.handleProfileEventProcessJob(job),
       [RANKING_RECALCULATE_JOB_TYPE]: async (job) => {
-        await rankingJobService.handleRankingRecalculateJob(job);
-        await pluginService.emitHook("ranking.afterRanked", {
-          jobId: job.id,
-          rankedAt: options.now?.() ?? Date.now()
-        });
+        const result = await rankingJobService.handleRankingRecalculateJob(job);
+        if (result.processed > 0) {
+          await pluginService.emitHook("ranking.afterRanked", {
+            jobId: job.id,
+            rankedAt: options.now?.() ?? Date.now()
+          });
+        }
       },
       [EMBEDDING_GENERATE_JOB_TYPE]: (job) =>
         embeddingJobService.handleEmbeddingGenerateJob(job),

@@ -9378,7 +9378,9 @@ async function drainRankingJobs(db: DibaoDatabase, now: number): Promise<void> {
   const runner = new JobRunner({
     jobs,
     handlers: {
-      [RANKING_RECALCULATE_JOB_TYPE]: (job) => rankingJobs.handleRankingRecalculateJob(job)
+      [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+        rankingJobs.handleRankingRecalculateJob(job);
+      }
     },
     now: () => now
   });

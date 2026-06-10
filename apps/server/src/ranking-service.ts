@@ -27,8 +27,19 @@ export interface ArticleRankingRecalculator {
   recalculateChunk?(input: {
     cursor?: string | null;
     limit: number;
-  }): { processed: number; nextCursor: string | null };
+  }): RankingRecalculateChunkResult;
 }
+
+export type RankingPauseDecision =
+  | { pause: true; resumeAfter: number }
+  | { pause: false };
+
+export type RankingRecalculateChunkResult = {
+  processed: number;
+  nextCursor: string | null;
+  paused?: boolean;
+  resumeAfter?: number;
+};
 
 export type RankExplanationReasonType =
   | "interest"
@@ -96,6 +107,10 @@ export type RecommendationRankingServiceOptions = {
   profiles?: Pick<ProfileRepository, "listClusters">;
   rankings: RankingRepository;
   getRankingSettings?: () => RankingSettingsSnapshot;
+  shouldPause?: (checkpoint: {
+    processed: number;
+    lastArticleId: string | null;
+  }) => RankingPauseDecision;
   now?: () => number;
 };
 
@@ -230,15 +245,12 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
   recalculateChunk(input: {
     cursor?: string | null;
     limit: number;
-  }): { processed: number; nextCursor: string | null } {
+  }): RankingRecalculateChunkResult {
     const result = this.writeScores(undefined, {
       afterArticleId: input.cursor ?? null,
       limit: input.limit
     });
-    return {
-      processed: result.processed,
-      nextCursor: result.nextCursor
-    };
+    return result;
   }
 
   explainArticle(articleId: string): RankExplanationResult | null {
@@ -307,7 +319,19 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
   private writeScores(
     articleIds?: string[],
     page?: { afterArticleId?: string | null; limit?: number }
-  ): { processed: number; nextCursor: string | null } {
+  ): RankingRecalculateChunkResult {
+    const paged = page?.limit !== undefined;
+    const startingCursor = page?.afterArticleId ?? null;
+    const initialPause = paged ? this.pauseDecision(0, startingCursor) : null;
+    if (initialPause?.pause) {
+      return {
+        processed: 0,
+        nextCursor: startingCursor,
+        paused: true,
+        resumeAfter: initialPause.resumeAfter
+      };
+    }
+
     const activeIndexId = this.activeEmbeddingIndexId();
     const settings = this.rankingSettings();
     const activeRankContext = activeIndexId
@@ -333,6 +357,9 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     const duplicateStats = duplicateStatsFor(candidates, duplicateFeatures);
     const rerankWindowId = `${activeRankContext}:${now}`;
     const scored: Array<{ candidate: ArticleRankingCandidateRow; score: V2Score }> = [];
+    let processed = 0;
+    let lastProcessedArticleId: string | null = startingCursor;
+    let pauseDecision: RankingPauseDecision | null = null;
 
     if (activeIndexId) {
       this.options.rankings.upsertRankContext({
@@ -355,6 +382,14 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     }
 
     for (const candidate of candidates) {
+      if (paged && processed > 0) {
+        const decision = this.pauseDecision(processed, lastProcessedArticleId);
+        if (decision.pause) {
+          pauseDecision = decision;
+          break;
+        }
+      }
+
       const isRead = candidate.state.read || candidate.state.interactionStatus === "read";
       const baseScore = calculateBaselineRankScore({
         now,
@@ -383,6 +418,8 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         articleId: candidate.articleId,
         ...baseScore
       });
+      processed += 1;
+      lastProcessedArticleId = candidate.articleId;
 
       if (!activeIndexId) {
         continue;
@@ -452,13 +489,35 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       });
     }
 
+    const hasMoreAfterChunk = page?.limit !== undefined && candidates.length >= page.limit;
+    if (paged && processed > 0 && pauseDecision === null && hasMoreAfterChunk) {
+      const decision = this.pauseDecision(processed, lastProcessedArticleId);
+      if (decision.pause) {
+        pauseDecision = decision;
+      }
+    }
+
     return {
-      processed: candidates.length,
-      nextCursor:
-        page?.limit !== undefined && candidates.length >= page.limit
+      processed,
+      nextCursor: pauseDecision?.pause
+        ? lastProcessedArticleId
+        : hasMoreAfterChunk
           ? candidates[candidates.length - 1]?.articleId ?? null
-          : null
+          : null,
+      ...(pauseDecision?.pause
+        ? {
+            paused: true,
+            resumeAfter: pauseDecision.resumeAfter
+          }
+        : {})
     };
+  }
+
+  private pauseDecision(
+    processed: number,
+    lastArticleId: string | null
+  ): RankingPauseDecision {
+    return this.options.shouldPause?.({ processed, lastArticleId }) ?? { pause: false };
   }
 
   private activeEmbeddingIndexId(): string | null {

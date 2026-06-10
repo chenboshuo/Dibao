@@ -35,6 +35,8 @@ export type RankingRecalculateJobServiceOptions = {
     limit: number;
     nextLimit: number;
     nextCursor: string | null;
+    paused: boolean;
+    resumeAfter: number | null;
   }) => void;
 };
 
@@ -96,14 +98,23 @@ export class RankingRecalculateJobService {
     });
   }
 
-  handleRankingRecalculateJob(job: JobRow): void {
+  handleRankingRecalculateJob(job: JobRow): {
+    processed: number;
+    nextCursor: string | null;
+    paused: boolean;
+  } {
     const payload = parseRankingRecalculatePayload(job.payloadJson);
     if (!payload) {
       throw new PermanentJobFailure("Invalid ranking_recalculate job payload");
     }
 
     if (payload.articleIds) {
-      this.options.ranking.recalculateArticles(payload.articleIds);
+      const processed = this.options.ranking.recalculateArticles(payload.articleIds);
+      return {
+        processed,
+        nextCursor: null,
+        paused: false
+      };
     } else {
       const limit = normalizeRankingChunkLimit(payload.limit);
       const startedAt = performance.now();
@@ -117,33 +128,44 @@ export class RankingRecalculateJobService {
             nextCursor: null
           };
       const durationMs = performance.now() - startedAt;
-      const nextLimit = adaptiveNextLimit(
-        limit,
-        durationMs,
-        this.options.targetChunkMs ?? RANKING_RECALCULATE_TARGET_CHUNK_MS
-      );
+      const nextLimit = result.paused === true && result.processed === 0
+        ? limit
+        : adaptiveNextLimit(
+            limit,
+            durationMs,
+            this.options.targetChunkMs ?? RANKING_RECALCULATE_TARGET_CHUNK_MS
+          );
       this.options.onChunk?.({
         jobId: job.id,
         processed: result.processed,
         durationMs,
         limit,
         nextLimit,
-        nextCursor: result.nextCursor
+        nextCursor: result.nextCursor,
+        paused: result.paused === true,
+        resumeAfter: result.resumeAfter ?? null
       });
-      if (result.nextCursor) {
+      if (result.nextCursor || result.paused === true) {
         const now = this.now();
         this.options.jobs.enqueue({
           id: this.jobIdFactory(),
           type: RANKING_RECALCULATE_JOB_TYPE,
           payloadJson: JSON.stringify({
-            cursor: result.nextCursor,
+            cursor: result.nextCursor ?? null,
             limit: nextLimit
           } satisfies RankingRecalculateJobPayload),
           maxAttempts: 2,
-          runAfter: now + RANKING_RECALCULATE_CHUNK_DELAY_MS,
+          runAfter: result.paused === true
+            ? Math.max(now, result.resumeAfter ?? now + RANKING_RECALCULATE_CHUNK_DELAY_MS)
+            : now + RANKING_RECALCULATE_CHUNK_DELAY_MS,
           now
         });
       }
+      return {
+        processed: result.processed,
+        nextCursor: result.nextCursor,
+        paused: result.paused === true
+      };
     }
   }
 }

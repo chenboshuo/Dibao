@@ -1513,8 +1513,9 @@ describe("job runner foundation", () => {
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job),
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          },
           [PROFILE_DECAY_JOB_TYPE]: (job) => profileDecayJobs.handleProfileDecayJob(job)
         },
         now: () => 1000
@@ -1578,8 +1579,9 @@ describe("job runner foundation", () => {
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job)
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
         },
         now: () => now
       });
@@ -1642,8 +1644,9 @@ describe("job runner foundation", () => {
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job)
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
         },
         now: () => 1000
       });
@@ -1703,8 +1706,9 @@ describe("job runner foundation", () => {
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job)
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
         },
         now: () => 1000
       });
@@ -1713,6 +1717,75 @@ describe("job runner foundation", () => {
       expect(calls).toEqual([
         { cursor: "cursor_tiny", limit: RANKING_RECALCULATE_MIN_CHUNK_SIZE }
       ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reschedules paused full ranking chunks after the foreground quiet window", async () => {
+    const db = createEmptyDatabase();
+    try {
+      const jobs = new SqliteJobRepository(db);
+      const chunks: Array<{ cursor: string | null; limit: number }> = [];
+      const rankingJobs = new RankingRecalculateJobService({
+        jobs,
+        ranking: {
+          recalculateArticle() {
+            return 1;
+          },
+          recalculateArticles(articleIds: string[]) {
+            return articleIds.length;
+          },
+          recalculateAll() {
+            return 0;
+          },
+          recalculateChunk(input: { cursor?: string | null; limit: number }) {
+            chunks.push({
+              cursor: input.cursor ?? null,
+              limit: input.limit
+            });
+            return {
+              processed: 0,
+              nextCursor: input.cursor ?? null,
+              paused: true,
+              resumeAfter: 42_000
+            };
+          }
+        },
+        jobIdFactory: () => "job_rank_resume",
+        now: () => 10_000
+      });
+      jobs.enqueue({
+        id: "job_rank_paused",
+        type: RANKING_RECALCULATE_JOB_TYPE,
+        payloadJson: null,
+        maxAttempts: 2,
+        runAfter: 10_000,
+        now: 10_000
+      });
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
+        },
+        now: () => 10_000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(1);
+      expect(chunks).toEqual([{ cursor: null, limit: RANKING_RECALCULATE_CHUNK_SIZE }]);
+      expect(jobs.findById("job_rank_paused")).toMatchObject({
+        status: "succeeded"
+      });
+      expect(jobs.findById("job_rank_resume")).toMatchObject({
+        status: "queued",
+        runAfter: 42_000
+      });
+      expect(JSON.parse(jobs.findById("job_rank_resume")?.payloadJson ?? "{}")).toEqual({
+        cursor: null,
+        limit: RANKING_RECALCULATE_CHUNK_SIZE
+      });
     } finally {
       db.close();
     }
