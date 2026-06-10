@@ -1,7 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { shouldSkipPassiveIgnoreTelemetry } from "./articleListState.js";
+import {
+  isArticleListIgnoreTelemetryEnabled,
+  shouldSkipPassiveIgnoreTelemetry
+} from "./articleListState.js";
 
 describe("passive article ignore telemetry", () => {
+  it("keeps list telemetry enabled for eligible views even when detail handles per-item protection", () => {
+    expect(
+      isArticleListIgnoreTelemetryEnabled({
+        articleView: "recommended",
+        markScrolledArticlesIgnored: true
+      })
+    ).toBe(true);
+
+    expect(
+      isArticleListIgnoreTelemetryEnabled({
+        articleView: "latest",
+        markScrolledArticlesIgnored: true
+      })
+    ).toBe(true);
+
+    expect(
+      isArticleListIgnoreTelemetryEnabled({
+        articleView: "favorites",
+        markScrolledArticlesIgnored: true
+      })
+    ).toBe(false);
+  });
+
   it("keeps other unseen articles eligible while a detail article is open", () => {
     expect(
       shouldSkipPassiveIgnoreTelemetry({

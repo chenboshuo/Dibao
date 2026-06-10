@@ -55,6 +55,7 @@ import {
 } from "./api.js";
 import {
   articleInteractionStatusForState,
+  isArticleListIgnoreTelemetryEnabled,
   articleListAfterStateUpdate,
   articleListWithKnownLocalStates,
   articlesVisibleForUnreadFilter,
@@ -3160,11 +3161,10 @@ export function App() {
               articleView={currentArticleView}
               articles={articles}
               feedCount={feeds.length}
-              isIgnoreTelemetryEnabled={
-                appSettings.behavior.markScrolledArticlesIgnored &&
-                (currentArticleView === "latest" || currentArticleView === "recommended") &&
-                selectedArticleId === null
-              }
+              isIgnoreTelemetryEnabled={isArticleListIgnoreTelemetryEnabled({
+                articleView: currentArticleView,
+                markScrolledArticlesIgnored: appSettings.behavior.markScrolledArticlesIgnored
+              })}
               isArticlesLoading={isArticlesLoading}
               isMarkingScopeRead={isMarkingScopeRead}
               isLoadingMore={isLoadingMoreArticles}

@@ -1,7 +1,8 @@
 import type {
   ArticleInteractionStatus,
   ArticleListItem,
-  ArticleState
+  ArticleState,
+  ArticleView
 } from "./api.js";
 
 export function articleInteractionStatusForState(
@@ -91,6 +92,16 @@ export function shouldSkipPassiveIgnoreTelemetry(input: {
     input.isOpened ||
     input.isAlreadyIgnored ||
     input.interactionStatus !== "unseen"
+  );
+}
+
+export function isArticleListIgnoreTelemetryEnabled(input: {
+  articleView: ArticleView;
+  markScrolledArticlesIgnored: boolean;
+}): boolean {
+  return (
+    input.markScrolledArticlesIgnored &&
+    (input.articleView === "latest" || input.articleView === "recommended")
   );
 }
 

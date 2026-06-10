@@ -967,7 +967,7 @@ function useArticleListIgnoreTelemetry(props: {
   useEffect(() => {
     selectedArticleIdRef.current = props.selectedArticleId;
     if (props.selectedArticleId) {
-      seenVisibleIds.current.clear();
+      seenVisibleIds.current.delete(props.selectedArticleId);
     }
   }, [props.selectedArticleId]);
 
