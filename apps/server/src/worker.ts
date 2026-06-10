@@ -65,8 +65,9 @@ const server = buildServer({
 
 let closing = false;
 const keepAlive = setInterval(() => {
-  // The background timers are unref'd so this keeps the worker process alive.
-}, 60 * 60 * 1000);
+  // The background timers are unref'd; a short ref'd heartbeat keeps them observable in
+  // this non-listening worker process without relying on an hourly wake-up.
+}, 1_000);
 
 try {
   await server.ready();
