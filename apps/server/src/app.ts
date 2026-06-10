@@ -1103,6 +1103,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       return;
     }
 
+    recordForegroundApiActivity(request, pathname);
+
     if (!authRequired || isAnonymousRoute(request.method, request.routeOptions.url)) {
       return;
     }
@@ -1111,8 +1113,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!authService.authenticate(token)) {
       return sendApiError(reply, 401, "UNAUTHORIZED", "Authentication required");
     }
-
-    recordForegroundApiActivity(request, pathname);
 
     if (
       (coreDatabaseMigrationService.isBlocking() || derivedDataUpgradeService.isBlocking()) &&
@@ -2823,6 +2823,8 @@ function isForegroundActivityRoute(pathname: string): boolean {
 
   return (
     pathname.startsWith("/api/articles") ||
+    pathname === "/api/auth/session" ||
+    pathname === "/api/setup/status" ||
     pathname.startsWith("/api/reader") ||
     pathname.startsWith("/api/recommendation") ||
     pathname.startsWith("/api/feeds") ||
@@ -2949,6 +2951,7 @@ function getRecommendationStatus(options: {
   const clusterDetailLevel = options.clusterDetailLevel ?? "diagnostic";
   const activeProvider = options.embeddings.findActiveProvider();
   const needsDiagnosticIndex = includeClusterItems && clusterDetailLevel === "diagnostic";
+  const summaryOnly = !includeClusterItems;
   const activeIndex = activeProvider
     ? needsDiagnosticIndex
       ? activeDiagnosticIndexFor(activeProvider.id, options.embeddings.listIndexes())
@@ -2957,10 +2960,14 @@ function getRecommendationStatus(options: {
   const activeRankContext = options.rankingService.getActiveRankContext();
   const coverage = needsDiagnosticIndex
     ? coverageFor(activeIndex as EmbeddingIndexListRow | null)
-    : lightweightCoverageFor(options.db, activeIndex);
-  const behaviorCounts = Object.fromEntries(
-    options.profiles.countBehaviorEvents().map((row) => [row.eventType, row.count])
-  );
+    : includeClusterItems
+      ? lightweightCoverageFor(options.db, activeIndex)
+      : summaryCoverageFor(activeIndex);
+  const behaviorCounts = summaryOnly
+    ? {}
+    : Object.fromEntries(
+        options.profiles.countBehaviorEvents().map((row) => [row.eventType, row.count])
+      );
   const clusters = options.profiles.countClusters({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
@@ -3002,14 +3009,27 @@ function getRecommendationStatus(options: {
           clusterFamilyMap.get(cluster.id) ?? null
         );
   });
-  const familySummary = options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 8);
-  const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
-  const lastProfileUpdate = options.profiles.getLastProfileUpdate({
-    ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
-  });
-  const lastRankingUpdate = options.rankings.getLastRankingUpdate({ activeRankContext });
-  const profileSignals = options.profiles.countProfileSignals();
-  const profileLearning = isProfileLearning(profileSignals, clusters);
+  const familySummary = summaryOnly
+    ? emptyRecommendationFamilySummary()
+    : options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 8);
+  const rankedArticles = summaryOnly
+    ? { base: 0, active: 0 }
+    : options.rankings.countRankedArticles({ activeRankContext });
+  const lastProfileUpdate = summaryOnly
+    ? null
+    : options.profiles.getLastProfileUpdate({
+        ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
+      });
+  const lastRankingUpdate = summaryOnly
+    ? null
+    : options.rankings.getLastRankingUpdate({ activeRankContext });
+  const profileSignals = summaryOnly
+    ? {
+        signalCount: PROFILE_WARMUP_MIN_SIGNAL_COUNT,
+        articleCount: PROFILE_WARMUP_MIN_SIGNAL_ARTICLE_COUNT
+      }
+    : options.profiles.countProfileSignals();
+  const profileLearning = summaryOnly ? false : isProfileLearning(profileSignals, clusters);
   const warnings = recommendationWarnings({
     activeProvider,
     activeIndex,
@@ -3866,6 +3886,36 @@ function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverag
     failedJobs: index.failedJobs,
     lastFailedAt: index.lastFailedAt,
     lastError: index.lastError
+  };
+}
+
+function summaryCoverageFor(index: EmbeddingIndexRow | null): RecommendationCoverage {
+  if (!index) {
+    return coverageFor(null);
+  }
+
+  return {
+    candidateCount: 1,
+    eligibleArticleCount: 1,
+    missingEmbeddingCount: 1,
+    staleEmbeddingCount: 0,
+    coveredArticleCount: 0,
+    embeddingCount: 0,
+    coverageRatio: 0,
+    pendingJobs: 0,
+    failedJobs: 0,
+    lastFailedAt: null,
+    lastError: null
+  };
+}
+
+function emptyRecommendationFamilySummary() {
+  return {
+    positive: 0,
+    negative: 0,
+    topFamilies: [],
+    dominantFamily: null,
+    concentrationRisk: "low" as const
   };
 }
 

@@ -524,43 +524,61 @@ export class SqliteArticleRepository implements ArticleRepository {
                   and active.rank_context = ?
               )
           ),
-          ranked_rows as (
-            ${baseArticleReadSelect()},
-            ranked.score as sortScore,
-            case when ranked.rerank_position is null then 1 else 0 end as sortRerankMissing,
-            ranked.rerank_position as sortRerankPosition,
-            0 as sortRankMissing,
-            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
-            ${rankedArticleReadFrom()}
+          recommended_ids as (
+            select
+              a.id,
+              ranked.score as sortScore,
+              case when ranked.rerank_position is null then 1 else 0 end as sortRerankMissing,
+              ranked.rerank_position as sortRerankPosition,
+              0 as sortRankMissing,
+              coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+            ${rankedArticleFilterFrom()}
             where ${input.conditions.join(" and ")}
-          ),
-          unranked_rows as (
-            ${baseArticleReadSelect()},
-            null as sortScore,
-            1 as sortRerankMissing,
-            null as sortRerankPosition,
-            1 as sortRankMissing,
-            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+            union all
+            select
+              a.id,
+              null as sortScore,
+              1 as sortRerankMissing,
+              null as sortRerankPosition,
+              1 as sortRankMissing,
+              coalesce(a.published_at, a.discovered_at) as sortPublishedAt
             ${baseArticleReadFrom()}
             where ${input.conditions.join(" and ")}
               and rs.article_id is null
               and base_rs.article_id is null
+            order by
+              sortRankMissing asc,
+              sortScore desc,
+              sortRerankMissing asc,
+              sortRerankPosition asc,
+              sortPublishedAt desc,
+              1 desc
+            limit ?
+            offset ?
           )
-          select *
-          from (
-            select * from ranked_rows
-            union all
-            select * from unranked_rows
-          )
+          ${baseArticleReadSelect()},
+            recommended_ids.sortScore,
+            recommended_ids.sortRerankMissing,
+            recommended_ids.sortRerankPosition,
+            recommended_ids.sortRankMissing,
+            recommended_ids.sortPublishedAt
+          from recommended_ids
+          join articles a on a.id = recommended_ids.id
+          join feeds f on f.id = a.feed_id and f.deleted_at is null
+          left join article_states s on s.article_id = a.id
+          left join article_rank_scores rs
+            on rs.article_id = a.id
+            and rs.rank_context = ?
+          left join article_rank_scores base_rs
+            on base_rs.article_id = a.id
+            and base_rs.rank_context = ?
           order by
             sortRankMissing asc,
             sortScore desc,
             sortRerankMissing asc,
             sortRerankPosition asc,
             sortPublishedAt desc,
-            id desc
-          limit ?
-          offset ?
+            recommended_ids.id desc
         `
       )
       .all(
@@ -569,14 +587,14 @@ export class SqliteArticleRepository implements ArticleRepository {
         input.rankContext,
         BASE_RANK_CONTEXT,
         input.rankContext,
-        input.rankContext,
-        BASE_RANK_CONTEXT,
         ...input.filterParams,
         input.rankContext,
         BASE_RANK_CONTEXT,
         ...input.filterParams,
         input.limit + 1,
-        input.offset
+        input.offset,
+        input.rankContext,
+        BASE_RANK_CONTEXT
       ) as ArticleReadDbRow[];
   }
 
@@ -1103,18 +1121,12 @@ function baseArticleReadFrom(): string {
   `;
 }
 
-function rankedArticleReadFrom(): string {
+function rankedArticleFilterFrom(): string {
   return `
     from ranked
     join articles a on a.id = ranked.article_id
     join feeds f on f.id = a.feed_id and f.deleted_at is null
     left join article_states s on s.article_id = a.id
-    left join article_rank_scores rs
-      on rs.article_id = a.id
-      and rs.rank_context = ?
-    left join article_rank_scores base_rs
-      on base_rs.article_id = a.id
-      and base_rs.rank_context = ?
   `;
 }
 

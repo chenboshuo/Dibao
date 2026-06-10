@@ -6,10 +6,10 @@ import type { ArticleRankingRecalculator } from "./ranking-service.js";
 
 export const RANKING_RECALCULATE_JOB_TYPE = "ranking_recalculate" as const;
 export const RANKING_RECALCULATE_ARTICLE_LIMIT = 500;
-export const RANKING_RECALCULATE_CHUNK_SIZE = 25;
+export const RANKING_RECALCULATE_CHUNK_SIZE = 5;
 export const RANKING_RECALCULATE_CHUNK_DELAY_MS = 60_000;
-export const RANKING_RECALCULATE_TARGET_CHUNK_MS = 2_000;
-export const RANKING_RECALCULATE_MIN_CHUNK_SIZE = 5;
+export const RANKING_RECALCULATE_TARGET_CHUNK_MS = 750;
+export const RANKING_RECALCULATE_MIN_CHUNK_SIZE = 1;
 
 export type RankingRecalculateJobPayload = {
   articleIds?: string[];
