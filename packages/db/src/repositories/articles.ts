@@ -70,6 +70,15 @@ type ArticleDetailDbRow = ArticleReadDbRow & {
   extractionError: string | null;
 };
 
+type RecommendedCandidateRow = {
+  id: string;
+  sortScore: number | null;
+  sortRerankMissing: 0 | 1;
+  sortRerankPosition: number | null;
+  sortRankMissing: 0 | 1;
+  sortPublishedAt: number;
+};
+
 export interface ArticleRepository {
   cleanupForRetention(articleIds: string[], now: number): ArticleRetentionCleanupResult;
   countUnreadForScope(scope: ArticleScope): number;
@@ -497,64 +506,180 @@ export class SqliteArticleRepository implements ArticleRepository {
     limit: number;
     offset: number;
   }): ArticleReadDbRow[] {
+    const targetCount = input.offset + input.limit + 1;
+    const rankedCandidates = this.listRankedRecommendedCandidates(input, targetCount);
+    const missingUnrankedCount = Math.max(0, targetCount - rankedCandidates.length);
+    const candidates =
+      missingUnrankedCount > 0
+        ? [
+            ...rankedCandidates,
+            ...this.listUnrankedRecommendedCandidates(input, missingUnrankedCount)
+          ]
+        : rankedCandidates;
+    const pageCandidates = candidates.slice(input.offset, input.offset + input.limit + 1);
+    return this.hydrateRecommendedCandidates(input.rankContext, pageCandidates);
+  }
+
+  private listRankedRecommendedCandidates(
+    input: {
+      rankContext: string;
+      conditions: string[];
+      filterParams: unknown[];
+    },
+    targetCount: number
+  ): RecommendedCandidateRow[] {
+    let candidates: RecommendedCandidateRow[] = [];
+    const windows = recommendedCandidateWindows(targetCount);
+    for (const candidateLimit of windows) {
+      const active = this.selectRankedRecommendedCandidates({
+        rankContext: input.rankContext,
+        excludeRankContext: null,
+        conditions: input.conditions,
+        filterParams: input.filterParams,
+        limit: candidateLimit
+      });
+      const base =
+        input.rankContext === BASE_RANK_CONTEXT
+          ? []
+          : this.selectRankedRecommendedCandidates({
+              rankContext: BASE_RANK_CONTEXT,
+              excludeRankContext: input.rankContext,
+              conditions: input.conditions,
+              filterParams: input.filterParams,
+              limit: candidateLimit
+            });
+      candidates = mergeRecommendedCandidates(active, base);
+      if (
+        candidates.length >= targetCount ||
+        (active.length < candidateLimit && base.length < candidateLimit)
+      ) {
+        return candidates;
+      }
+    }
+    return candidates;
+  }
+
+  private selectRankedRecommendedCandidates(input: {
+    rankContext: string;
+    excludeRankContext: string | null;
+    conditions: string[];
+    filterParams: unknown[];
+    limit: number;
+  }): RecommendedCandidateRow[] {
+    const excludeActive = input.excludeRankContext
+      ? `
+        and not exists (
+          select 1
+          from article_rank_scores active
+          where active.article_id = ars.article_id
+            and active.rank_context = ?
+        )
+      `
+      : "";
+    const excludeParams = input.excludeRankContext ? [input.excludeRankContext] : [];
     return this.db
       .prepare(
         `
-          with ranked as (
-            select
-              article_id,
-              score,
-              calculated_at,
-              rerank_position
-            from article_rank_scores
-            where rank_context = ?
-            union all
-            select
-              base.article_id,
-              base.score,
-              base.calculated_at,
-              null as rerank_position
-            from article_rank_scores base
-            where base.rank_context = ?
-              and ? != ?
-              and not exists (
-                select 1
-                from article_rank_scores active
-                where active.article_id = base.article_id
-                  and active.rank_context = ?
-              )
-          ),
-          recommended_ids as (
-            select
-              a.id,
-              ranked.score as sortScore,
-              case when ranked.rerank_position is null then 1 else 0 end as sortRerankMissing,
-              ranked.rerank_position as sortRerankPosition,
-              0 as sortRankMissing,
-              coalesce(a.published_at, a.discovered_at) as sortPublishedAt
-            ${rankedArticleFilterFrom()}
-            where ${input.conditions.join(" and ")}
-            union all
-            select
-              a.id,
-              null as sortScore,
-              1 as sortRerankMissing,
-              null as sortRerankPosition,
-              1 as sortRankMissing,
-              coalesce(a.published_at, a.discovered_at) as sortPublishedAt
-            ${baseArticleReadFrom()}
-            where ${input.conditions.join(" and ")}
-              and rs.article_id is null
-              and base_rs.article_id is null
-            order by
-              sortRankMissing asc,
-              sortScore desc,
-              sortRerankMissing asc,
-              sortRerankPosition asc,
-              sortPublishedAt desc,
-              1 desc
-            limit ?
-            offset ?
+          select
+            a.id,
+            ars.score as sortScore,
+            case when ars.rerank_position is null then 1 else 0 end as sortRerankMissing,
+            ars.rerank_position as sortRerankPosition,
+            0 as sortRankMissing,
+            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+          from article_rank_scores ars
+          join articles a on a.id = ars.article_id
+          join feeds f on f.id = a.feed_id and f.deleted_at is null
+          left join article_states s on s.article_id = a.id
+          where ars.rank_context = ?
+            ${excludeActive}
+            and ${input.conditions.join(" and ")}
+          order by
+            ars.score desc,
+            case when ars.rerank_position is null then 1 else 0 end,
+            ars.rerank_position asc,
+            coalesce(a.published_at, a.discovered_at) desc,
+            a.id desc
+          limit ?
+        `
+      )
+      .all(
+        input.rankContext,
+        ...excludeParams,
+        ...input.filterParams,
+        input.limit
+      ) as RecommendedCandidateRow[];
+  }
+
+  private listUnrankedRecommendedCandidates(
+    input: {
+      rankContext: string;
+      conditions: string[];
+      filterParams: unknown[];
+    },
+    limit: number
+  ): RecommendedCandidateRow[] {
+    if (limit <= 0) {
+      return [];
+    }
+    return this.db
+      .prepare(
+        `
+          select
+            a.id,
+            null as sortScore,
+            1 as sortRerankMissing,
+            null as sortRerankPosition,
+            1 as sortRankMissing,
+            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+          ${baseArticleReadFrom()}
+          where ${input.conditions.join(" and ")}
+            and rs.article_id is null
+            and base_rs.article_id is null
+          order by
+            coalesce(a.published_at, a.discovered_at) desc,
+            a.id desc
+          limit ?
+        `
+      )
+      .all(
+        input.rankContext,
+        BASE_RANK_CONTEXT,
+        ...input.filterParams,
+        limit
+      ) as RecommendedCandidateRow[];
+  }
+
+  private hydrateRecommendedCandidates(
+    rankContext: string,
+    candidates: RecommendedCandidateRow[]
+  ): ArticleReadDbRow[] {
+    if (candidates.length === 0) {
+      return [];
+    }
+    const values = candidates.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const params = candidates.flatMap((candidate, index) => [
+      candidate.id,
+      candidate.sortScore,
+      candidate.sortRerankMissing,
+      candidate.sortRerankPosition,
+      candidate.sortRankMissing,
+      candidate.sortPublishedAt,
+      index
+    ]);
+    return this.db
+      .prepare(
+        `
+          with recommended_ids (
+            id,
+            sortScore,
+            sortRerankMissing,
+            sortRerankPosition,
+            sortRankMissing,
+            sortPublishedAt,
+            displayOrder
+          ) as (
+            values ${values}
           )
           ${baseArticleReadSelect()},
             recommended_ids.sortScore,
@@ -578,24 +703,11 @@ export class SqliteArticleRepository implements ArticleRepository {
             sortRerankMissing asc,
             sortRerankPosition asc,
             sortPublishedAt desc,
-            recommended_ids.id desc
+            recommended_ids.id desc,
+            displayOrder asc
         `
       )
-      .all(
-        input.rankContext,
-        BASE_RANK_CONTEXT,
-        input.rankContext,
-        BASE_RANK_CONTEXT,
-        input.rankContext,
-        ...input.filterParams,
-        input.rankContext,
-        BASE_RANK_CONTEXT,
-        ...input.filterParams,
-        input.limit + 1,
-        input.offset,
-        input.rankContext,
-        BASE_RANK_CONTEXT
-      ) as ArticleReadDbRow[];
+      .all(...params, rankContext, BASE_RANK_CONTEXT) as ArticleReadDbRow[];
   }
 
   search(input: ArticleSearchInput): ArticleSearchResult {
@@ -1121,21 +1233,64 @@ function baseArticleReadFrom(): string {
   `;
 }
 
-function rankedArticleFilterFrom(): string {
-  return `
-    from ranked
-    join articles a on a.id = ranked.article_id
-    join feeds f on f.id = a.feed_id and f.deleted_at is null
-    left join article_states s on s.article_id = a.id
-  `;
-}
-
 function baseArticleFilterFrom(): string {
   return `
     from articles a
     join feeds f on f.id = a.feed_id and f.deleted_at is null
     left join article_states s on s.article_id = a.id
   `;
+}
+
+function recommendedCandidateWindows(targetCount: number): number[] {
+  const firstWindow = Math.max(256, targetCount * 4);
+  const windows = [firstWindow, 1_024, 2_048, 4_096, 8_192]
+    .filter((value) => value >= firstWindow)
+    .map((value) => Math.min(value, 20_000));
+  return Array.from(new Set(windows));
+}
+
+function mergeRecommendedCandidates(
+  active: RecommendedCandidateRow[],
+  base: RecommendedCandidateRow[]
+): RecommendedCandidateRow[] {
+  const byId = new Map<string, RecommendedCandidateRow>();
+  for (const candidate of [...active, ...base]) {
+    if (!byId.has(candidate.id)) {
+      byId.set(candidate.id, candidate);
+    }
+  }
+  return Array.from(byId.values()).sort(compareRecommendedCandidates);
+}
+
+function compareRecommendedCandidates(
+  left: RecommendedCandidateRow,
+  right: RecommendedCandidateRow
+): number {
+  if (left.sortRankMissing !== right.sortRankMissing) {
+    return left.sortRankMissing - right.sortRankMissing;
+  }
+
+  const leftScore = left.sortScore ?? Number.NEGATIVE_INFINITY;
+  const rightScore = right.sortScore ?? Number.NEGATIVE_INFINITY;
+  if (leftScore !== rightScore) {
+    return rightScore - leftScore;
+  }
+
+  if (left.sortRerankMissing !== right.sortRerankMissing) {
+    return left.sortRerankMissing - right.sortRerankMissing;
+  }
+
+  const leftPosition = left.sortRerankPosition ?? Number.POSITIVE_INFINITY;
+  const rightPosition = right.sortRerankPosition ?? Number.POSITIVE_INFINITY;
+  if (leftPosition !== rightPosition) {
+    return leftPosition - rightPosition;
+  }
+
+  if (left.sortPublishedAt !== right.sortPublishedAt) {
+    return right.sortPublishedAt - left.sortPublishedAt;
+  }
+
+  return right.id.localeCompare(left.id);
 }
 
 function orderByForView(
