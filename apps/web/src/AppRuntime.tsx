@@ -143,6 +143,8 @@ const LazySetupProviderPanel = lazy(() =>
 
 const IGNORE_TELEMETRY_MAX_IN_FLIGHT = 3;
 const IGNORE_TELEMETRY_TIMEOUT_MS = 8_000;
+const ARTICLE_LIST_REQUEST_TIMEOUT_MS = 10_000;
+const ARTICLE_DETAIL_REQUEST_TIMEOUT_MS = 12_000;
 const ARTICLE_STATE_OVERLAY_STORAGE_KEY = "dibao:article-state-overlay:v1";
 const ARTICLE_STATE_OVERLAY_TTL_MS = 24 * 60 * 60 * 1000;
 const ARTICLE_STATE_OVERLAY_LIMIT = 500;
@@ -163,6 +165,19 @@ type ArticleStateOverlay = {
   states: Map<string, ArticleState>;
   locallyUpdatedIds: Set<string>;
 };
+
+async function withRequestTimeout<T>(
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await run(controller.signal);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
 const LazyFullContentPreviewPage = lazy(() =>
   import("./fullContent/FullContentPreviewPage.js").then((module) => ({ default: module.FullContentPreviewPage }))
 );
@@ -1038,14 +1053,21 @@ export function App() {
     setExplanationError(null);
 
     try {
-      const response = await dibaoApi.listArticles({
+      const requestInput = {
         ...articleQueryFor(selection),
         view,
         limit: 50,
         unreadOnly: supportsUnreadOnly(view) ? onlyUnread : false,
         timeWindow: supportsQuickFilters(view) ? selectedTimeWindow : "all",
         sort: articleSortForView(view, sort, laterSort)
-      });
+      };
+      const response = await withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+        dibaoApi.listArticles({
+          ...requestInput,
+          includeUnreadCount: false,
+          signal
+        })
+      );
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
@@ -1058,15 +1080,41 @@ export function App() {
       setArticles(
         articlesVisibleForUnreadFilter(responseArticles, supportsUnreadOnly(view) && onlyUnread)
       );
-      setUnreadCount(
-        unreadCountWithKnownLocalStates(
-          response.meta.unreadCount,
-          response.data,
-          articleStateById.current,
-          locallyUpdatedArticleIds.current
-        )
-      );
+      if (response.meta.unreadCount !== null) {
+        setUnreadCount(
+          unreadCountWithKnownLocalStates(
+            response.meta.unreadCount,
+            response.data,
+            articleStateById.current,
+            locallyUpdatedArticleIds.current
+          )
+        );
+      }
       setNextArticleCursor(response.page.nextCursor);
+      void withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+        dibaoApi.listArticles({
+          ...requestInput,
+          limit: 1,
+          includeUnreadCount: true,
+          signal
+        })
+      )
+        .then((countResponse) => {
+          if (
+            requestVersion === articleRequestVersion.current &&
+            countResponse.meta.unreadCount !== null
+          ) {
+            setUnreadCount(
+              unreadCountWithKnownLocalStates(
+                countResponse.meta.unreadCount,
+                response.data,
+                articleStateById.current,
+                locallyUpdatedArticleIds.current
+              )
+            );
+          }
+        })
+        .catch(() => undefined);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
         return;
@@ -1098,15 +1146,23 @@ export function App() {
     setRecommendationStatusError(null);
 
     try {
-      const response = await dibaoApi.searchArticles({
+      const requestInput = {
         ...articleQueryFor(form.sourceSelection),
         q: form.q.trim(),
         state: form.state,
         sort: form.sort,
+        fullText: form.fullText,
         from: form.from || null,
         to: form.to || null,
         limit: 50
-      });
+      };
+      const response = await withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+        dibaoApi.searchArticles({
+          ...requestInput,
+          includeUnreadCount: false,
+          signal
+        })
+      );
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
@@ -1117,15 +1173,41 @@ export function App() {
       );
       rememberArticleStates(responseArticles, articleStateById.current);
       setArticles(responseArticles);
-      setUnreadCount(
-        unreadCountWithKnownLocalStates(
-          response.meta.unreadCount,
-          response.data,
-          articleStateById.current,
-          locallyUpdatedArticleIds.current
-        )
-      );
+      if (response.meta.unreadCount !== null) {
+        setUnreadCount(
+          unreadCountWithKnownLocalStates(
+            response.meta.unreadCount,
+            response.data,
+            articleStateById.current,
+            locallyUpdatedArticleIds.current
+          )
+        );
+      }
       setNextArticleCursor(response.page.nextCursor);
+      void withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+        dibaoApi.searchArticles({
+          ...requestInput,
+          limit: 1,
+          includeUnreadCount: true,
+          signal
+        })
+      )
+        .then((countResponse) => {
+          if (
+            requestVersion === articleRequestVersion.current &&
+            countResponse.meta.unreadCount !== null
+          ) {
+            setUnreadCount(
+              unreadCountWithKnownLocalStates(
+                countResponse.meta.unreadCount,
+                response.data,
+                articleStateById.current,
+                locallyUpdatedArticleIds.current
+              )
+            );
+          }
+        })
+        .catch(() => undefined);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
         return;
@@ -1322,7 +1404,9 @@ export function App() {
       setIsExplanationOpen(false);
 
       try {
-        const detail = await dibaoApi.getArticle(articleId);
+        const detail = await withRequestTimeout(ARTICLE_DETAIL_REQUEST_TIMEOUT_MS, (signal) =>
+          dibaoApi.getArticle(articleId, { signal })
+        );
         const knownState = locallyUpdatedArticleIds.current.has(articleId)
           ? articleStateById.current.get(articleId)
           : null;
@@ -1766,7 +1850,11 @@ export function App() {
     const result = await dibaoApi.backfillCurrentFeedFullContent(feedId);
     await refreshSourcesAfterManagementMutation();
     if (selectedArticleId) {
-      setArticleDetail(await dibaoApi.getArticle(selectedArticleId));
+      setArticleDetail(
+        await withRequestTimeout(ARTICLE_DETAIL_REQUEST_TIMEOUT_MS, (signal) =>
+          dibaoApi.getArticle(selectedArticleId, { signal })
+        )
+      );
     }
     return result;
   }
@@ -2137,25 +2225,34 @@ export function App() {
     try {
       const response =
         appPage.type === "search"
-          ? await dibaoApi.searchArticles({
-              ...articleQueryFor(submittedSearchForm.sourceSelection),
-              q: submittedSearchForm.q.trim(),
-              state: submittedSearchForm.state,
-              sort: submittedSearchForm.sort,
-              from: submittedSearchForm.from || null,
-              to: submittedSearchForm.to || null,
-              limit: 50,
-              cursor: nextArticleCursor
-            })
-          : await dibaoApi.listArticles({
-              ...articleQueryFor(sourceSelection),
-              view: currentArticleView,
-              limit: 50,
-              cursor: nextArticleCursor,
-              unreadOnly: supportsUnreadOnly(currentArticleView) ? unreadOnly : false,
-              timeWindow: supportsQuickFilters(currentArticleView) ? timeWindow : "all",
-              sort: articleSortForView(currentArticleView, favoriteSort, readLaterSort)
-            });
+          ? await withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+              dibaoApi.searchArticles({
+                ...articleQueryFor(submittedSearchForm.sourceSelection),
+                q: submittedSearchForm.q.trim(),
+                state: submittedSearchForm.state,
+                sort: submittedSearchForm.sort,
+                fullText: submittedSearchForm.fullText,
+                from: submittedSearchForm.from || null,
+                to: submittedSearchForm.to || null,
+                limit: 50,
+                cursor: nextArticleCursor,
+                includeUnreadCount: false,
+                signal
+              })
+            )
+          : await withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+              dibaoApi.listArticles({
+                ...articleQueryFor(sourceSelection),
+                view: currentArticleView,
+                limit: 50,
+                cursor: nextArticleCursor,
+                unreadOnly: supportsUnreadOnly(currentArticleView) ? unreadOnly : false,
+                timeWindow: supportsQuickFilters(currentArticleView) ? timeWindow : "all",
+                sort: articleSortForView(currentArticleView, favoriteSort, readLaterSort),
+                includeUnreadCount: false,
+                signal
+              })
+            );
       if (requestVersion !== articleRequestVersion.current) {
         return;
       }
@@ -2176,14 +2273,16 @@ export function App() {
               )
         )
       );
-      setUnreadCount(
-        unreadCountWithKnownLocalStates(
-          response.meta.unreadCount,
-          response.data,
-          articleStateById.current,
-          locallyUpdatedArticleIds.current
-        )
-      );
+      if (response.meta.unreadCount !== null) {
+        setUnreadCount(
+          unreadCountWithKnownLocalStates(
+            response.meta.unreadCount,
+            response.data,
+            articleStateById.current,
+            locallyUpdatedArticleIds.current
+          )
+        );
+      }
       setNextArticleCursor(response.page.nextCursor);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {

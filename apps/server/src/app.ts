@@ -31,6 +31,7 @@ import {
   runMigrations,
   type ArticleActionType,
   type ArticleDetailRow,
+  type ArticleListCursor,
   type ArticleListInput,
   type ArticleListItemRow,
   type ArticleListView,
@@ -274,6 +275,7 @@ type ArticleQuery = {
   folderId?: string;
   status?: string;
   unreadOnly?: string;
+  includeUnreadCount?: string;
   todayOnly?: string;
   timeWindow?: string;
   limit?: string;
@@ -283,6 +285,7 @@ type ArticleQuery = {
 
 type SearchQuery = {
   q?: string;
+  scope?: string;
   feedId?: string;
   folderId?: string;
   from?: string;
@@ -291,6 +294,7 @@ type SearchQuery = {
   sort?: string;
   limit?: string;
   cursor?: string;
+  includeUnreadCount?: string;
 };
 
 type JobQuery = {
@@ -418,6 +422,8 @@ type RecommendationClusterDetailLevel = "summary" | "diagnostic";
 type CursorPayload = {
   offset: number;
 };
+
+type EncodedCursorPayload = CursorPayload | { keyset: ArticleListCursor };
 
 type BuildServerOptions = {
   db?: DibaoDatabase;
@@ -2480,15 +2486,30 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
 
+    const startedAt = performance.now();
     const result = articles.list({
       ...parsed.input,
       rankContext: rankingService.getActiveRankContext()
     });
+    app.log.info(
+      {
+        route: "/api/articles",
+        view: parsed.input.view ?? "latest",
+        sort: parsed.input.sort ?? null,
+        limit: parsed.input.limit ?? null,
+        offset: parsed.input.offset ?? 0,
+        includeUnreadCount: parsed.input.includeUnreadCount ?? true,
+        itemCount: result.items.length,
+        hasMore: result.nextOffset !== null,
+        durationMs: Math.round(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
 
     return {
       data: result.items.map(mapArticleListItem),
       page: {
-        nextCursor: encodeCursor(result.nextOffset)
+        nextCursor: encodeCursor(result.nextCursor ?? result.nextOffset)
       },
       meta: {
         unreadCount: result.unreadCount
@@ -2502,10 +2523,26 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
 
+    const startedAt = performance.now();
     const result = articles.search({
       ...parsed.input,
       rankContext: rankingService.getActiveRankContext()
     });
+    app.log.info(
+      {
+        route: "/api/search",
+        scope: parsed.input.scope ?? "default",
+        state: parsed.input.state ?? "all",
+        sort: parsed.input.sort ?? "relevance",
+        limit: parsed.input.limit ?? null,
+        offset: parsed.input.offset ?? 0,
+        includeUnreadCount: parsed.input.includeUnreadCount ?? true,
+        itemCount: result.items.length,
+        hasMore: result.nextOffset !== null,
+        durationMs: Math.round(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
 
     return {
       data: result.items.map(mapArticleListItem),
@@ -2588,9 +2625,18 @@ export function buildServer(options: BuildServerOptions = {}) {
   );
 
   app.get<{ Params: ArticleParams }>("/api/articles/:id", async (request, reply) => {
+    const startedAt = performance.now();
     const article = articles.findDetailById(request.params.id, {
       rankContext: rankingService.getActiveRankContext()
     });
+    app.log.info(
+      {
+        route: "/api/articles/:id",
+        found: Boolean(article),
+        durationMs: Math.round(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
 
     if (!article) {
       return sendApiError(reply, 404, "NOT_FOUND", "Article not found");
@@ -2639,10 +2685,19 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
 
       try {
+        const startedAt = performance.now();
         const result = articleActionService.record({
           articleId: request.params.id,
           ...parsed.input
         });
+        app.log.info(
+          {
+            route: "/api/articles/:id/actions",
+            action: parsed.input.type,
+            durationMs: Math.round(performance.now() - startedAt)
+          },
+          "performance.route"
+        );
         void pluginService.emitHook("article.actionRecorded", {
           articleId: request.params.id,
           eventId: result.eventId,
@@ -4764,6 +4819,13 @@ function parseArticleQuery(
       message: "unreadOnly must be true or false"
     };
   }
+  const includeUnreadCount = parseBooleanParam(query.includeUnreadCount);
+  if (includeUnreadCount === null) {
+    return {
+      ok: false,
+      message: "includeUnreadCount must be true or false"
+    };
+  }
 
   const todayOnly = parseBooleanParam(query.todayOnly);
   if (todayOnly === null) {
@@ -4789,8 +4851,8 @@ function parseArticleQuery(
     };
   }
 
-  const offset = decodeCursor(query.cursor);
-  if (offset === null) {
+  const cursor = decodeArticleListCursor(query.cursor);
+  if (cursor === null) {
     return {
       ok: false,
       message: "cursor is invalid"
@@ -4842,8 +4904,11 @@ function parseArticleQuery(
   const input: ArticleListInput = {
     view: view ?? "latest",
     limit,
-    offset
+    offset: cursor?.type === "offset" ? cursor.offset : undefined
   };
+  if (cursor && cursor.type !== "offset") {
+    input.cursor = cursor;
+  }
 
   if (query.feedId !== undefined) {
     input.feedId = query.feedId;
@@ -4856,6 +4921,9 @@ function parseArticleQuery(
   }
   if (unreadOnly !== undefined) {
     input.unreadOnly = unreadOnly;
+  }
+  if (includeUnreadCount !== undefined) {
+    input.includeUnreadCount = includeUnreadCount;
   }
   if (timeWindow !== undefined) {
     const range = rollingTimeRange(now?.() ?? Date.now(), timeWindow);
@@ -4885,6 +4953,15 @@ function parseSearchQuery(query: SearchQuery):
       ok: false,
       message: "q must be 256 characters or fewer",
       details: { field: "q", maxLength: 256 }
+    };
+  }
+
+  const scope = parseSearchScope(query.scope);
+  if (scope === null) {
+    return {
+      ok: false,
+      message: "scope must be default or full_text",
+      details: { field: "scope" }
     };
   }
 
@@ -4941,7 +5018,7 @@ function parseSearchQuery(query: SearchQuery):
     };
   }
 
-  const offset = decodeCursor(query.cursor);
+  const offset = decodeOffsetCursor(query.cursor);
   if (offset === null) {
     return {
       ok: false,
@@ -4950,14 +5027,25 @@ function parseSearchQuery(query: SearchQuery):
     };
   }
 
+  const includeUnreadCount = parseBooleanParam(query.includeUnreadCount);
+  if (includeUnreadCount === null) {
+    return {
+      ok: false,
+      message: "includeUnreadCount must be true or false",
+      details: { field: "includeUnreadCount" }
+    };
+  }
+
   return {
     ok: true,
     input: {
       query: rawQuery,
+      scope: scope ?? "default",
       state: state ?? "all",
       sort: sort ?? "relevance",
       limit,
       offset,
+      ...(includeUnreadCount !== undefined ? { includeUnreadCount } : {}),
       ...(query.feedId !== undefined ? { feedId: query.feedId } : {}),
       ...(query.folderId !== undefined ? { folderId: query.folderId } : {}),
       ...(typeof from === "number" ? { from } : {}),
@@ -5654,6 +5742,18 @@ function parseSearchSort(value: string | undefined): ArticleSearchSort | undefin
   return null;
 }
 
+function parseSearchScope(value: string | undefined): ArticleSearchInput["scope"] | undefined | null {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+
+  if (value === "default" || value === "full_text") {
+    return value;
+  }
+
+  return null;
+}
+
 function parseSearchTimestamp(value: string | undefined): number | undefined | null {
   if (value === undefined || value.trim() === "") {
     return undefined;
@@ -5822,15 +5922,17 @@ function parseLimit(value: string | undefined): number | undefined | null {
   return Math.min(parsed, 100);
 }
 
-function encodeCursor(offset: number | null): string | null {
-  if (offset === null) {
+function encodeCursor(cursor: number | ArticleListCursor | null): string | null {
+  if (cursor === null) {
     return null;
   }
 
-  return Buffer.from(JSON.stringify({ offset } satisfies CursorPayload)).toString("base64url");
+  const payload: EncodedCursorPayload =
+    typeof cursor === "number" ? { offset: cursor } : { keyset: cursor };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
 }
 
-function decodeCursor(cursor: string | undefined): number | undefined | null {
+function decodeOffsetCursor(cursor: string | undefined): number | undefined | null {
   if (cursor === undefined) {
     return undefined;
   }
@@ -5849,6 +5951,62 @@ function decodeCursor(cursor: string | undefined): number | undefined | null {
   } catch {
     return null;
   }
+}
+
+function decodeArticleListCursor(cursor: string | undefined): ArticleListCursor | undefined | null {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<
+      EncodedCursorPayload
+    >;
+    if ("offset" in payload) {
+      const offset = payload.offset;
+      return typeof offset === "number" && Number.isInteger(offset) && offset >= 0
+        ? { type: "offset", offset }
+        : null;
+    }
+    if ("keyset" in payload && isArticleListCursor(payload.keyset)) {
+      return payload.keyset;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isArticleListCursor(value: unknown): value is ArticleListCursor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const cursor = value as Partial<ArticleListCursor>;
+  if (cursor.type === "latest") {
+    return typeof cursor.publishedAt === "number" && typeof cursor.id === "string";
+  }
+  if (cursor.type === "favorites") {
+    return (
+      isFavoriteArticleSort(cursor.sort) &&
+      typeof cursor.favoritedAt === "number" &&
+      typeof cursor.publishedAt === "number" &&
+      typeof cursor.id === "string"
+    );
+  }
+  if (cursor.type === "read_later") {
+    return (
+      isReadLaterArticleSort(cursor.sort) &&
+      typeof cursor.readLaterAt === "number" &&
+      typeof cursor.publishedAt === "number" &&
+      typeof cursor.id === "string" &&
+      (cursor.rerankMissing === undefined || typeof cursor.rerankMissing === "number") &&
+      (cursor.rerankPosition === undefined ||
+        cursor.rerankPosition === null ||
+        typeof cursor.rerankPosition === "number") &&
+      (cursor.score === undefined || cursor.score === null || typeof cursor.score === "number")
+    );
+  }
+  return false;
 }
 
 function mapFeedFolder(folder: FeedFolderRow) {

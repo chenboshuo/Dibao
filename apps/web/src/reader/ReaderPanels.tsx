@@ -1,10 +1,15 @@
-import type { FormEvent, RefObject, SyntheticEvent } from "react";
+import type { CSSProperties, FormEvent, RefObject, SyntheticEvent } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ArticleDetail, ArticleListItem, ArticleSearchSort, ArticleSearchState, ArticleState, ArticleTimeWindow, ArticleView, FavoriteArticleSort, Feed, FeedDiagnosticItem, FeedFolder, PluginContributions, RankExplanation, RankExplanationReason, ReaderCommandMarkScopeReadPreviewResponse, ReaderSettings, ReadLaterArticleSort, RecommendationStatus } from "../api.js";
 import { useI18n, type Dictionary, type NavigationItemKey } from "../i18n.js";
 import styles from "../design-system/AppShell/AppShell.module.css";
 import { articleInteractionStatusForState } from "../articleListState.js";
 import { articleSortForView, canLoadRankExplanation, classNames, clusterDisplayName, confidenceBucket, countFeedsByFolder, explanationReasonText, formatCompactNumber, formatPercent, pageForNavigationItem, plainTextSummary, readerStyleFor, recommendationStatusMetrics, safeArticleUrl, sanitizeArticleHtml, shouldLetBrowserHandleLinkClick, shouldLoadRankExplanation, sortExplanationForView, supportsQuickFilters, supportsUnreadOnly, urlForAppPage, urlForArticle, urlForSearchPage, clampNumber, type ArticleActionIntent, type ArticleActionTarget, type AppPage, type FeedDiagnosticsByFeedId, type PendingArticleAction, type ReadProgressMetadata, type ReadProgressPostOptions, type SearchFormState, type SourceSelection } from "../app/shared.js";
+
+const ARTICLE_ROW_ESTIMATED_HEIGHT = 164;
+const ARTICLE_ROW_OVERSCAN = 8;
+const ARTICLE_LIST_VIRTUALIZATION_THRESHOLD = 80;
+const sanitizedArticleHtmlCache = new Map<string, string>();
 
 export type PluginActionButton = PluginContributions["actions"][number] & {
   pluginId: string;
@@ -178,6 +183,7 @@ export function ArticleListPanel(props: {
 }) {
   const { t, formatDate, formatArticleDate } = useI18n();
   const scrollContainerRef = useRef<HTMLElement>(null);
+  const [virtualViewport, setVirtualViewport] = useState({ scrollTop: 0, height: 800 });
   const listScrollKey = props.listScrollKey ?? `dibao:list-scroll:${props.articleView}`;
   const sourceTitle =
     props.selectedFeed?.title ?? props.selectedFolder?.title ?? t.articles.allSources;
@@ -196,6 +202,48 @@ export function ArticleListPanel(props: {
     storageKey: listScrollKey,
     rootRef: scrollContainerRef
   });
+
+  useEffect(() => {
+    const element = scrollContainerRef.current;
+    if (!element) {
+      return;
+    }
+
+    function updateViewport() {
+      setVirtualViewport({
+        scrollTop: element?.scrollTop ?? 0,
+        height: element?.clientHeight ?? 800
+      });
+    }
+
+    updateViewport();
+    element.addEventListener("scroll", updateViewport, { passive: true });
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      element.removeEventListener("scroll", updateViewport);
+      window.removeEventListener("resize", updateViewport);
+    };
+  }, []);
+
+  const shouldVirtualize =
+    !props.isArticlesLoading &&
+    props.articles.length > ARTICLE_LIST_VIRTUALIZATION_THRESHOLD;
+  const virtualStartIndex = shouldVirtualize
+    ? Math.max(
+        0,
+        Math.floor(virtualViewport.scrollTop / ARTICLE_ROW_ESTIMATED_HEIGHT) -
+          ARTICLE_ROW_OVERSCAN
+      )
+    : 0;
+  const virtualEndIndex = shouldVirtualize
+    ? Math.min(
+        props.articles.length,
+        Math.ceil(
+          (virtualViewport.scrollTop + virtualViewport.height) / ARTICLE_ROW_ESTIMATED_HEIGHT
+        ) + ARTICLE_ROW_OVERSCAN
+      )
+    : props.articles.length;
+  const visibleArticles = props.articles.slice(virtualStartIndex, virtualEndIndex);
 
   return (
     <section
@@ -329,61 +377,67 @@ export function ArticleListPanel(props: {
           />
         ) : null}
 
-        {!props.isArticlesLoading &&
-          props.articles.map((article) => (
-            <article
-              className={articleItemClassName(article, props.selectedArticleId)}
-              data-article-id={article.id}
-              data-interaction-status={articleInteractionStatusForState(article.state)}
-              data-favorited={article.state.favorited ? "true" : undefined}
-              data-liked={article.state.liked ? "true" : undefined}
-              data-read-later={article.state.readLater ? "true" : undefined}
-              key={article.id}
-            >
-              <a
-                className={styles.articleMain}
-                href={urlForArticle(props.articleView, article.id, {
-                  favoriteSort: props.favoriteSort,
-                  readLaterSort: props.readLaterSort,
-                  timeWindow: props.timeWindow,
-                  unreadOnly: props.unreadOnly
-                })}
-                onClick={(event) => {
-                  if (shouldLetBrowserHandleLinkClick(event)) {
-                    return;
-                  }
-                  event.preventDefault();
-                  props.onSelectArticle(article.id);
-                }}
-              >
-                <span className={styles.meta}>
-                  {t.articles.itemMeta(
-                    formatArticleDate(article.publishedAt ?? article.discoveredAt),
-                    article.feedTitle
-                  )}
-                </span>
-                <strong>{article.title}</strong>
-                {article.summary ? (
-                  <span className={styles.summary}>{plainTextSummary(article.summary)}</span>
-                ) : null}
-              </a>
-              <ArticleRowActions
+        {!props.isArticlesLoading && shouldVirtualize ? (
+          <div
+            className={styles.listVirtualWindow}
+            style={{ height: props.articles.length * ARTICLE_ROW_ESTIMATED_HEIGHT }}
+          >
+            {visibleArticles.map((article, visibleIndex) => {
+              const articleIndex = virtualStartIndex + visibleIndex;
+              return (
+                <ArticleListRow
+                  article={article}
+                  articleView={props.articleView}
+                  favoriteSort={props.favoriteSort}
+                  formatArticleDate={formatArticleDate}
+                  key={article.id}
+                  onArticleAction={props.onArticleAction}
+                  onExplainArticle={props.onExplainArticle}
+                  onPluginAction={props.onPluginAction}
+                  onSelectArticle={props.onSelectArticle}
+                  pendingAction={props.pendingAction}
+                  pluginActions={props.pluginRowActions ?? []}
+                  readLaterSort={props.readLaterSort}
+                  selectedArticleId={props.selectedArticleId}
+                  style={{
+                    left: 0,
+                    minHeight: ARTICLE_ROW_ESTIMATED_HEIGHT,
+                    position: "absolute",
+                    right: 0,
+                    top: 0,
+                    transform: `translateY(${articleIndex * ARTICLE_ROW_ESTIMATED_HEIGHT}px)`
+                  }}
+                  timeWindow={props.timeWindow}
+                  t={t}
+                  unreadOnly={props.unreadOnly}
+                />
+              );
+            })}
+          </div>
+        ) : null}
+
+        {!props.isArticlesLoading && !shouldVirtualize
+          ? props.articles.map((article) => (
+              <ArticleListRow
                 article={article}
-                onAction={(intent) => props.onArticleAction?.(article, intent)}
-                canExplain={shouldLoadRankExplanation(props.articleView)}
-                onExplain={() => props.onExplainArticle(article.id)}
-                onPluginAction={(action) =>
-                  props.onPluginAction?.(action, { articleId: article.id, slot: action.slot })
-                }
-                pendingAction={
-                  props.pendingAction?.articleId === article.id
-                    ? props.pendingAction.intent
-                    : null
-                }
+                articleView={props.articleView}
+                favoriteSort={props.favoriteSort}
+                formatArticleDate={formatArticleDate}
+                key={article.id}
+                onArticleAction={props.onArticleAction}
+                onExplainArticle={props.onExplainArticle}
+                onPluginAction={props.onPluginAction}
+                onSelectArticle={props.onSelectArticle}
+                pendingAction={props.pendingAction}
                 pluginActions={props.pluginRowActions ?? []}
+                readLaterSort={props.readLaterSort}
+                selectedArticleId={props.selectedArticleId}
+                timeWindow={props.timeWindow}
+                t={t}
+                unreadOnly={props.unreadOnly}
               />
-            </article>
-          ))}
+            ))
+          : null}
 
         {!props.isArticlesLoading && props.nextCursor ? (
           <div className={styles.loadMoreBar}>
@@ -403,6 +457,79 @@ export function ArticleListPanel(props: {
         ) : null}
       </div>
     </section>
+  );
+}
+
+function ArticleListRow(props: {
+  article: ArticleListItem;
+  articleView: ArticleView;
+  favoriteSort: FavoriteArticleSort;
+  formatArticleDate: (value: string | Date) => string;
+  onArticleAction?: (article: ArticleListItem, intent: ArticleActionIntent) => void;
+  onExplainArticle: (articleId: string) => void;
+  onPluginAction?: (action: PluginActionButton, context: PluginActionContext) => void;
+  onSelectArticle: (articleId: string) => void;
+  pendingAction?: PendingArticleAction | null;
+  pluginActions: PluginActionButton[];
+  readLaterSort: ReadLaterArticleSort;
+  selectedArticleId: string | null;
+  style?: CSSProperties;
+  timeWindow: ArticleTimeWindow;
+  t: Dictionary;
+  unreadOnly: boolean;
+}) {
+  const article = props.article;
+  return (
+    <article
+      className={articleItemClassName(article, props.selectedArticleId)}
+      data-article-id={article.id}
+      data-interaction-status={articleInteractionStatusForState(article.state)}
+      data-favorited={article.state.favorited ? "true" : undefined}
+      data-liked={article.state.liked ? "true" : undefined}
+      data-read-later={article.state.readLater ? "true" : undefined}
+      style={props.style}
+    >
+      <a
+        className={styles.articleMain}
+        href={urlForArticle(props.articleView, article.id, {
+          favoriteSort: props.favoriteSort,
+          readLaterSort: props.readLaterSort,
+          timeWindow: props.timeWindow,
+          unreadOnly: props.unreadOnly
+        })}
+        onClick={(event) => {
+          if (shouldLetBrowserHandleLinkClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          props.onSelectArticle(article.id);
+        }}
+      >
+        <span className={styles.meta}>
+          {props.t.articles.itemMeta(
+            props.formatArticleDate(article.publishedAt ?? article.discoveredAt),
+            article.feedTitle
+          )}
+        </span>
+        <strong>{article.title}</strong>
+        {article.summary ? (
+          <span className={styles.summary}>{plainTextSummary(article.summary)}</span>
+        ) : null}
+      </a>
+      <ArticleRowActions
+        article={article}
+        canExplain={shouldLoadRankExplanation(props.articleView)}
+        onAction={(intent) => props.onArticleAction?.(article, intent)}
+        onExplain={() => props.onExplainArticle(article.id)}
+        onPluginAction={(action) =>
+          props.onPluginAction?.(action, { articleId: article.id, slot: action.slot })
+        }
+        pendingAction={
+          props.pendingAction?.articleId === article.id ? props.pendingAction.intent : null
+        }
+        pluginActions={props.pluginActions}
+      />
+    </article>
   );
 }
 
@@ -634,6 +761,14 @@ export function SearchResultsPanel(props: {
             value={props.form.q}
           />
         </label>
+        <label className={styles.searchInlineOption}>
+          <input
+            checked={props.form.fullText}
+            onChange={(event) => update({ fullText: event.target.checked })}
+            type="checkbox"
+          />
+          <span>{t.search.fullTextLabel}</span>
+        </label>
         <div className={styles.searchActions}>
           <label className={styles.searchField}>
             <span>{t.search.sortLabel}</span>
@@ -682,13 +817,12 @@ export function SearchResultsPanel(props: {
             {isAdvancedSearchOpen ? t.search.hideAdvancedSearch : t.search.advancedSearch}
           </span>
         </button>
-        <div
-          className={`${styles.searchAdvanced} ${
-            isAdvancedSearchOpen ? styles.searchAdvancedOpen : ""
-          }`}
-          id="search-advanced-filters"
-        >
-          <div className={styles.searchFilters} aria-label={t.search.sourceLabel}>
+        {isAdvancedSearchOpen ? (
+          <div
+            className={`${styles.searchAdvanced} ${styles.searchAdvancedOpen}`}
+            id="search-advanced-filters"
+          >
+            <div className={styles.searchFilters} aria-label={t.search.sourceLabel}>
             <label className={styles.searchField}>
               <span>{t.search.folderLabel}</span>
               <select
@@ -751,8 +885,9 @@ export function SearchResultsPanel(props: {
                 value={props.form.to}
               />
             </label>
+            </div>
           </div>
-        </div>
+        ) : null}
       </form>
 
       {props.articleError ? <p className={styles.errorText}>{props.articleError}</p> : null}
@@ -1257,13 +1392,7 @@ export function ArticleDetailPanel(props: {
 }) {
   const { t, formatArticleDate } = useI18n();
   const readerPanelRef = useRef<HTMLElement>(null);
-  const safeHtml = useMemo(
-    () =>
-      props.article?.contentHtml
-        ? sanitizeArticleHtml(props.article.contentHtml, props.article.url)
-        : null,
-    [props.article?.contentHtml, props.article?.url]
-  );
+  const [safeHtml, setSafeHtml] = useState<string | null>(null);
   const sourceNotice = props.article ? contentSourceNotice(props.article, t) : null;
   const showReaderActions = useReaderActionVisibility(readerPanelRef, props.article?.id ?? null);
   const canExplainDetail = shouldLoadRankExplanation(props.articleView);
@@ -1273,6 +1402,36 @@ export function ArticleDetailPanel(props: {
     onReadProgress: props.onReadProgress,
     scrollContainerRef: readerPanelRef
   });
+
+  useEffect(() => {
+    const article = props.article;
+    if (!article?.contentHtml) {
+      setSafeHtml(null);
+      return;
+    }
+
+    const cacheKey = `${article.id}:${article.contentHtml.length}:${article.url}`;
+    const cached = sanitizedArticleHtmlCache.get(cacheKey);
+    if (cached) {
+      setSafeHtml(cached);
+      return;
+    }
+
+    let cancelled = false;
+    setSafeHtml(null);
+    const timeoutId = window.setTimeout(() => {
+      const nextSafeHtml = sanitizeArticleHtml(article.contentHtml ?? "", article.url);
+      sanitizedArticleHtmlCache.set(cacheKey, nextSafeHtml);
+      if (!cancelled) {
+        setSafeHtml(nextSafeHtml);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [props.article?.contentHtml, props.article?.id, props.article?.url]);
 
   return (
     <section

@@ -256,7 +256,7 @@ export type ArticleListResponse = {
   data: ArticleListItem[];
   page: ApiPage;
   meta: {
-    unreadCount: number;
+    unreadCount: number | null;
   };
 };
 
@@ -1161,7 +1161,7 @@ type ApiSuccess<T> = {
   data: T;
   page?: ApiPage;
   meta?: {
-    unreadCount?: number;
+    unreadCount?: number | null;
   };
 };
 
@@ -1966,6 +1966,8 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
         todayOnly?: boolean;
         timeWindow?: ArticleTimeWindow;
         sort?: ArticleListSort;
+        includeUnreadCount?: boolean;
+        signal?: AbortSignal;
       } = {}
     ): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
@@ -1996,14 +1998,19 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       if (input.sort && (view === "favorites" || view === "read_later")) {
         params.set("sort", input.sort);
       }
+      if (input.includeUnreadCount === false) {
+        params.set("includeUnreadCount", "false");
+      }
 
-      const response = await request<ArticleListItem[]>(`/api/articles?${params.toString()}`);
+      const response = await request<ArticleListItem[]>(`/api/articles?${params.toString()}`, {
+        signal: input.signal
+      });
 
       return {
         data: response.data,
         page: response.page ?? { nextCursor: null },
         meta: {
-          unreadCount: response.meta?.unreadCount ?? response.data.length
+          unreadCount: response.meta?.unreadCount ?? null
         }
       };
     },
@@ -2016,8 +2023,11 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       to?: string | null;
       state?: ArticleSearchState;
       sort?: ArticleSearchSort;
+      fullText?: boolean;
+      includeUnreadCount?: boolean;
       limit?: number;
       cursor?: string | null;
+      signal?: AbortSignal;
     }): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
         q: input.q,
@@ -2045,14 +2055,22 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       if (input.cursor) {
         params.set("cursor", input.cursor);
       }
+      if (input.fullText) {
+        params.set("scope", "full_text");
+      }
+      if (input.includeUnreadCount === false) {
+        params.set("includeUnreadCount", "false");
+      }
 
-      const response = await request<ArticleListItem[]>(`/api/search?${params.toString()}`);
+      const response = await request<ArticleListItem[]>(`/api/search?${params.toString()}`, {
+        signal: input.signal
+      });
 
       return {
         data: response.data,
         page: response.page ?? { nextCursor: null },
         meta: {
-          unreadCount: response.meta?.unreadCount ?? response.data.length
+          unreadCount: response.meta?.unreadCount ?? null
         }
       };
     },
@@ -2085,8 +2103,12 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
-    async getArticle(articleId: string): Promise<ArticleDetail> {
-      return (await request<ArticleDetail>(`/api/articles/${encodeURIComponent(articleId)}`)).data;
+    async getArticle(articleId: string, input: { signal?: AbortSignal } = {}): Promise<ArticleDetail> {
+      return (
+        await request<ArticleDetail>(`/api/articles/${encodeURIComponent(articleId)}`, {
+          signal: input.signal
+        })
+      ).data;
     },
 
     async getArticleExplanation(articleId: string): Promise<RankExplanation> {

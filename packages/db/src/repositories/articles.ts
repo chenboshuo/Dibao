@@ -3,6 +3,7 @@ import type {
   ArticleDetailRow,
   ArticleEmbeddingCandidateRow,
   ArticleInteractionStatus,
+  ArticleListCursor,
   ArticleListInput,
   ArticleListItemRow,
   ArticleListResult,
@@ -14,6 +15,8 @@ import type {
   ArticleSearchResult,
   DibaoDatabase,
   MarkScopeReadAuditResult,
+  ArticleFavoriteSort,
+  ArticleReadLaterSort,
   UpsertArticleContentInput,
   UpsertArticleContentResult,
   UpsertArticleInput
@@ -59,6 +62,12 @@ type ArticleReadDbRow = ArticleDbRow & {
   lastOpenedAt: number | null;
   lastIgnoredAt: number | null;
   lastActionAt: number | null;
+  favoritedAt: number | null;
+  readLaterAt: number | null;
+  sortPublishedAt: number;
+  sortRerankMissing: 0 | 1 | null;
+  sortRerankPosition: number | null;
+  sortRankMissing: 0 | 1 | null;
   rankScore: number | null;
   rankCalculatedAt: number | null;
 };
@@ -424,7 +433,6 @@ export class SqliteArticleRepository implements ArticleRepository {
       "s.not_interested_at is null"
     ];
     const rankContext = input.rankContext ?? BASE_RANK_CONTEXT;
-    const rankParams: unknown[] = [rankContext, BASE_RANK_CONTEXT];
     const filterParams: unknown[] = [];
 
     if (input.feedId) {
@@ -450,10 +458,10 @@ export class SqliteArticleRepository implements ArticleRepository {
       baseConditions.push("s.read_later_at is not null");
     }
 
-    const unreadCount = this.countForConditions(
-      [...baseConditions, unreadArticleCondition()],
-      filterParams
-    );
+    const includeUnreadCount = input.includeUnreadCount ?? true;
+    const unreadCount = includeUnreadCount
+      ? this.countForConditions([...baseConditions, unreadArticleCondition()], filterParams)
+      : null;
 
     const conditions = [...baseConditions];
 
@@ -467,6 +475,13 @@ export class SqliteArticleRepository implements ArticleRepository {
       conditions.push(unreadArticleCondition());
     }
 
+    const needsRank = needsRankForArticleList(input.view, input.sort);
+    const rankParams: unknown[] = needsRank ? [rankContext, BASE_RANK_CONTEXT] : [];
+    const keyset = keysetConditionForArticleList(input.view, input.sort, input.cursor);
+    const pageConditions =
+      keyset && input.view !== "recommended" ? [...conditions, keyset.sql] : conditions;
+    const pageParams =
+      keyset && input.view !== "recommended" ? [...filterParams, ...keyset.params] : filterParams;
     const rows =
       input.view === "recommended"
         ? this.listRecommendedByRank({
@@ -479,22 +494,31 @@ export class SqliteArticleRepository implements ArticleRepository {
         : (this.db
             .prepare(
               `
-                ${baseArticleReadSelect()}
-                ${baseArticleReadFrom()}
-                where ${conditions.join(" and ")}
+                ${baseArticleReadSelect({ includeRank: needsRank })}
+                ${baseArticleReadFrom({ includeRank: needsRank })}
+                where ${pageConditions.join(" and ")}
                 ${orderByForView(input.view, input.sort)}
                 limit ?
-                offset ?
+                ${keyset ? "" : "offset ?"}
               `
             )
-            .all(...rankParams, ...filterParams, limit + 1, offset) as ArticleReadDbRow[]);
+            .all(
+              ...rankParams,
+              ...pageParams,
+              ...(keyset ? [limit + 1] : [limit + 1, offset])
+            ) as ArticleReadDbRow[]);
 
     const hasMore = rows.length > limit;
-    const items = (hasMore ? rows.slice(0, limit) : rows).map(mapArticleListItem);
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map(mapArticleListItem);
+    const nextCursor = hasMore
+      ? cursorForArticleListRow(input.view, input.sort, pageRows.at(-1) ?? null)
+      : null;
 
     return {
       items,
       nextOffset: hasMore ? offset + limit : null,
+      nextCursor,
       unreadCount
     };
   }
@@ -723,7 +747,8 @@ export class SqliteArticleRepository implements ArticleRepository {
     const limit = normalizeLimit(input.limit);
     const offset = normalizeOffset(input.offset);
     const rankContext = input.rankContext ?? BASE_RANK_CONTEXT;
-    const search = buildSearchHitsCte(query);
+    const includeUnreadCount = input.includeUnreadCount ?? true;
+    const search = buildSearchHitsCte(query, input.scope ?? "default");
     const baseConditions = [
       "a.deleted_at is null",
       "a.status != 'deleted'",
@@ -753,11 +778,9 @@ export class SqliteArticleRepository implements ArticleRepository {
       filterParams.push(input.to);
     }
 
-    const unreadCount = this.countForSearchConditions(
-      search,
-      [...baseConditions, unreadArticleCondition()],
-      filterParams
-    );
+    const unreadCount = includeUnreadCount
+      ? this.countForSearchConditions(search, [...baseConditions, unreadArticleCondition()], filterParams)
+      : null;
 
     const conditions = [...baseConditions];
     switch (input.state ?? "all") {
@@ -1174,7 +1197,8 @@ function unreadArticleCondition(): string {
   `;
 }
 
-function baseArticleReadSelect(): string {
+function baseArticleReadSelect(options: { includeRank?: boolean } = {}): string {
+  const includeRank = options.includeRank ?? true;
   return `
     select
       a.id,
@@ -1202,35 +1226,226 @@ function baseArticleReadSelect(): string {
       case when s.not_interested_at is not null then 1 else 0 end as notInterested,
       coalesce(s.reading_progress, 0) as readingProgress,
       s.last_opened_at as lastOpenedAt,
-      (
-        select max(be.created_at)
-        from behavior_events be
-        where be.article_id = a.id
-          and be.event_type = 'impression'
-          and be.event_weight < 0
-      ) as lastIgnoredAt,
-      (
-        select max(be.created_at)
-        from behavior_events be
-        where be.article_id = a.id
-      ) as lastActionAt,
-      coalesce(rs.score, base_rs.score) as rankScore,
-      coalesce(rs.calculated_at, base_rs.calculated_at) as rankCalculatedAt
+      s.last_ignored_at as lastIgnoredAt,
+      s.last_action_at as lastActionAt,
+      s.favorited_at as favoritedAt,
+      s.read_later_at as readLaterAt,
+      coalesce(a.published_at, a.discovered_at) as sortPublishedAt,
+      ${includeRank ? "case when rs.rerank_position is null then 1 else 0 end" : "null"} as sortRerankMissing,
+      ${includeRank ? "rs.rerank_position" : "null"} as sortRerankPosition,
+      ${includeRank ? "case when coalesce(rs.score, base_rs.score) is null then 1 else 0 end" : "null"} as sortRankMissing,
+      ${includeRank ? "coalesce(rs.score, base_rs.score)" : "null"} as rankScore,
+      ${includeRank ? "coalesce(rs.calculated_at, base_rs.calculated_at)" : "null"} as rankCalculatedAt
   `;
 }
 
-function baseArticleReadFrom(): string {
+function baseArticleReadFrom(options: { includeRank?: boolean } = {}): string {
+  const includeRank = options.includeRank ?? true;
   return `
     from articles a
     join feeds f on f.id = a.feed_id and f.deleted_at is null
     left join article_states s on s.article_id = a.id
-    left join article_rank_scores rs
+    ${
+      includeRank
+        ? `left join article_rank_scores rs
       on rs.article_id = a.id
       and rs.rank_context = ?
     left join article_rank_scores base_rs
       on base_rs.article_id = a.id
-      and base_rs.rank_context = ?
+      and base_rs.rank_context = ?`
+        : ""
+    }
   `;
+}
+
+function needsRankForArticleList(
+  view: ArticleListInput["view"],
+  sort: ArticleListInput["sort"]
+): boolean {
+  return view === "recommended" || (view === "read_later" && (sort ?? "ranked") === "ranked");
+}
+
+function keysetConditionForArticleList(
+  view: ArticleListInput["view"],
+  sort: ArticleListInput["sort"],
+  cursor: ArticleListInput["cursor"]
+): { sql: string; params: unknown[] } | null {
+  if (!cursor || cursor.type === "offset" || view === "recommended") {
+    return null;
+  }
+
+  if ((view ?? "latest") === "latest" && cursor.type === "latest") {
+    return desc2("coalesce(a.published_at, a.discovered_at)", "a.id", cursor.publishedAt, cursor.id);
+  }
+
+  if (view === "favorites" && cursor.type === "favorites") {
+    const activeSort = sort ?? "favorited_desc";
+    if (cursor.sort !== activeSort || cursor.favoritedAt === undefined) {
+      return null;
+    }
+    switch (activeSort) {
+      case "favorited_asc":
+        return ascDescId("s.favorited_at", "coalesce(a.published_at, a.discovered_at)", cursor.favoritedAt, cursor.publishedAt, cursor.id);
+      case "published_desc":
+        return descDescId("coalesce(a.published_at, a.discovered_at)", "s.favorited_at", cursor.publishedAt, cursor.favoritedAt, cursor.id);
+      case "published_asc":
+        return ascDescId("coalesce(a.published_at, a.discovered_at)", "s.favorited_at", cursor.publishedAt, cursor.favoritedAt, cursor.id);
+      case "favorited_desc":
+      default:
+        return descDescId("s.favorited_at", "coalesce(a.published_at, a.discovered_at)", cursor.favoritedAt, cursor.publishedAt, cursor.id);
+    }
+  }
+
+  if (view === "read_later" && cursor.type === "read_later") {
+    const activeSort = sort ?? "ranked";
+    if (cursor.sort !== activeSort || cursor.readLaterAt === undefined) {
+      return null;
+    }
+    switch (activeSort) {
+      case "read_later_desc":
+        return descDescId("s.read_later_at", "coalesce(a.published_at, a.discovered_at)", cursor.readLaterAt, cursor.publishedAt, cursor.id);
+      case "read_later_asc":
+        return ascAscId("s.read_later_at", "coalesce(a.published_at, a.discovered_at)", cursor.readLaterAt, cursor.publishedAt, cursor.id);
+      case "published_desc":
+        return descDescId("coalesce(a.published_at, a.discovered_at)", "s.read_later_at", cursor.publishedAt, cursor.readLaterAt, cursor.id);
+      case "published_asc":
+        return ascDescId("coalesce(a.published_at, a.discovered_at)", "s.read_later_at", cursor.publishedAt, cursor.readLaterAt, cursor.id);
+      case "ranked":
+      default:
+        return rankedReadLaterKeysetCondition(cursor);
+    }
+  }
+
+  return null;
+}
+
+function cursorForArticleListRow(
+  view: ArticleListInput["view"],
+  sort: ArticleListInput["sort"],
+  row: ArticleReadDbRow | null
+): ArticleListCursor | null {
+  if (!row) {
+    return null;
+  }
+  if ((view ?? "latest") === "latest") {
+    return { type: "latest", publishedAt: row.sortPublishedAt, id: row.id };
+  }
+  if (view === "favorites" && row.favoritedAt !== null) {
+    return {
+      type: "favorites",
+      sort: (sort ?? "favorited_desc") as ArticleFavoriteSort,
+      favoritedAt: row.favoritedAt,
+      publishedAt: row.sortPublishedAt,
+      id: row.id
+    };
+  }
+  if (view === "read_later" && row.readLaterAt !== null) {
+    return {
+      type: "read_later",
+      sort: (sort ?? "ranked") as ArticleReadLaterSort,
+      rankMissing: row.sortRankMissing ?? 1,
+      rerankMissing: row.sortRerankMissing ?? 1,
+      rerankPosition: row.sortRerankPosition,
+      score: row.rankScore,
+      readLaterAt: row.readLaterAt,
+      publishedAt: row.sortPublishedAt,
+      id: row.id
+    };
+  }
+  return null;
+}
+
+function rankedReadLaterKeysetCondition(cursor: Extract<ArticleListCursor, { type: "read_later" }>): {
+  sql: string;
+  params: unknown[];
+} {
+  const missingExpr = "case when rs.rerank_position is null then 1 else 0 end";
+  const positionExpr = "coalesce(rs.rerank_position, 9223372036854775807)";
+  const scoreExpr = "coalesce(coalesce(rs.score, base_rs.score), -1.0e308)";
+  const missing = cursor.rerankMissing ?? 1;
+  const position = cursor.rerankPosition ?? 9223372036854775807;
+  const score = cursor.score ?? -1.0e308;
+  return {
+    sql: `(
+      ${missingExpr} > ?
+      or (${missingExpr} = ? and ${positionExpr} > ?)
+      or (${missingExpr} = ? and ${positionExpr} = ? and ${scoreExpr} < ?)
+      or (${missingExpr} = ? and ${positionExpr} = ? and ${scoreExpr} = ? and s.read_later_at < ?)
+      or (${missingExpr} = ? and ${positionExpr} = ? and ${scoreExpr} = ? and s.read_later_at = ? and coalesce(a.published_at, a.discovered_at) < ?)
+      or (${missingExpr} = ? and ${positionExpr} = ? and ${scoreExpr} = ? and s.read_later_at = ? and coalesce(a.published_at, a.discovered_at) = ? and a.id < ?)
+    )`,
+    params: [
+      missing,
+      missing, position,
+      missing, position, score,
+      missing, position, score, cursor.readLaterAt,
+      missing, position, score, cursor.readLaterAt, cursor.publishedAt,
+      missing, position, score, cursor.readLaterAt, cursor.publishedAt, cursor.id
+    ]
+  };
+}
+
+function desc2(
+  firstExpr: string,
+  idExpr: string,
+  first: number,
+  id: string
+): { sql: string; params: unknown[] } {
+  return {
+    sql: `(${firstExpr} < ? or (${firstExpr} = ? and ${idExpr} < ?))`,
+    params: [first, first, id]
+  };
+}
+
+function descDescId(
+  firstExpr: string,
+  secondExpr: string,
+  first: number,
+  second: number,
+  id: string
+): { sql: string; params: unknown[] } {
+  return {
+    sql: `(
+      ${firstExpr} < ?
+      or (${firstExpr} = ? and ${secondExpr} < ?)
+      or (${firstExpr} = ? and ${secondExpr} = ? and a.id < ?)
+    )`,
+    params: [first, first, second, first, second, id]
+  };
+}
+
+function ascDescId(
+  firstExpr: string,
+  secondExpr: string,
+  first: number,
+  second: number,
+  id: string
+): { sql: string; params: unknown[] } {
+  return {
+    sql: `(
+      ${firstExpr} > ?
+      or (${firstExpr} = ? and ${secondExpr} < ?)
+      or (${firstExpr} = ? and ${secondExpr} = ? and a.id < ?)
+    )`,
+    params: [first, first, second, first, second, id]
+  };
+}
+
+function ascAscId(
+  firstExpr: string,
+  secondExpr: string,
+  first: number,
+  second: number,
+  id: string
+): { sql: string; params: unknown[] } {
+  return {
+    sql: `(
+      ${firstExpr} > ?
+      or (${firstExpr} = ? and ${secondExpr} > ?)
+      or (${firstExpr} = ? and ${secondExpr} = ? and a.id < ?)
+    )`,
+    params: [first, first, second, first, second, id]
+  };
 }
 
 function baseArticleFilterFrom(): string {
@@ -1401,9 +1616,13 @@ type SearchHitsCte = {
   params: unknown[];
 };
 
-function buildSearchHitsCte(query: string): SearchHitsCte {
+function buildSearchHitsCte(
+  query: string,
+  scope: ArticleSearchInput["scope"] = "default"
+): SearchHitsCte {
   const sanitizedFtsQuery = sanitizeFtsQuery(query);
   const useLikeFallback = sanitizedFtsQuery.length === 0 || containsHanScript(query);
+  const includeFullTextFallback = scope === "full_text";
   const ctes: string[] = [];
   const hitSources: string[] = [];
   const params: unknown[] = [];
@@ -1436,11 +1655,14 @@ function buildSearchHitsCte(query: string): SearchHitsCte {
       from article_fts
       where title like ? escape '\\'
          or summary like ? escape '\\'
-         or content_text like ? escape '\\'
+         ${includeFullTextFallback ? "or content_text like ? escape '\\\\'" : ""}
       )
     `);
     hitSources.push("select article_id, search_rank from like_hits");
-    params.push(likeQuery, likeQuery, likeQuery, likeQuery, likeQuery);
+    params.push(likeQuery, likeQuery, likeQuery, likeQuery);
+    if (includeFullTextFallback) {
+      params.push(likeQuery);
+    }
   }
 
   return {

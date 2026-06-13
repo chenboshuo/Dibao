@@ -2377,6 +2377,21 @@
   display: block;
 }
 
+.searchInlineOption {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.searchInlineOption input {
+  margin: 0;
+}
+
 .searchField {
   min-width: 0;
   display: grid;
@@ -2396,6 +2411,11 @@
   background: var(--input-background);
   color: var(--color-ink);
   font-size: var(--text-sm);
+}
+
+.listVirtualWindow {
+  position: relative;
+  min-height: 1px;
 }
 
 .searchHint,

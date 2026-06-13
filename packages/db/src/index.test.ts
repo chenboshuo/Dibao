@@ -177,6 +177,8 @@ describe("db package", () => {
       expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
       expect(hasColumn(db, "rank_model_weights", "n")).toBe(true);
       expect(hasColumn(db, "jobs", "priority")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_action_at")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_ignored_at")).toBe(true);
       expect(hasColumn(db, "feed_stats", "clear_positive")).toBe(true);
       expect(hasColumn(db, "feed_stats", "source_confidence")).toBe(true);
       expect(hasColumn(db, "interest_cluster_evidence", "article_title_snapshot")).toBe(true);
@@ -194,6 +196,8 @@ describe("db package", () => {
       expect(hasIndex(db, "idx_plugin_delivery_attempts_delivery")).toBe(true);
       expect(hasIndex(db, "idx_behavior_events_projection_order")).toBe(true);
       expect(hasIndex(db, "idx_jobs_status_priority_run_after")).toBe(true);
+      expect(hasIndex(db, "idx_article_states_last_action_at")).toBe(true);
+      expect(hasIndex(db, "idx_article_states_last_ignored_at")).toBe(true);
     } finally {
       db.close();
     }
@@ -235,9 +239,12 @@ describe("db package", () => {
         "020",
         "021",
         "022",
-        "023"
+        "023",
+        "024"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_action_at")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_ignored_at")).toBe(true);
       expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
       expect(db.prepare("select username from auth_credentials where id = ?").get("single_user")).toEqual({
         username: null
@@ -800,7 +807,8 @@ describe("db package", () => {
         "020",
         "021",
         "022",
-        "023"
+        "023",
+        "024"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -1766,6 +1774,88 @@ describe("db package", () => {
         nextOffset: null,
         unreadCount: 0
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("paginates non-recommended article lists with keyset cursors", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      const articles = new SqliteArticleRepository(db);
+      const actions = new SqliteArticleActionRepository(db);
+
+      feeds.upsert({
+        id: "feed_keyset",
+        title: "Keyset Feed",
+        feedUrl: "https://example.com/keyset.xml",
+        now: 1000
+      });
+
+      for (const timestamp of [1000, 2000, 3000, 4000, 5000]) {
+        articles.upsert({
+          id: `article_keyset_${timestamp}`,
+          feedId: "feed_keyset",
+          url: `https://example.com/keyset/${timestamp}`,
+          title: `Keyset ${timestamp}`,
+          publishedAt: timestamp,
+          discoveredAt: timestamp,
+          dedupeKey: `article_keyset_${timestamp}`,
+          now: timestamp
+        });
+      }
+
+      actions.record({ articleId: "article_keyset_1000", type: "favorite", now: 11_000 });
+      actions.record({ articleId: "article_keyset_2000", type: "favorite", now: 12_000 });
+      actions.record({ articleId: "article_keyset_3000", type: "favorite", now: 13_000 });
+      actions.record({ articleId: "article_keyset_3000", type: "read_later", now: 21_000 });
+      actions.record({ articleId: "article_keyset_4000", type: "read_later", now: 22_000 });
+      actions.record({ articleId: "article_keyset_5000", type: "read_later", now: 23_000 });
+
+      const latestFirst = articles.list({ view: "latest", limit: 2 });
+      expect(latestFirst.items.map((article) => article.id)).toEqual([
+        "article_keyset_5000",
+        "article_keyset_4000"
+      ]);
+      expect(latestFirst.nextCursor).toMatchObject({ type: "latest" });
+      expect(
+        articles.list({ view: "latest", limit: 2, cursor: latestFirst.nextCursor ?? undefined }).items.map((article) => article.id)
+      ).toEqual(["article_keyset_3000", "article_keyset_2000"]);
+
+      const favoritesFirst = articles.list({ view: "favorites", sort: "favorited_desc", limit: 2 });
+      expect(favoritesFirst.items.map((article) => article.id)).toEqual([
+        "article_keyset_3000",
+        "article_keyset_2000"
+      ]);
+      expect(favoritesFirst.nextCursor).toMatchObject({ type: "favorites" });
+      expect(
+        articles.list({
+          view: "favorites",
+          sort: "favorited_desc",
+          limit: 2,
+          cursor: favoritesFirst.nextCursor ?? undefined
+        }).items.map((article) => article.id)
+      ).toEqual(["article_keyset_1000"]);
+
+      const readLaterFirst = articles.list({
+        view: "read_later",
+        sort: "read_later_desc",
+        limit: 2
+      });
+      expect(readLaterFirst.items.map((article) => article.id)).toEqual([
+        "article_keyset_5000",
+        "article_keyset_4000"
+      ]);
+      expect(readLaterFirst.nextCursor).toMatchObject({ type: "read_later" });
+      expect(
+        articles.list({
+          view: "read_later",
+          sort: "read_later_desc",
+          limit: 2,
+          cursor: readLaterFirst.nextCursor ?? undefined
+        }).items.map((article) => article.id)
+      ).toEqual(["article_keyset_3000"]);
     } finally {
       db.close();
     }

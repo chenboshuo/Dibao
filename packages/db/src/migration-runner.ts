@@ -69,6 +69,9 @@ const pluginSecretsAndDeliveriesPath = fileURLToPath(
 const behaviorProjectionQueuePath = fileURLToPath(
   new URL("../migrations/023_behavior_projection_queue.sql", import.meta.url)
 );
+const articleStateInteractionProjectionPath = fileURLToPath(
+  new URL("../migrations/024_article_state_interaction_projection.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -181,6 +184,11 @@ export function loadDefaultMigrations(): Migration[] {
       version: "023",
       name: "behavior_projection_queue",
       sql: readFileSync(behaviorProjectionQueuePath, "utf8")
+    },
+    {
+      version: "024",
+      name: "article_state_interaction_projection",
+      sql: readFileSync(articleStateInteractionProjectionPath, "utf8")
     }
   ];
 }

@@ -415,8 +415,10 @@ export type ArticleListInput = {
   todayEndAt?: number;
   limit?: number;
   offset?: number;
+  cursor?: ArticleListCursor;
   rankContext?: string;
   sort?: ArticleListSort;
+  includeUnreadCount?: boolean;
 };
 
 export type ArticleSearchState = "all" | "unread" | "read" | "favorites" | "read_later";
@@ -425,6 +427,7 @@ export type ArticleSearchSort = "relevance" | "recommended" | "latest";
 
 export type ArticleSearchInput = {
   query: string;
+  scope?: "default" | "full_text";
   feedId?: string;
   folderId?: string;
   from?: number;
@@ -434,7 +437,37 @@ export type ArticleSearchInput = {
   limit?: number;
   offset?: number;
   rankContext?: string;
+  includeUnreadCount?: boolean;
 };
+
+export type ArticleListCursor =
+  | {
+      type: "offset";
+      offset: number;
+    }
+  | {
+      type: "latest";
+      publishedAt: number;
+      id: string;
+    }
+  | {
+      type: "favorites";
+      sort: ArticleFavoriteSort;
+      favoritedAt?: number;
+      publishedAt: number;
+      id: string;
+    }
+  | {
+      type: "read_later";
+      sort: ArticleReadLaterSort;
+      rankMissing?: number;
+      rerankMissing?: number;
+      rerankPosition?: number | null;
+      score?: number | null;
+      readLaterAt?: number;
+      publishedAt: number;
+      id: string;
+    };
 
 export type ReaderCommandType = "mark_scope_read";
 
@@ -939,7 +972,8 @@ export type ArticleDetailRow = ArticleListItemRow & {
 export type ArticleListResult = {
   items: ArticleListItemRow[];
   nextOffset: number | null;
-  unreadCount: number;
+  nextCursor?: ArticleListCursor | null;
+  unreadCount: number | null;
 };
 
 export type UpsertArticleInput = {

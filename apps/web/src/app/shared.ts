@@ -82,6 +82,7 @@ export type PersistedReaderFilters = {
 
 export type SearchFormState = {
   q: string;
+  fullText: boolean;
   sourceSelection: SourceSelection;
   state: ArticleSearchState;
   sort: ArticleSearchSort;
@@ -981,6 +982,9 @@ export function paramsForSearchForm(form: SearchFormState): URLSearchParams {
   if (form.q.trim()) {
     params.set("q", form.q.trim());
   }
+  if (form.fullText) {
+    params.set("scope", "full_text");
+  }
   if (form.sort !== "relevance") {
     params.set("sort", form.sort);
   }
@@ -1054,6 +1058,7 @@ export function parseUrlPage(
 export function defaultSearchForm(): SearchFormState {
   return {
     q: "",
+    fullText: false,
     sourceSelection: { type: "all" },
     state: "all",
     sort: "relevance",
@@ -1072,6 +1077,7 @@ export function searchFormFromLocation(): SearchFormState {
   const folderId = params.get("folderId");
   return {
     q: params.get("q") ?? "",
+    fullText: params.get("scope") === "full_text",
     sourceSelection: feedId
       ? { type: "feed", feedId }
       : folderId

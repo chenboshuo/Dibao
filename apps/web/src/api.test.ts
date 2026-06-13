@@ -911,7 +911,7 @@ describe("web API client", () => {
       "/api/search?q=local+ai&limit=25&feedId=feed%2Fdesign&folderId=folder%2Fdesign&from=2026-05-01&to=2026-05-22&state=favorites&sort=recommended&cursor=cursor%2F1"
     ]);
     expect(first.page.nextCursor).toBe("next_cursor");
-    expect(first.meta.unreadCount).toBe(0);
+    expect(first.meta.unreadCount).toBeNull();
   });
 
   it("posts reader mark-scope-read commands", async () => {
