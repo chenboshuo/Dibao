@@ -5,6 +5,7 @@ import {
   freshnessScore,
   profileAlgorithmDefaults
 } from "@dibao/ranking";
+import { performance } from "node:perf_hooks";
 import {
   BASE_RANK_CONTEXT,
   fromVectorBlob,
@@ -111,6 +112,7 @@ export type RecommendationRankingServiceOptions = {
     processed: number;
     lastArticleId: string | null;
   }) => RankingPauseDecision;
+  maxChunkDurationMs?: number;
   now?: () => number;
 };
 
@@ -208,6 +210,8 @@ type V2Score = {
 const RECOMMENDATION_ALGORITHM_VERSION = "rec_v3";
 const RECOMMENDATION_FEATURE_SCHEMA_VERSION = 3;
 const MMR_WINDOW_LIMIT = 500;
+const DEFAULT_RANKING_CHUNK_TIME_BUDGET_MS = 2_000;
+const RANKING_TIME_BUDGET_RESUME_DELAY_MS = 5_000;
 
 export class RecommendationRankingService implements ArticleRankingRecalculator {
   private readonly now: () => number;
@@ -322,6 +326,15 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
   ): RankingRecalculateChunkResult {
     const paged = page?.limit !== undefined;
     const startingCursor = page?.afterArticleId ?? null;
+    const chunkStartedAt = performance.now();
+    const maxChunkDurationMs = Math.max(
+      0,
+      this.options.maxChunkDurationMs ?? DEFAULT_RANKING_CHUNK_TIME_BUDGET_MS
+    );
+    const timeBudgetExceeded = () =>
+      paged &&
+      maxChunkDurationMs > 0 &&
+      performance.now() - chunkStartedAt >= maxChunkDurationMs;
     const initialPause = paged ? this.pauseDecision(0, startingCursor) : null;
     if (initialPause?.pause) {
       return {
@@ -386,6 +399,13 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         const decision = this.pauseDecision(processed, lastProcessedArticleId);
         if (decision.pause) {
           pauseDecision = decision;
+          break;
+        }
+        if (timeBudgetExceeded()) {
+          pauseDecision = {
+            pause: true,
+            resumeAfter: this.now() + RANKING_TIME_BUDGET_RESUME_DELAY_MS
+          };
           break;
         }
       }
@@ -494,6 +514,11 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       const decision = this.pauseDecision(processed, lastProcessedArticleId);
       if (decision.pause) {
         pauseDecision = decision;
+      } else if (timeBudgetExceeded()) {
+        pauseDecision = {
+          pause: true,
+          resumeAfter: this.now() + RANKING_TIME_BUDGET_RESUME_DELAY_MS
+        };
       }
     }
 
@@ -784,6 +809,7 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       return result;
     }
 
+    const ids = candidates.map((candidate) => candidate.articleId);
     const positiveLong = this.profileTerms({ polarity: "positive", scopes: ["long"], limit: 24 });
     const positiveRecent = this.profileTerms({ polarity: "positive", scopes: ["recent"], limit: 24 });
     const negativeTerms = this.profileTerms({
@@ -805,11 +831,11 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
             select article_id as articleId, bm25(article_fts, 5.0, 2.0, 0.6) as rank
             from article_fts
             where article_fts match ?
+              and article_id in (${ids.map(() => "?").join(", ")})
             order by rank
-            limit 1000
           `
         )
-        .all(query) as Array<{ articleId: string; rank: number }>;
+        .all(query, ...ids) as Array<{ articleId: string; rank: number }>;
       for (const row of rows) {
         const feature = result.get(row.articleId);
         if (!feature) {

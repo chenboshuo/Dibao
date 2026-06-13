@@ -73,6 +73,39 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("records foreground activity for static app asset requests", async () => {
+    const db = createEmptyDatabase();
+    const webDistDir = createTempDir();
+    mkdirSync(join(webDistDir, "assets"), { recursive: true });
+    writeFileSync(join(webDistDir, "index.html"), "<!doctype html><div id=\"root\"></div>");
+    writeFileSync(join(webDistDir, "assets", "app.js"), "console.log('dibao');");
+    const app = buildServer({
+      db,
+      logger: false,
+      now: () => 12_345,
+      recordForegroundActivity: true,
+      foregroundActivityWriteThrottleMs: 0,
+      webDistDir
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/assets/app.js"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(new SqliteAppSettingsRepository(db).getJson("runtime.foregroundActivity")).toEqual({
+        lastAt: 12_345,
+        route: "/*",
+        method: "GET"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("reports database errors when the lightweight connection check fails", () => {
     const db = {
       prepare: (sql: string) => ({

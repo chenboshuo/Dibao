@@ -1664,7 +1664,7 @@ describe("job runner foundation", () => {
     }
   });
 
-  it("raises stale tiny full ranking chunk limits to the minimum chunk size", async () => {
+  it("keeps stale tiny full ranking chunk limits at the minimum chunk size", async () => {
     const db = createEmptyDatabase();
     try {
       const jobs = new SqliteJobRepository(db);

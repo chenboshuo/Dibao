@@ -557,6 +557,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       });
       return resumeAfter ? { pause: true, resumeAfter } : { pause: false };
     },
+    maxChunkDurationMs: options.rankingTargetChunkMs,
     now: options.now
   });
   let drainDueJobsForPlugins: (() => Promise<number>) | null = null;
@@ -1126,11 +1127,11 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.addHook("preHandler", async (request, reply) => {
     const pathname = parseRequestPathname(request.url);
+    recordForegroundApiActivity(request, pathname);
+
     if (pathname && !isApiPath(pathname)) {
       return;
     }
-
-    recordForegroundApiActivity(request, pathname);
 
     if (!authRequired || isAnonymousRoute(request.method, request.routeOptions.url)) {
       return;
@@ -2872,7 +2873,14 @@ const anonymousRoutes = new Set([
 
 function isForegroundActivityRoute(pathname: string): boolean {
   if (!isApiPath(pathname)) {
-    return false;
+    return (
+      pathname === "/" ||
+      pathname === "/index.html" ||
+      pathname.startsWith("/assets/") ||
+      pathname.endsWith(".js") ||
+      pathname.endsWith(".css") ||
+      pathname.endsWith(".webmanifest")
+    );
   }
 
   return (
