@@ -3059,7 +3059,9 @@ export function getHealth(db: DibaoDatabase): HealthResponse {
     checkDatabaseConnection(db);
   });
   const fts = checkHealth(() => {
-    db.prepare("select count(*) as count from article_fts").get();
+    db
+      .prepare("select 1 from sqlite_master where type = 'table' and name = 'article_fts'")
+      .get();
   });
   const vectorStore = checkHealth(() => {
     getSqliteVecVersion(db);
