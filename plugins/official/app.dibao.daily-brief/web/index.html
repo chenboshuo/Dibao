@@ -12,10 +12,15 @@
         justify-content: space-between;
         gap: var(--dibao-plugin-space-3);
         flex-wrap: wrap;
+        margin-bottom: var(--dibao-plugin-space-4);
       }
 
       .brief-date-field {
         min-width: 180px;
+      }
+
+      .brief-panel-hero {
+        margin-bottom: var(--dibao-plugin-space-4);
       }
 
       .article-title {
@@ -107,22 +112,22 @@
         background: var(--dibao-plugin-paper);
         padding: var(--dibao-plugin-space-3);
       }
+
+      @media (max-width: 720px) {
+        .brief-toolbar {
+          display: block;
+        }
+
+        .brief-date-field {
+          width: 100%;
+          min-width: 0;
+        }
+      }
     </style>
   </head>
   <body class="dibao-plugin">
     <main class="page">
       <div class="shell">
-        <section class="header">
-          <div>
-            <p class="kicker">Daily Brief</p>
-            <h1>每日简报</h1>
-            <p id="hero-copy">正在读取每日简报...</p>
-          </div>
-          <div class="actions">
-            <button class="button primary" id="generate" type="button">生成今日简报</button>
-          </div>
-        </section>
-
         <nav class="management-tabs" aria-label="每日简报视图" role="tablist">
           <button class="management-tab active" id="tab-brief" role="tab" type="button">简报</button>
           <button class="management-tab" id="tab-settings" role="tab" type="button">设置</button>
@@ -137,6 +142,16 @@
               <input id="brief-date" type="date" />
             </label>
           </div>
+          <section class="header brief-panel-hero">
+            <div>
+              <p class="kicker">Daily Brief</p>
+              <h1>每日简报</h1>
+              <p id="hero-copy">正在读取每日简报...</p>
+            </div>
+            <div class="actions">
+              <button class="button primary" id="generate" type="button">生成今日简报</button>
+            </div>
+          </section>
           <p class="status" id="loading">正在读取已生成的简报快照...</p>
           <section class="empty" id="empty" hidden>
             <h2>还没有简报</h2>
@@ -393,13 +408,16 @@
           copy.textContent = `你好，${username}。这里会保存每日简报快照；生成后，你可以按日期回看每一天的阅读清单。`;
           return;
         }
-        const date = new Date(brief.generatedAt || `${brief.id}T00:00:00`);
+        const date = briefDate(brief);
         const dateText = formatChineseDate(date, brief.timezone);
-        const dayIndex = dayOfYear(date, brief.timezone);
+        const briefIndex = briefNumberOfYear(brief);
         const topicCount = brief.topicCount ?? (brief.groups || []).length;
-        const receivedCount = brief.receivedArticleCount;
-        const receivedText = typeof receivedCount === "number" ? `${receivedCount} 条新文章` : "一些新文章";
-        copy.textContent = `你好，${username}。今天是 ${dateText}，欢迎收看今年的第 ${dayIndex} 份简报。在过去 24 小时中，邸报收到 ${receivedText}，本次简报包含 ${topicCount} 个主题下的 ${brief.articleCount || 0} 篇文章。`;
+        const articleCount = brief.articleCount || 0;
+        const receivedCount = Number.isFinite(brief.receivedArticleCount)
+          ? Math.max(Number(brief.receivedArticleCount), articleCount)
+          : articleCount;
+        const receivedPrefix = Number.isFinite(brief.receivedArticleCount) ? "" : "至少 ";
+        copy.textContent = `你好，${username}。今天是 ${dateText}，欢迎收看今年的第 ${briefIndex} 份简报。在过去 24 小时中，邸报收到 ${receivedPrefix}${receivedCount} 条新文章，本次简报包含 ${topicCount} 个主题下的 ${articleCount} 篇文章。`;
       }
 
       function renderGenerateButton() {
@@ -729,6 +747,25 @@
         return state.briefs.find((item) => item.id === state.selectedId) || null;
       }
 
+      function briefDate(brief) {
+        if (typeof brief?.id === "string" && /^\d{4}-\d{2}-\d{2}$/.test(brief.id)) {
+          const [year, month, day] = brief.id.split("-").map(Number);
+          return new Date(Date.UTC(year, month - 1, day, 12));
+        }
+        return new Date(brief?.generatedAt || Date.now());
+      }
+
+      function briefNumberOfYear(brief) {
+        const selectedKey = typeof brief?.id === "string" ? brief.id : dateKeyFor(briefDate(brief), brief?.timezone || "UTC");
+        const year = selectedKey.slice(0, 4);
+        const ids = state.briefs
+          .map((item) => item.id)
+          .filter((id) => typeof id === "string" && id.startsWith(`${year}-`))
+          .sort();
+        const index = ids.indexOf(selectedKey);
+        return index >= 0 ? index + 1 : ids.length + 1;
+      }
+
       function todayBriefId() {
         const timezone = selectedBrief()?.timezone || state.settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
         return dateKeyFor(Date.now(), timezone);
@@ -798,14 +835,6 @@
         }).formatToParts(value);
         const part = (type) => parts.find((item) => item.type === type)?.value || "";
         return `${part("year")} 年 ${part("month")} ${part("day")} 日`;
-      }
-
-      function dayOfYear(value, timezone) {
-        const dateKey = dateKeyFor(value, timezone || "UTC");
-        const [year, month, day] = dateKey.split("-").map(Number);
-        const start = Date.UTC(year, 0, 1);
-        const current = Date.UTC(year, month - 1, day);
-        return Math.floor((current - start) / 86400000) + 1;
       }
 
       function dibaoArticleUrl(articleId) {
