@@ -24,6 +24,7 @@ export const DEFAULT_AUTH_LOCKOUT_MS = 15 * 60 * 1000;
 export type AuthSessionStatus = {
   setupCompleted: boolean;
   authenticated: boolean;
+  username: string | null;
 };
 
 export type AuthSessionResult = {
@@ -136,10 +137,12 @@ export class AuthService {
 
   getSessionStatus(token: string | null): AuthSessionStatus {
     const setupCompleted = this.options.credentials.hasCredential();
+    const authenticated = setupCompleted && this.authenticate(token);
 
     return {
       setupCompleted,
-      authenticated: setupCompleted && this.authenticate(token)
+      authenticated,
+      username: authenticated ? this.options.credentials.findCredential()?.username ?? null : null
     };
   }
 

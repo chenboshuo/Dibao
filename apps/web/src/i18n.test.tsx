@@ -88,13 +88,15 @@ describe("web i18n", () => {
     expect(
       stageForAuthSession({
         setupCompleted: false,
-        authenticated: false
+        authenticated: false,
+        username: null
       })
     ).toEqual({ type: "welcome" });
     expect(
       stageForAuthSession({
         setupCompleted: true,
-        authenticated: false
+        authenticated: false,
+        username: null
       })
     ).toEqual({ type: "login" });
     expect(

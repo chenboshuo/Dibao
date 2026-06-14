@@ -115,6 +115,8 @@ async function generateBrief(ctx, settings, options = {}) {
     windowMs: DAY_MS,
     limit: Math.max(settings.articleCount * 5, 50)
   });
+  const windowStartAt = now - DAY_MS;
+  const windowEndAt = now;
   const filtered = filterCandidates(candidates, settings);
   const selected = diversifyByFamily(filtered, settings.articleCount).map((article) => briefArticle(article, now));
   const groups = groupByFamily(selected);
@@ -122,10 +124,12 @@ async function generateBrief(ctx, settings, options = {}) {
     id: key.replace("brief:", ""),
     pluginId: PLUGIN_ID,
     generatedAt: now,
-    windowStartAt: now - DAY_MS,
-    windowEndAt: now,
+    windowStartAt,
+    windowEndAt,
     timezone: settings.timezone,
     articleCount: selected.length,
+    receivedArticleCount: countDiscoveredArticles(ctx, windowStartAt, windowEndAt),
+    topicCount: groups.length,
     emptyReason: selected.length === 0 ? "no_articles_for_settings" : null,
     groups
   };
@@ -174,8 +178,16 @@ function briefArticle(article, now) {
     clusterId: article.clusterId,
     clusterLabel: article.clusterLabel,
     reason: article.reason,
+    state: article.state ?? null,
     snapshotAt: now
   };
+}
+
+function countDiscoveredArticles(ctx, startAt, endAt) {
+  if (!ctx.articles || typeof ctx.articles.countDiscovered !== "function") {
+    return null;
+  }
+  return ctx.articles.countDiscovered({ startAt, endAt });
 }
 
 function listBriefs(ctx) {

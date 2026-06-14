@@ -1210,7 +1210,8 @@ describe("server API vertical slice", () => {
       expect(response.json()).toEqual({
         data: {
           setupCompleted: false,
-          authenticated: false
+          authenticated: false,
+          username: null
         }
       });
     } finally {
@@ -1284,7 +1285,8 @@ describe("server API vertical slice", () => {
       expect(session.json()).toEqual({
         data: {
           setupCompleted: true,
-          authenticated: true
+          authenticated: true,
+          username: "Pls"
         }
       });
 
@@ -1535,7 +1537,8 @@ describe("server API vertical slice", () => {
       expect(session.json()).toEqual({
         data: {
           setupCompleted: true,
-          authenticated: false
+          authenticated: false,
+          username: null
         }
       });
     } finally {
@@ -2002,6 +2005,10 @@ describe("server API vertical slice", () => {
           expect.objectContaining({ id: "family_ai", label: "AI 产品与开发" })
         ])
       );
+      expect(generatedBrief).toMatchObject({
+        receivedArticleCount: expect.any(Number),
+        topicCount: expect.any(Number)
+      });
       const htmlArticle = generatedBrief.groups
         .flatMap(
           (group: {
@@ -2009,6 +2016,7 @@ describe("server API vertical slice", () => {
               articleId: string;
               displaySummary: string | null;
               summary: string | null;
+              state: unknown;
               url: string;
               snapshotAt: number;
             }>;
@@ -2020,6 +2028,11 @@ describe("server API vertical slice", () => {
       expect(htmlArticle?.displaySummary).not.toContain("bad()");
       expect(htmlArticle?.displaySummary.length).toBeLessThanOrEqual(280);
       expect(htmlArticle).toMatchObject({
+        state: expect.objectContaining({
+          favorited: false,
+          liked: false,
+          readLater: false
+        }),
         url: "https://example.com/recommended",
         snapshotAt: 10_000
       });

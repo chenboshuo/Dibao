@@ -23,7 +23,8 @@ describe("web API client", () => {
           data: String(input).endsWith("/session")
             ? {
                 setupCompleted: true,
-                authenticated: false
+                authenticated: false,
+                username: null
               }
             : {
                 ok: true
@@ -40,7 +41,8 @@ describe("web API client", () => {
 
     await expect(api.getAuthSession()).resolves.toEqual({
       setupCompleted: true,
-      authenticated: false
+      authenticated: false,
+      username: null
     });
     await api.setupAuth("Pls", "correct horse battery");
     await api.login("Pls", "correct horse battery");

@@ -300,6 +300,7 @@ export type OpmlImportResponse = {
 export type AuthSession = {
   setupCompleted: boolean;
   authenticated: boolean;
+  username: string | null;
 };
 
 export type SetupStatus = {

@@ -3231,6 +3231,7 @@ export function App() {
           <PluginWorkspace
             plugin={activePlugin}
             route={appPage.route}
+            onArticleStateChange={applyArticleState}
             onOpenArticle={(articleId) => {
               navigateToAppPage({ type: "reader", view: currentArticleView });
               setSelectedArticleId(articleId);
@@ -3619,6 +3620,7 @@ function isArticleState(value: unknown): value is ArticleState {
 function PluginWorkspace(props: {
   plugin: PluginListItem | null;
   route: string;
+  onArticleStateChange: (articleId: string, state: ArticleState) => void;
   onOpenArticle: (articleId: string) => void;
 }) {
   const { t } = useI18n();
@@ -3631,6 +3633,7 @@ function PluginWorkspace(props: {
       const data = event.data as {
         type?: unknown;
         articleId?: unknown;
+        url?: unknown;
         requestId?: unknown;
         method?: unknown;
         payload?: unknown;
@@ -3647,6 +3650,7 @@ function PluginWorkspace(props: {
           props.plugin,
           data.method,
           data.payload,
+          props.onArticleStateChange,
           props.onOpenArticle
         );
         (event.source as WindowProxy | null)?.postMessage(
@@ -3677,7 +3681,7 @@ function PluginWorkspace(props: {
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [props.plugin, props.onOpenArticle, t.errors.api]);
+  }, [props.plugin, props.onArticleStateChange, props.onOpenArticle, t.errors.api]);
 
   if (!props.plugin) {
     return (
@@ -3714,6 +3718,7 @@ async function handlePluginBridgeRequest(
   plugin: PluginListItem,
   method: unknown,
   payload: unknown,
+  onArticleStateChange: (articleId: string, state: ArticleState) => void,
   onOpenArticle: (articleId: string) => void
 ): Promise<unknown> {
   const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
@@ -3768,6 +3773,40 @@ async function handlePluginBridgeRequest(
         view: isArticleView(input.view) ? input.view : "recommended",
         limit: typeof input.limit === "number" ? input.limit : undefined
       });
+    case "getArticleState": {
+      if (typeof input.articleId !== "string") {
+        throw new Error("articleId is required");
+      }
+      const article = await dibaoApi.getArticle(input.articleId);
+      onArticleStateChange(input.articleId, article.state);
+      return {
+        articleId: input.articleId,
+        state: article.state
+      };
+    }
+    case "recordArticleAction": {
+      if (typeof input.articleId !== "string") {
+        throw new Error("articleId is required");
+      }
+      if (!isPluginArticleActionIntent(input.intent)) {
+        throw new Error("intent must be favorite, like, readLater, or notInterested");
+      }
+      const article = await dibaoApi.getArticle(input.articleId);
+      const result = await dibaoApi.postArticleAction(
+        input.articleId,
+        requestForArticleAction(input.intent, article.state)
+      );
+      onArticleStateChange(input.articleId, result.state);
+      return {
+        articleId: input.articleId,
+        state: result.state
+      };
+    }
+    case "getArticleExplanation":
+      if (typeof input.articleId !== "string") {
+        throw new Error("articleId is required");
+      }
+      return await dibaoApi.getArticleExplanation(input.articleId);
     case "openArticle":
       if (typeof input.articleId !== "string") {
         throw new Error("articleId is required");
@@ -3782,6 +3821,10 @@ async function handlePluginBridgeRequest(
     default:
       throw new Error("Unsupported plugin bridge method");
   }
+}
+
+function isPluginArticleActionIntent(value: unknown): value is ArticleActionIntent {
+  return value === "favorite" || value === "like" || value === "readLater" || value === "notInterested";
 }
 
 function isArticleView(value: unknown): value is ArticleView {

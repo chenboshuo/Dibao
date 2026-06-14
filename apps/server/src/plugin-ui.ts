@@ -165,6 +165,41 @@ body.dibao-plugin > .shell {
   padding-bottom: 2px;
 }
 
+.dibao-plugin .management-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 0 calc(var(--dibao-plugin-space-5) * -1);
+  overflow-x: auto;
+  border-top: 1px solid var(--dibao-plugin-line);
+  border-bottom: 1px solid var(--dibao-plugin-line);
+  background: var(--dibao-plugin-paper);
+}
+
+.dibao-plugin .management-tab {
+  min-height: 48px;
+  border: 0;
+  border-right: 1px solid var(--dibao-plugin-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--dibao-plugin-muted);
+  cursor: pointer;
+  padding: 0 var(--dibao-plugin-space-4);
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.dibao-plugin .management-tab:first-child {
+  border-left: 1px solid var(--dibao-plugin-line);
+}
+
+.dibao-plugin .management-tab.active {
+  background: var(--dibao-plugin-pine-soft);
+  box-shadow: inset 0 -2px 0 var(--dibao-plugin-pine);
+  color: var(--dibao-plugin-pine);
+}
+
 .dibao-plugin .button {
   min-height: 38px;
   border: 1px solid var(--dibao-plugin-line);

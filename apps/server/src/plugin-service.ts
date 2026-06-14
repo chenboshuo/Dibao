@@ -14,6 +14,8 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { verifyPluginPackageSignature, type DibaoPluginSignature } from "@dibao/plugin-sdk";
 import type {
+  ArticleInteractionStatus,
+  ArticleStateSnapshot,
   DibaoDatabase,
   JobRepository,
   JobRow,
@@ -208,6 +210,7 @@ export type RankedWinner = {
   clusterId: string | null;
   clusterLabel: string | null;
   reason: string | null;
+  state?: ArticleStateSnapshot;
 };
 
 export type PluginTopicTargets = {
@@ -366,6 +369,20 @@ type PluginTableListInput = {
   limit?: number;
   orderBy?: string;
   direction?: "asc" | "desc";
+};
+
+type PluginArticleStateDbRow = {
+  read: 0 | 1;
+  favorited: 0 | 1;
+  liked: 0 | 1;
+  readLater: 0 | 1;
+  hidden: 0 | 1;
+  notInterested: 0 | 1;
+  readingProgress: number;
+  lastOpenedAt: number | null;
+  lastIgnoredAt: number | null;
+  lastActionAt: number | null;
+  notInterestedAt: number | null;
 };
 
 export class PluginService {
@@ -1110,6 +1127,10 @@ export class PluginService {
         }
       },
       articles: {
+        countDiscovered: (input: { startAt: number; endAt: number }) => {
+          requireCapability("articles:read");
+          return this.countDiscoveredArticles(input);
+        },
         openableSummary: (articleId: string) => {
           requireCapability("articles:read");
           return this.openableArticleSummary(articleId);
@@ -1367,7 +1388,18 @@ export class PluginService {
             a.discovered_at as discoveredAt,
             coalesce(rs.score, base_rs.score) as score,
             coalesce(rs.calculated_at, base_rs.calculated_at) as calculatedAt,
-            coalesce(ex.payload_json, base_ex.payload_json) as payloadJson
+            coalesce(ex.payload_json, base_ex.payload_json) as payloadJson,
+            case when s.read_at is not null then 1 else 0 end as read,
+            case when s.favorited_at is not null then 1 else 0 end as favorited,
+            case when s.liked_at is not null then 1 else 0 end as liked,
+            case when s.read_later_at is not null then 1 else 0 end as readLater,
+            case when s.hidden_at is not null then 1 else 0 end as hidden,
+            case when s.not_interested_at is not null then 1 else 0 end as notInterested,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            s.last_opened_at as lastOpenedAt,
+            s.last_ignored_at as lastIgnoredAt,
+            s.last_action_at as lastActionAt,
+            s.not_interested_at as notInterestedAt
           from articles a
           join feeds f on f.id = a.feed_id
           left join article_states s on s.article_id = a.id
@@ -1399,7 +1431,7 @@ export class PluginService {
           limit ?
         `
       )
-      .all(rankContext, "base", rankContext, "base", since, limit) as Array<RankedWinner & { payloadJson: string | null }>;
+      .all(rankContext, "base", rankContext, "base", since, limit) as Array<RankedWinner & PluginArticleStateDbRow & { payloadJson: string | null }>;
 
     const parsedRows = rows.map((row) => {
       const payload = parseJsonObject(row.payloadJson);
@@ -1430,9 +1462,31 @@ export class PluginService {
         familyLabel: familyLabels.get(familyId) ?? familyLabel,
         clusterId,
         clusterLabel,
-        reason: familyId.startsWith("source:") ? "source" : "interest-family"
+        reason: familyId.startsWith("source:") ? "source" : "interest-family",
+        state: mapPluginArticleState(row)
       };
     });
+  }
+
+  private countDiscoveredArticles(input: { startAt: number; endAt: number }): number {
+    const startAt = Number.isFinite(input.startAt) ? input.startAt : 0;
+    const endAt = Number.isFinite(input.endAt) ? input.endAt : this.now();
+    const row = this.options.db
+      .prepare(
+        `
+          select count(*) as count
+          from articles a
+          join feeds f on f.id = a.feed_id
+          where a.deleted_at is null
+            and a.status != 'deleted'
+            and f.deleted_at is null
+            and f.enabled = 1
+            and a.discovered_at >= ?
+            and a.discovered_at <= ?
+        `
+      )
+      .get(Math.min(startAt, endAt), Math.max(startAt, endAt)) as { count: number } | undefined;
+    return row?.count ?? 0;
   }
 
   private familyLabelsById(familyIds: string[]): Map<string, string> {
@@ -1549,9 +1603,21 @@ export class PluginService {
             ac.content_html as contentHtml,
             ac.content_text as contentText,
             coalesce(ac.extraction_status, 'pending') as extractionStatus,
-            ac.extraction_error as extractionError
+            ac.extraction_error as extractionError,
+            case when s.read_at is not null then 1 else 0 end as read,
+            case when s.favorited_at is not null then 1 else 0 end as favorited,
+            case when s.liked_at is not null then 1 else 0 end as liked,
+            case when s.read_later_at is not null then 1 else 0 end as readLater,
+            case when s.hidden_at is not null then 1 else 0 end as hidden,
+            case when s.not_interested_at is not null then 1 else 0 end as notInterested,
+            coalesce(s.reading_progress, 0) as readingProgress,
+            s.last_opened_at as lastOpenedAt,
+            s.last_ignored_at as lastIgnoredAt,
+            s.last_action_at as lastActionAt,
+            s.not_interested_at as notInterestedAt
           from articles a
           join feeds f on f.id = a.feed_id
+          left join article_states s on s.article_id = a.id
           left join article_contents ac on ac.article_id = a.id
           where a.id = ?
             and a.deleted_at is null
@@ -1559,7 +1625,7 @@ export class PluginService {
             and f.deleted_at is null
         `
       )
-      .get(articleId) as {
+      .get(articleId) as ({
         articleId: string;
         feedId: string;
         feedTitle: string;
@@ -1576,7 +1642,7 @@ export class PluginService {
         contentText: string | null;
         extractionStatus: string;
         extractionError: string | null;
-      } | undefined;
+      } & PluginArticleStateDbRow) | undefined;
 
     if (!row) {
       return null;
@@ -1597,7 +1663,8 @@ export class PluginService {
       feed: {
         id: row.feedId,
         title: row.feedTitle
-      }
+      },
+      state: mapPluginArticleState(row)
     };
     if (input.includeContent === true) {
       snapshot.contentHtml = row.contentHtml;
@@ -2885,6 +2952,68 @@ function summarizePluginApiResult(result: unknown): {
     ...(Array.isArray(record.targets?.families) ? { familyCount: record.targets.families.length } : {}),
     ...(Array.isArray(record.targets?.clusters) ? { clusterCount: record.targets.clusters.length } : {})
   };
+}
+
+function mapPluginArticleState(row: PluginArticleStateDbRow): ArticleStateSnapshot {
+  return {
+    read: row.read === 1,
+    favorited: row.favorited === 1,
+    liked: row.liked === 1,
+    readLater: row.readLater === 1,
+    hidden: row.hidden === 1,
+    notInterested: row.notInterested === 1,
+    readingProgress: row.readingProgress,
+    interactionStatus: pluginInteractionStatusForState(row),
+    openedAt: row.lastOpenedAt,
+    ignoredAt: pluginIgnoredAtForState(row)
+  };
+}
+
+function pluginInteractionStatusForState(row: PluginArticleStateDbRow): ArticleInteractionStatus {
+  if (row.notInterested === 1) {
+    return "ignored";
+  }
+  if (row.read === 1 || row.readingProgress >= 0.9) {
+    return "read";
+  }
+  if (row.readingProgress >= 0.25) {
+    return "reading";
+  }
+  if (row.lastOpenedAt !== null) {
+    return "opened";
+  }
+  if (row.favorited === 1 || row.liked === 1 || row.readLater === 1) {
+    return "saved";
+  }
+  if (row.lastIgnoredAt !== null) {
+    return "ignored";
+  }
+  if (row.lastActionAt !== null) {
+    return "seen";
+  }
+  return "unseen";
+}
+
+function pluginIgnoredAtForState(row: PluginArticleStateDbRow): number | null {
+  if (row.notInterestedAt !== null) {
+    return row.notInterestedAt;
+  }
+
+  if (
+    row.read === 1 ||
+    row.readingProgress > 0 ||
+    row.lastOpenedAt !== null ||
+    row.favorited === 1 ||
+    row.liked === 1 ||
+    row.readLater === 1
+  ) {
+    return null;
+  }
+
+  return row.lastIgnoredAt !== null &&
+    (row.lastOpenedAt === null || row.lastIgnoredAt > row.lastOpenedAt)
+    ? row.lastIgnoredAt
+    : null;
 }
 
 function isTerminalDeliveryStatus(status: PluginDeliveryStatus): boolean {

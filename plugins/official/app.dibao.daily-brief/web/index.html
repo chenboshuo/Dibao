@@ -5,6 +5,109 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>每日简报</title>
     <link rel="stylesheet" href="/api/plugins/ui.css" />
+    <style>
+      .brief-toolbar {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: var(--dibao-plugin-space-3);
+        flex-wrap: wrap;
+      }
+
+      .brief-date-field {
+        min-width: 180px;
+      }
+
+      .article-title {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.35;
+      }
+
+      .dibao-plugin .article .article-action-button {
+        min-height: 30px;
+        border: 1px solid var(--dibao-plugin-line);
+        border-radius: 6px;
+        background: var(--dibao-plugin-surface);
+        color: var(--dibao-plugin-muted);
+        cursor: pointer;
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .dibao-plugin .article .article-action-button.active {
+        border-color: var(--dibao-plugin-pine);
+        background: var(--dibao-plugin-pine-soft);
+        color: var(--dibao-plugin-pine);
+      }
+
+      .dibao-plugin .article .article-action-button.danger {
+        border-color: var(--dibao-plugin-danger);
+        color: var(--dibao-plugin-danger);
+      }
+
+      .dibao-plugin .article .article-action-button:disabled {
+        cursor: progress;
+        opacity: 0.65;
+      }
+
+      .article-links {
+        display: flex;
+        align-items: center;
+        gap: var(--dibao-plugin-space-3);
+        flex-wrap: wrap;
+      }
+
+      .article-feedback {
+        margin: 0;
+        color: var(--dibao-plugin-danger);
+        font-size: 12px;
+      }
+
+      .dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: rgba(32, 36, 33, 0.24);
+        padding: var(--dibao-plugin-space-5);
+        z-index: 20;
+      }
+
+      .dialog {
+        width: min(640px, 100%);
+        max-height: min(70vh, 640px);
+        overflow: auto;
+        border: 1px solid var(--dibao-plugin-line);
+        border-radius: var(--dibao-plugin-radius);
+        background: var(--dibao-plugin-surface);
+        padding: var(--dibao-plugin-space-5);
+        box-shadow: 0 18px 48px rgba(32, 36, 33, 0.18);
+      }
+
+      .dialog-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--dibao-plugin-space-3);
+      }
+
+      .explanation-list {
+        display: grid;
+        gap: var(--dibao-plugin-space-2);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .explanation-list li {
+        border: 1px solid var(--dibao-plugin-line-soft);
+        border-radius: 6px;
+        background: var(--dibao-plugin-paper);
+        padding: var(--dibao-plugin-space-3);
+      }
+    </style>
   </head>
   <body class="dibao-plugin">
     <main class="page">
@@ -13,29 +116,35 @@
           <div>
             <p class="kicker">Daily Brief</p>
             <h1>每日简报</h1>
-            <p>从过去 24 小时的个性化推荐中，按兴趣主题整理一份可复核的阅读清单。</p>
+            <p id="hero-copy">正在读取每日简报...</p>
           </div>
           <div class="actions">
-            <button class="button" id="open-settings" type="button">设置</button>
             <button class="button primary" id="generate" type="button">生成今日简报</button>
-            <button class="button" id="regenerate" type="button">重新生成</button>
           </div>
         </section>
 
-        <nav class="tabs" aria-label="每日简报视图">
-          <button class="button active" id="tab-brief" type="button">简报</button>
-          <button class="button" id="tab-settings" type="button">设置</button>
+        <nav class="management-tabs" aria-label="每日简报视图" role="tablist">
+          <button class="management-tab active" id="tab-brief" role="tab" type="button">简报</button>
+          <button class="management-tab" id="tab-settings" role="tab" type="button">设置</button>
         </nav>
 
         <p class="error" id="error" hidden></p>
 
         <section id="brief-panel">
+          <div class="brief-toolbar">
+            <label class="brief-date-field" for="brief-date">
+              简报日期
+              <input id="brief-date" type="date" />
+            </label>
+          </div>
           <p class="status" id="loading">正在读取已生成的简报快照...</p>
-          <p class="status" id="brief-meta" hidden></p>
-          <div class="history" id="history"></div>
           <section class="empty" id="empty" hidden>
             <h2>还没有简报</h2>
             <p>这里不会在打开页面时临时生成。启用每日计划后，邸报会在设定时间保存一份快照；也可以点击“生成今日简报”手动补生成一次。</p>
+          </section>
+          <section class="empty" id="date-empty" hidden>
+            <h2>这一天还没有简报快照</h2>
+            <p>可以选择已有日期，或生成今日简报。</p>
           </section>
           <section class="empty" id="filtered-empty" hidden>
             <h2>当前设置下没有可用文章</h2>
@@ -77,15 +186,42 @@
       </div>
     </main>
 
+    <div class="dialog-backdrop" id="explanation-backdrop" hidden>
+      <section class="dialog" role="dialog" aria-labelledby="explanation-title" aria-modal="true">
+        <div class="dialog-head">
+          <h2 id="explanation-title">为什么推荐</h2>
+          <button class="button" id="close-explanation" type="button">关闭</button>
+        </div>
+        <div id="explanation-content"></div>
+      </section>
+    </div>
+
     <script>
       const pluginId = "app.dibao.daily-brief";
       const params = new URLSearchParams(window.location.search);
+      const bridgeHandlers = new Map();
+      const defaultArticleState = {
+        read: false,
+        favorited: false,
+        liked: false,
+        readLater: false,
+        hidden: false,
+        notInterested: false,
+        readingProgress: 0,
+        interactionStatus: "unseen",
+        openedAt: null,
+        ignoredAt: null
+      };
       const state = {
         activePanel: params.get("panel") === "settings" ? "settings" : "brief",
         briefs: [],
         selectedId: null,
         settings: null,
         targets: { families: [], clusters: [] },
+        auth: { username: null },
+        articleStates: new Map(),
+        articleErrors: new Map(),
+        pendingArticleActions: new Set(),
         settingsLoaded: false,
         settingsLoading: false
       };
@@ -103,32 +239,37 @@
         return body.data;
       };
 
-      document.getElementById("open-settings").addEventListener("click", () => openSettings());
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin) return;
+        const data = event.data || {};
+        if (data.type !== "dibao.bridge.response" || typeof data.requestId !== "string") return;
+        const handler = bridgeHandlers.get(data.requestId);
+        if (!handler) return;
+        bridgeHandlers.delete(data.requestId);
+        if (data.ok) {
+          handler.resolve(data.result);
+        } else {
+          handler.reject(new Error(data.error || "Plugin bridge request failed"));
+        }
+      });
+
       document.getElementById("tab-brief").addEventListener("click", () => {
         state.activePanel = "brief";
         render();
       });
       document.getElementById("tab-settings").addEventListener("click", () => openSettings());
       document.getElementById("generate").addEventListener("click", async () => {
+        const todayId = todayBriefId();
+        const hasTodayBrief = Boolean(todayId && state.briefs.some((brief) => brief.id === todayId));
         await runBusy("generate", async () => {
-          const result = await api("generate", { method: "POST", body: JSON.stringify({ force: false }) });
+          const result = await api("generate", { method: "POST", body: JSON.stringify({ force: hasTodayBrief }) });
           applyBriefResult(result);
         });
       });
-      document.getElementById("regenerate").addEventListener("click", async () => {
-        await runBusy("regenerate", async () => {
-          const result = await api("generate", { method: "POST", body: JSON.stringify({ force: true }) });
-          applyBriefResult(result);
-        });
+      document.getElementById("brief-date").addEventListener("change", (event) => {
+        state.selectedId = event.target.value || state.selectedId;
+        render();
       });
-
-      function applyBriefResult(result) {
-          state.briefs = result.briefs;
-          state.selectedId = result.brief.id;
-          state.activePanel = "brief";
-          render();
-      }
-
       document.getElementById("save").addEventListener("click", async () => {
         await runBusy("save", async () => {
           const result = await api("settings", {
@@ -137,21 +278,22 @@
           });
           state.settings = result.settings;
           state.targets = result.targets || state.targets;
-          state.briefs = result.briefs;
+          state.briefs = result.briefs || [];
           state.selectedId = result.latest?.id || state.selectedId || state.briefs[0]?.id || null;
           state.settingsLoaded = true;
           render();
         });
+      });
+      document.getElementById("close-explanation").addEventListener("click", closeExplanation);
+      document.getElementById("explanation-backdrop").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) closeExplanation();
       });
 
       load();
 
       async function load() {
         try {
-          const result = await api("briefs");
-          state.briefs = result.briefs || [];
-          state.selectedId = result.latest?.id || state.briefs[0]?.id || null;
-          render();
+          await Promise.all([loadSession(), loadBriefs()]);
           if (state.activePanel === "settings") {
             await loadSettings();
           }
@@ -159,7 +301,23 @@
           showError(error.message);
         } finally {
           document.getElementById("loading").hidden = true;
+          render();
         }
+      }
+
+      async function loadSession() {
+        const response = await fetch("/api/auth/session", { credentials: "same-origin" });
+        const body = await response.json();
+        if (response.ok) {
+          state.auth = body.data || state.auth;
+        }
+      }
+
+      async function loadBriefs() {
+        const result = await api("briefs");
+        state.briefs = result.briefs || [];
+        state.selectedId = result.latest?.id || state.briefs[0]?.id || null;
+        hydrateArticleStates();
       }
 
       async function openSettings() {
@@ -180,6 +338,7 @@
           state.briefs = result.briefs || state.briefs;
           state.selectedId = result.latest?.id || state.selectedId || state.briefs[0]?.id || null;
           state.settingsLoaded = true;
+          hydrateArticleStates();
           showError(null);
         } catch (error) {
           showError(error.message);
@@ -187,6 +346,14 @@
           state.settingsLoading = false;
           render();
         }
+      }
+
+      function applyBriefResult(result) {
+        state.briefs = result.briefs || [];
+        state.selectedId = result.brief?.id || state.briefs[0]?.id || null;
+        state.activePanel = "brief";
+        hydrateArticleStates();
+        render();
       }
 
       async function runBusy(buttonId, fn) {
@@ -199,18 +366,55 @@
           showError(error.message);
         } finally {
           button.disabled = false;
+          render();
         }
       }
 
       function render() {
         document.getElementById("brief-panel").hidden = state.activePanel !== "brief";
         document.getElementById("settings-panel").hidden = state.activePanel !== "settings";
-        document.getElementById("tab-brief").className = `button${state.activePanel === "brief" ? " active" : ""}`;
-        document.getElementById("tab-settings").className = `button${state.activePanel === "settings" ? " active" : ""}`;
+        document.getElementById("tab-brief").className = `management-tab${state.activePanel === "brief" ? " active" : ""}`;
+        document.getElementById("tab-settings").className = `management-tab${state.activePanel === "settings" ? " active" : ""}`;
+        document.getElementById("tab-brief").setAttribute("aria-selected", state.activePanel === "brief" ? "true" : "false");
+        document.getElementById("tab-settings").setAttribute("aria-selected", state.activePanel === "settings" ? "true" : "false");
+        renderHero();
+        renderGenerateButton();
         renderSettings();
         renderTopics();
-        renderHistory();
+        renderDatePicker();
         renderBrief();
+      }
+
+      function renderHero() {
+        const brief = selectedBrief();
+        const copy = document.getElementById("hero-copy");
+        const username = state.auth?.username || "读者";
+        if (!brief) {
+          copy.textContent = `你好，${username}。这里会保存每日简报快照；生成后，你可以按日期回看每一天的阅读清单。`;
+          return;
+        }
+        const date = new Date(brief.generatedAt || `${brief.id}T00:00:00`);
+        const dateText = formatChineseDate(date, brief.timezone);
+        const dayIndex = dayOfYear(date, brief.timezone);
+        const topicCount = brief.topicCount ?? (brief.groups || []).length;
+        const receivedCount = brief.receivedArticleCount;
+        const receivedText = typeof receivedCount === "number" ? `${receivedCount} 条新文章` : "一些新文章";
+        copy.textContent = `你好，${username}。今天是 ${dateText}，欢迎收看今年的第 ${dayIndex} 份简报。在过去 24 小时中，邸报收到 ${receivedText}，本次简报包含 ${topicCount} 个主题下的 ${brief.articleCount || 0} 篇文章。`;
+      }
+
+      function renderGenerateButton() {
+        const todayId = todayBriefId();
+        const hasTodayBrief = Boolean(todayId && state.briefs.some((brief) => brief.id === todayId));
+        document.getElementById("generate").textContent = hasTodayBrief ? "重新生成今日简报" : "生成今日简报";
+      }
+
+      function renderDatePicker() {
+        const input = document.getElementById("brief-date");
+        const ids = state.briefs.map((brief) => brief.id).sort();
+        input.disabled = state.briefs.length === 0;
+        input.value = state.selectedId || "";
+        input.min = ids[0] || "";
+        input.max = ids[ids.length - 1] || "";
       }
 
       function renderSettings() {
@@ -289,89 +493,254 @@
         }
       }
 
-      function renderHistory() {
-        const history = document.getElementById("history");
-        history.replaceChildren();
-        history.hidden = state.briefs.length === 0;
-        for (const brief of state.briefs) {
-          const button = document.createElement("button");
-          button.className = `button${brief.id === state.selectedId ? " active" : ""}`;
-          button.type = "button";
-          button.textContent = brief.id;
-          button.addEventListener("click", () => {
-            state.selectedId = brief.id;
-            render();
-          });
-          history.append(button);
-        }
-      }
-
       function renderBrief() {
-        const brief = state.briefs.find((item) => item.id === state.selectedId) || state.briefs[0];
+        const brief = selectedBrief();
+        const selectedDateHasNoBrief = Boolean(state.selectedId && !brief);
         const empty = document.getElementById("empty");
+        const dateEmpty = document.getElementById("date-empty");
         const filteredEmpty = document.getElementById("filtered-empty");
         const content = document.getElementById("content");
-        const meta = document.getElementById("brief-meta");
         content.replaceChildren();
-        meta.hidden = !brief;
-        empty.hidden = Boolean(brief);
+        empty.hidden = state.briefs.length !== 0;
+        dateEmpty.hidden = !selectedDateHasNoBrief || state.briefs.length === 0;
         filteredEmpty.hidden = !brief || brief.articleCount !== 0;
-        if (brief) {
-          meta.textContent = `${formatDateTime(brief.generatedAt)} 生成 · ${formatDateTime(brief.windowStartAt)} 至 ${formatDateTime(brief.windowEndAt)} · ${brief.articleCount} 篇`;
-        }
         if (!brief || brief.articleCount === 0) return;
 
-        for (const group of brief.groups) {
+        for (const group of brief.groups || []) {
           const section = document.createElement("section");
           section.className = "group";
           section.innerHTML = `<div class="group-head"><h2></h2><span class="count"></span></div>`;
           section.querySelector("h2").textContent = group.label;
           section.querySelector(".count").textContent = `${group.articles.length} 篇`;
           for (const article of group.articles) {
-            const row = document.createElement("article");
-            row.className = "article";
-            const button = document.createElement("button");
-            button.type = "button";
-            button.textContent = article.title;
-            button.addEventListener("click", () => {
-              window.parent.postMessage({ type: "dibao.openArticle", articleId: article.articleId }, window.location.origin);
-            });
-            const meta = document.createElement("div");
-            meta.className = "meta";
-            meta.textContent = `${article.feedTitle} · ${formatTime(article.publishedAt || article.discoveredAt)} · score ${formatScore(article.score)}`;
-            row.append(button, meta);
-            const displaySummary = article.displaySummary || cleanSummary(article.summary);
-            if (displaySummary) {
-              const summary = document.createElement("p");
-              summary.className = "summary";
-              summary.textContent = displaySummary;
-              row.append(summary);
-            }
-            const actions = document.createElement("div");
-            actions.className = "article-actions";
-            const openSnapshot = document.createElement("a");
-            openSnapshot.className = "article-link";
-            openSnapshot.href = "#";
-            openSnapshot.textContent = "在邸报中打开";
-            openSnapshot.addEventListener("click", (event) => {
-              event.preventDefault();
-              window.parent.postMessage({ type: "dibao.openArticle", articleId: article.articleId }, window.location.origin);
-            });
-            actions.append(openSnapshot);
-            if (article.url) {
-              const original = document.createElement("a");
-              original.className = "article-link";
-              original.href = article.url;
-              original.target = "_blank";
-              original.rel = "noreferrer";
-              original.textContent = "打开原文";
-              actions.append(original);
-            }
-            row.append(actions);
-            section.append(row);
+            section.append(renderArticle(article));
           }
           content.append(section);
         }
+      }
+
+      function renderArticle(article) {
+        const row = document.createElement("article");
+        row.className = "article";
+
+        const title = document.createElement("h3");
+        title.className = "article-title";
+        title.textContent = article.title;
+        row.append(title);
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${article.feedTitle} · ${formatTime(article.publishedAt || article.discoveredAt)} · score ${formatScore(article.score)}`;
+        row.append(meta);
+
+        const displaySummary = article.displaySummary || cleanSummary(article.summary);
+        if (displaySummary) {
+          const summary = document.createElement("p");
+          summary.className = "summary";
+          summary.textContent = displaySummary;
+          row.append(summary);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "article-actions";
+        for (const action of articleActions()) {
+          actions.append(renderArticleActionButton(article, action));
+        }
+        row.append(actions);
+
+        const links = document.createElement("div");
+        links.className = "article-links";
+        const openSnapshot = document.createElement("a");
+        openSnapshot.className = "article-link";
+        openSnapshot.href = dibaoArticleUrl(article.articleId);
+        openSnapshot.textContent = "在邸报中打开";
+        openSnapshot.addEventListener("click", (event) => {
+          event.preventDefault();
+          openArticleInDibao(article);
+        });
+        links.append(openSnapshot);
+        if (article.url) {
+          const original = document.createElement("a");
+          original.className = "article-link";
+          original.href = article.url;
+          original.target = "_blank";
+          original.rel = "noreferrer";
+          original.textContent = "打开原文";
+          links.append(original);
+        }
+        row.append(links);
+
+        const error = state.articleErrors.get(article.articleId);
+        if (error) {
+          const feedback = document.createElement("p");
+          feedback.className = "article-feedback";
+          feedback.textContent = error;
+          row.append(feedback);
+        }
+
+        if (!state.articleStates.has(article.articleId)) {
+          void loadArticleState(article.articleId);
+        }
+        return row;
+      }
+
+      function renderArticleActionButton(article, action) {
+        const articleState = state.articleStates.get(article.articleId) || defaultArticleState;
+        const pendingKey = `${article.articleId}:${action.intent}`;
+        const button = document.createElement("button");
+        button.className = `article-action-button${action.selected(articleState) ? " active" : ""}${action.danger ? " danger" : ""}`;
+        button.type = "button";
+        button.textContent = action.label(articleState);
+        button.title = action.aria(articleState);
+        button.setAttribute("aria-label", action.aria(articleState));
+        button.disabled = state.pendingArticleActions.has(pendingKey) || (action.intent === "notInterested" && articleState.notInterested);
+        button.addEventListener("click", () => {
+          if (action.intent === "explain") {
+            void openExplanation(article.articleId);
+          } else {
+            void runArticleAction(article.articleId, action.intent);
+          }
+        });
+        return button;
+      }
+
+      function articleActions() {
+        return [
+          {
+            intent: "favorite",
+            label: (item) => item.favorited ? "取消收藏" : "收藏",
+            aria: (item) => item.favorited ? "取消收藏这篇文章" : "收藏这篇文章",
+            selected: (item) => item.favorited
+          },
+          {
+            intent: "like",
+            label: (item) => item.liked ? "取消点赞" : "点赞",
+            aria: (item) => item.liked ? "取消点赞这篇文章" : "点赞这篇文章",
+            selected: (item) => item.liked
+          },
+          {
+            intent: "readLater",
+            label: (item) => item.readLater ? "移出稍后读" : "稍后读",
+            aria: (item) => item.readLater ? "移出稍后读" : "稍后读这篇文章",
+            selected: (item) => item.readLater
+          },
+          {
+            intent: "notInterested",
+            label: (item) => item.notInterested ? "已不感兴趣" : "不感兴趣",
+            aria: (item) => item.notInterested ? "已标记不感兴趣" : "不再推荐类似文章",
+            selected: (item) => item.notInterested,
+            danger: true
+          },
+          {
+            intent: "explain",
+            label: () => "为什么推荐",
+            aria: () => "为什么推荐",
+            selected: () => false
+          }
+        ];
+      }
+
+      async function loadArticleState(articleId) {
+        try {
+          const result = await bridge("getArticleState", { articleId });
+          if (result?.state) {
+            state.articleStates.set(articleId, result.state);
+            render();
+          }
+        } catch {
+          // State hydration is best-effort; action clicks will surface errors.
+        }
+      }
+
+      async function runArticleAction(articleId, intent) {
+        const pendingKey = `${articleId}:${intent}`;
+        state.pendingArticleActions.add(pendingKey);
+        state.articleErrors.delete(articleId);
+        render();
+        try {
+          const result = await bridge("recordArticleAction", { articleId, intent });
+          if (result?.state) {
+            state.articleStates.set(articleId, result.state);
+          }
+        } catch (error) {
+          state.articleErrors.set(articleId, error.message || "操作失败，请重试。");
+        } finally {
+          state.pendingArticleActions.delete(pendingKey);
+          render();
+        }
+      }
+
+      async function openExplanation(articleId) {
+        const content = document.getElementById("explanation-content");
+        document.getElementById("explanation-backdrop").hidden = false;
+        content.innerHTML = `<p class="status">正在生成推荐解释...</p>`;
+        try {
+          const explanation = await bridge("getArticleExplanation", { articleId });
+          renderExplanation(explanation);
+        } catch (error) {
+          content.textContent = error.message || "推荐解释读取失败。";
+        }
+      }
+
+      function renderExplanation(explanation) {
+        const content = document.getElementById("explanation-content");
+        content.replaceChildren();
+        const reasons = Array.isArray(explanation?.reasons) ? explanation.reasons : [];
+        if (reasons.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "status";
+          empty.textContent = "当前没有明确的推荐信号。";
+          content.append(empty);
+          return;
+        }
+        const list = document.createElement("ul");
+        list.className = "explanation-list";
+        for (const reason of reasons) {
+          const item = document.createElement("li");
+          const strong = document.createElement("strong");
+          strong.textContent = reason.label || reason.type || "推荐理由";
+          const meta = document.createElement("p");
+          meta.className = "muted";
+          meta.textContent = reason.impact ? `影响：${reason.impact}` : "";
+          item.append(strong);
+          if (meta.textContent) item.append(meta);
+          list.append(item);
+        }
+        content.append(list);
+      }
+
+      function closeExplanation() {
+        document.getElementById("explanation-backdrop").hidden = true;
+      }
+
+      function hydrateArticleStates() {
+        for (const brief of state.briefs) {
+          for (const group of brief.groups || []) {
+            for (const article of group.articles || []) {
+              if (article.state) {
+                state.articleStates.set(article.articleId, article.state);
+              }
+            }
+          }
+        }
+      }
+
+      function selectedBrief() {
+        return state.briefs.find((item) => item.id === state.selectedId) || null;
+      }
+
+      function todayBriefId() {
+        const timezone = selectedBrief()?.timezone || state.settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+        return dateKeyFor(Date.now(), timezone);
+      }
+
+      function dateKeyFor(value, timezone) {
+        return new Intl.DateTimeFormat("en-CA", {
+          timeZone: timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit"
+        }).format(new Date(value));
       }
 
       function readFormSettings() {
@@ -416,12 +785,66 @@
         return value ? new Date(value).toLocaleString() : "未知时间";
       }
 
-      function formatDateTime(value) {
-        return value ? new Date(value).toLocaleString() : "未知时间";
-      }
-
       function formatScore(value) {
         return typeof value === "number" ? value.toFixed(3) : "-";
+      }
+
+      function formatChineseDate(value, timezone) {
+        const parts = new Intl.DateTimeFormat("zh-CN", {
+          timeZone: timezone || "UTC",
+          year: "numeric",
+          month: "long",
+          day: "numeric"
+        }).formatToParts(value);
+        const part = (type) => parts.find((item) => item.type === type)?.value || "";
+        return `${part("year")} 年 ${part("month")} ${part("day")} 日`;
+      }
+
+      function dayOfYear(value, timezone) {
+        const dateKey = dateKeyFor(value, timezone || "UTC");
+        const [year, month, day] = dateKey.split("-").map(Number);
+        const start = Date.UTC(year, 0, 1);
+        const current = Date.UTC(year, month - 1, day);
+        return Math.floor((current - start) / 86400000) + 1;
+      }
+
+      function dibaoArticleUrl(articleId) {
+        const params = new URLSearchParams();
+        params.set("view", "recommended");
+        params.set("article", articleId);
+        return `/?${params.toString()}`;
+      }
+
+      function openArticleInDibao(article) {
+        bridge("openArticle", {
+          articleId: article.articleId,
+          url: dibaoArticleUrl(article.articleId)
+        }).catch(() => {
+          window.location.href = dibaoArticleUrl(article.articleId);
+        });
+      }
+
+      function bridge(method, payload) {
+        const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
+        return new Promise((resolve, reject) => {
+          bridgeHandlers.set(requestId, { resolve, reject });
+          window.parent.postMessage(
+            {
+              type: "dibao.bridge",
+              schemaVersion: 1,
+              pluginId,
+              requestId,
+              method,
+              payload
+            },
+            window.location.origin
+          );
+          window.setTimeout(() => {
+            if (!bridgeHandlers.has(requestId)) return;
+            bridgeHandlers.delete(requestId);
+            reject(new Error("宿主响应超时，请重试。"));
+          }, 10000);
+        });
       }
 
       function cleanSummary(value) {
@@ -434,7 +857,7 @@
             .replace(/<\/(p|div|section|article|header|footer|h[1-6]|li|ul|ol|blockquote|br)>/gi, " ")
             .replace(/<[^>]+>/g, " ")
         ).replace(/\s+/g, " ").trim();
-        return text.length > 280 ? `${text.slice(0, 279).trimEnd()}…` : text;
+        return text.length > 280 ? `${text.slice(0, 279).trimEnd()}...` : text;
       }
 
       function decodeHtmlEntities(value) {
