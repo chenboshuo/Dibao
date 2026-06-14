@@ -317,6 +317,8 @@ export function ArticleListPanel(props: {
   return (
     <section
       className={styles.articlePanel}
+      data-article-count={props.articles.length}
+      data-mounted-row-count={visibleArticles.length}
       data-testid="article-list-scroll-container"
       ref={scrollContainerRef}
       aria-labelledby="articles-title"
@@ -1656,7 +1658,7 @@ export function ArticleDetailPanel(props: {
       style={readerStyleFor(props.readerSettings)}
       aria-labelledby="reader-title"
     >
-      {props.isDetailLoading ? <ReaderSkeleton /> : null}
+      {props.isDetailLoading && !props.article ? <ReaderSkeleton /> : null}
 
       {!props.isDetailLoading && props.detailError ? (
         <p className={styles.errorText}>{props.detailError}</p>
@@ -1666,7 +1668,7 @@ export function ArticleDetailPanel(props: {
         <EmptyState title={t.reader.selectArticleTitle} body={t.reader.selectArticleBody} />
       ) : null}
 
-      {!props.isDetailLoading && !props.detailError && props.article ? (
+      {!props.detailError && props.article ? (
         <article className={styles.reader} data-reader-theme={props.readerSettings.theme}>
           <button
             className={styles.mobileBackButton}

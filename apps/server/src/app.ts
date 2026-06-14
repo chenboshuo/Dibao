@@ -196,7 +196,8 @@ import {
 } from "./recommendation-maintenance-scheduler.js";
 import {
   RecommendationRankingService,
-  type RankExplanationClusterMatch
+  type RankExplanationClusterMatch,
+  type RankExplanationResult
 } from "./ranking-service.js";
 import {
   DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
@@ -426,6 +427,9 @@ type CursorPayload = {
 
 type EncodedCursorPayload = CursorPayload | { keyset: ArticleListCursor };
 
+const ARTICLE_EXPLANATION_CACHE_TTL_MS = 60_000;
+const ARTICLE_EXPLANATION_CACHE_MAX_ENTRIES = 500;
+
 type BuildServerOptions = {
   db?: DibaoDatabase;
   databasePath?: string;
@@ -582,6 +586,54 @@ export function buildServer(options: BuildServerOptions = {}) {
     maxChunkDurationMs: options.rankingTargetChunkMs,
     now: options.now
   });
+  const articleExplanationCache = new Map<
+    string,
+    { articleId: string; rankContext: string; explanation: RankExplanationResult; expiresAt: number }
+  >();
+  function cachedArticleExplanation(articleId: string): {
+    explanation: RankExplanationResult | null;
+    cacheHit: boolean;
+  } {
+    const rankContext = rankingService.getActiveRankContext();
+    const cacheKey = `${rankContext}:${articleId}`;
+    const now = options.now?.() ?? Date.now();
+    const cached = articleExplanationCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      articleExplanationCache.delete(cacheKey);
+      articleExplanationCache.set(cacheKey, cached);
+      return { explanation: cached.explanation, cacheHit: true };
+    }
+    if (cached) {
+      articleExplanationCache.delete(cacheKey);
+    }
+
+    const explanation = rankingService.explainArticle(articleId);
+    if (!explanation) {
+      return { explanation: null, cacheHit: false };
+    }
+
+    articleExplanationCache.set(cacheKey, {
+      articleId,
+      rankContext,
+      explanation,
+      expiresAt: now + ARTICLE_EXPLANATION_CACHE_TTL_MS
+    });
+    while (articleExplanationCache.size > ARTICLE_EXPLANATION_CACHE_MAX_ENTRIES) {
+      const oldestKey = articleExplanationCache.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      articleExplanationCache.delete(oldestKey);
+    }
+    return { explanation, cacheHit: false };
+  }
+  function invalidateArticleExplanationCache(articleId: string): void {
+    for (const [key, value] of articleExplanationCache) {
+      if (value.articleId === articleId) {
+        articleExplanationCache.delete(key);
+      }
+    }
+  }
   let drainDueJobsForPlugins: (() => Promise<number>) | null = null;
   const pluginService = new PluginService({
     db,
@@ -2507,6 +2559,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       ...parsed.input,
       rankContext: rankingService.getActiveRankContext()
     });
+    const responseMapStartedAt = performance.now();
+    const data = result.items.map(mapArticleListItem);
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    const durationMs = performance.now() - startedAt;
     app.log.info(
       {
         route: "/api/articles",
@@ -2517,13 +2573,21 @@ export function buildServer(options: BuildServerOptions = {}) {
         includeUnreadCount: parsed.input.includeUnreadCount ?? true,
         itemCount: result.items.length,
         hasMore: result.nextOffset !== null,
-        durationMs: Math.round(performance.now() - startedAt)
+        unreadCountMs: roundDuration(result.timing?.unreadCountMs ?? 0),
+        rankCandidateMs: roundDuration(result.timing?.rankCandidateMs ?? 0),
+        unrankedCandidateMs: roundDuration(result.timing?.unrankedCandidateMs ?? 0),
+        hydrateMs: roundDuration(result.timing?.hydrateMs ?? 0),
+        pageQueryMs: roundDuration(result.timing?.pageQueryMs ?? 0),
+        dbMapMs: roundDuration(result.timing?.mapMs ?? 0),
+        dbTotalMs: roundDuration(result.timing?.totalMs ?? 0),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(durationMs)
       },
       "performance.route"
     );
 
     return {
-      data: result.items.map(mapArticleListItem),
+      data,
       page: {
         nextCursor: encodeCursor(result.nextCursor ?? result.nextOffset)
       },
@@ -2544,6 +2608,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       ...parsed.input,
       rankContext: rankingService.getActiveRankContext()
     });
+    const responseMapStartedAt = performance.now();
+    const data = result.items.map(mapArticleListItem);
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    const durationMs = performance.now() - startedAt;
     app.log.info(
       {
         route: "/api/search",
@@ -2555,13 +2623,18 @@ export function buildServer(options: BuildServerOptions = {}) {
         includeUnreadCount: parsed.input.includeUnreadCount ?? true,
         itemCount: result.items.length,
         hasMore: result.nextOffset !== null,
-        durationMs: Math.round(performance.now() - startedAt)
+        unreadCountMs: roundDuration(result.timing?.unreadCountMs ?? 0),
+        pageQueryMs: roundDuration(result.timing?.pageQueryMs ?? 0),
+        dbMapMs: roundDuration(result.timing?.mapMs ?? 0),
+        dbTotalMs: roundDuration(result.timing?.totalMs ?? 0),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(durationMs)
       },
       "performance.route"
     );
 
     return {
-      data: result.items.map(mapArticleListItem),
+      data,
       page: {
         nextCursor: encodeCursor(result.nextOffset)
       },
@@ -2642,14 +2715,21 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.get<{ Params: ArticleParams }>("/api/articles/:id", async (request, reply) => {
     const startedAt = performance.now();
+    const findStartedAt = performance.now();
     const article = articles.findDetailById(request.params.id, {
       rankContext: rankingService.getActiveRankContext()
     });
+    const findMs = performance.now() - findStartedAt;
+    const responseMapStartedAt = performance.now();
+    const data = article ? mapArticleDetail(article) : null;
+    const responseMapMs = performance.now() - responseMapStartedAt;
     app.log.info(
       {
         route: "/api/articles/:id",
         found: Boolean(article),
-        durationMs: Math.round(performance.now() - startedAt)
+        findMs: roundDuration(findMs),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(performance.now() - startedAt)
       },
       "performance.route"
     );
@@ -2659,36 +2739,65 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
 
     return {
-      data: mapArticleDetail(article)
+      data
     };
   });
 
   app.get<{ Params: ArticleParams }>("/api/articles/:id/explanation", async (request, reply) => {
-    const explanation = rankingService.explainArticle(request.params.id);
+    const startedAt = performance.now();
+    const explainStartedAt = performance.now();
+    const { explanation, cacheHit } = cachedArticleExplanation(request.params.id);
+    const explainMs = performance.now() - explainStartedAt;
 
     if (!explanation) {
+      app.log.info(
+        {
+          route: "/api/articles/:id/explanation",
+          found: false,
+          cacheHit,
+          explainMs: roundDuration(explainMs),
+          responseMapMs: 0,
+          durationMs: roundDuration(performance.now() - startedAt)
+        },
+        "performance.route"
+      );
       return sendApiError(reply, 404, "NOT_FOUND", "Article not found");
     }
+    const responseMapStartedAt = performance.now();
+    const data = {
+      articleId: explanation.articleId,
+      reasons: explanation.reasons.map((reason) => {
+        const clusters = reason.clusters?.map((cluster) =>
+          labeledExplanationCluster(cluster, clusterLabelService)
+        );
+        const cluster = reason.cluster
+          ? labeledExplanationCluster(reason.cluster, clusterLabelService)
+          : clusters?.[0];
+
+        return {
+          ...reason,
+          ...(cluster ? { cluster } : {}),
+          ...(clusters && clusters.length > 0 ? { clusters } : {})
+        };
+      }),
+      generatedAt: timestampToIsoValue(explanation.generatedAt)
+    };
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    app.log.info(
+      {
+        route: "/api/articles/:id/explanation",
+        found: true,
+        cacheHit,
+        reasonCount: explanation.reasons.length,
+        explainMs: roundDuration(explainMs),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
 
     return {
-      data: {
-        articleId: explanation.articleId,
-        reasons: explanation.reasons.map((reason) => {
-          const clusters = reason.clusters?.map((cluster) =>
-            labeledExplanationCluster(cluster, clusterLabelService)
-          );
-          const cluster = reason.cluster
-            ? labeledExplanationCluster(reason.cluster, clusterLabelService)
-            : clusters?.[0];
-
-          return {
-            ...reason,
-            ...(cluster ? { cluster } : {}),
-            ...(clusters && clusters.length > 0 ? { clusters } : {})
-          };
-        }),
-        generatedAt: timestampToIsoValue(explanation.generatedAt)
-      }
+      data
     };
   });
 
@@ -2706,11 +2815,13 @@ export function buildServer(options: BuildServerOptions = {}) {
           articleId: request.params.id,
           ...parsed.input
         });
+        invalidateArticleExplanationCache(request.params.id);
         app.log.info(
           {
             route: "/api/articles/:id/actions",
             action: parsed.input.type,
-            durationMs: Math.round(performance.now() - startedAt)
+            recordMs: roundDuration(performance.now() - startedAt),
+            durationMs: roundDuration(performance.now() - startedAt)
           },
           "performance.route"
         );
@@ -6000,6 +6111,18 @@ function isArticleListCursor(value: unknown): value is ArticleListCursor {
     return false;
   }
   const cursor = value as Partial<ArticleListCursor>;
+  if (cursor.type === "recommended") {
+    return (
+      typeof cursor.publishedAt === "number" &&
+      typeof cursor.id === "string" &&
+      (cursor.rankMissing === undefined || typeof cursor.rankMissing === "number") &&
+      (cursor.rerankMissing === undefined || typeof cursor.rerankMissing === "number") &&
+      (cursor.rerankPosition === undefined ||
+        cursor.rerankPosition === null ||
+        typeof cursor.rerankPosition === "number") &&
+      (cursor.score === undefined || cursor.score === null || typeof cursor.score === "number")
+    );
+  }
   if (cursor.type === "latest") {
     return typeof cursor.publishedAt === "number" && typeof cursor.id === "string";
   }

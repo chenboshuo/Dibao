@@ -7222,6 +7222,36 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("paginates recommended articles with keyset cursors", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended&limit=1&includeUnreadCount=false"
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recommended"
+      ]);
+      expect(first.json().meta).toEqual({ unreadCount: null });
+      expect(first.json().page.nextCursor).toEqual(expect.any(String));
+
+      const second = await app.inject({
+        method: "GET",
+        url: `/api/articles?view=recommended&limit=1&cursor=${encodeURIComponent(first.json().page.nextCursor)}`
+      });
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recent"
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("orders read later by active rank, base fallback, then saved time", async () => {
     const db = createArticleSortDatabase();
     const embeddings = new SqliteEmbeddingRepository(db);
@@ -7926,6 +7956,48 @@ describe("server API vertical slice", () => {
           ]
         }
       });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("caches rank explanations and invalidates them after article actions", async () => {
+    const db = createFixtureDatabase();
+    insertRank(db, "article_recommended", 1.2, 7000, {
+      stateScore: 0.5
+    });
+    const app = buildServer({ db, logger: false, now: () => 8000 });
+
+    try {
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json().data.generatedAt).toBe("1970-01-01T00:00:07.000Z");
+
+      insertRank(db, "article_recommended", 1.2, 9000, {
+        stateScore: 0.8
+      });
+      const cached = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+      expect(cached.statusCode, cached.body).toBe(200);
+      expect(cached.json().data.generatedAt).toBe("1970-01-01T00:00:07.000Z");
+
+      const action = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "favorite"
+      });
+      expect(action.statusCode, action.body).toBe(200);
+
+      const refreshed = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+      expect(refreshed.statusCode, refreshed.body).toBe(200);
+      expect(refreshed.json().data.generatedAt).toBe("1970-01-01T00:00:09.000Z");
     } finally {
       await app.close();
       db.close();

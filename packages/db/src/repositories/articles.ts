@@ -1,4 +1,5 @@
 import { SqliteArticleFtsIndex, sanitizeFtsQuery } from "../fts/article-fts.js";
+import { performance } from "node:perf_hooks";
 import type {
   ArticleDetailRow,
   ArticleEmbeddingCandidateRow,
@@ -7,6 +8,7 @@ import type {
   ArticleListInput,
   ArticleListItemRow,
   ArticleListResult,
+  ArticleListTiming,
   ArticleRetentionCandidateRow,
   ArticleRetentionCleanupResult,
   ArticleRow,
@@ -424,6 +426,8 @@ export class SqliteArticleRepository implements ArticleRepository {
   }
 
   list(input: ArticleListInput = {}): ArticleListResult {
+    const totalStartedAt = performance.now();
+    const timing = createArticleListTiming();
     const limit = normalizeLimit(input.limit);
     const offset = normalizeOffset(input.offset);
     const baseConditions = [
@@ -459,9 +463,12 @@ export class SqliteArticleRepository implements ArticleRepository {
     }
 
     const includeUnreadCount = input.includeUnreadCount ?? true;
-    const unreadCount = includeUnreadCount
-      ? this.countForConditions([...baseConditions, unreadArticleCondition()], filterParams)
-      : null;
+    let unreadCount: number | null = null;
+    if (includeUnreadCount) {
+      const startedAt = performance.now();
+      unreadCount = this.countForConditions([...baseConditions, unreadArticleCondition()], filterParams);
+      timing.unreadCountMs = elapsedMs(startedAt);
+    }
 
     const conditions = [...baseConditions];
 
@@ -489,37 +496,45 @@ export class SqliteArticleRepository implements ArticleRepository {
             conditions,
             filterParams,
             limit,
-            offset
+            offset,
+            cursor: input.cursor?.type === "recommended" ? input.cursor : null,
+            timing
           })
-        : (this.db
-            .prepare(
-              `
-                ${baseArticleReadSelect({ includeRank: needsRank })}
-                ${baseArticleReadFrom({ includeRank: needsRank })}
-                where ${pageConditions.join(" and ")}
-                ${orderByForView(input.view, input.sort)}
-                limit ?
-                ${keyset ? "" : "offset ?"}
-              `
-            )
-            .all(
-              ...rankParams,
-              ...pageParams,
-              ...(keyset ? [limit + 1] : [limit + 1, offset])
-            ) as ArticleReadDbRow[]);
+        : measureArticleListTiming(timing, "pageQueryMs", () =>
+            this.db
+              .prepare(
+                `
+                  ${baseArticleReadSelect({ includeRank: needsRank })}
+                  ${baseArticleReadFrom({ includeRank: needsRank })}
+                  where ${pageConditions.join(" and ")}
+                  ${orderByForView(input.view, input.sort)}
+                  limit ?
+                  ${keyset ? "" : "offset ?"}
+                `
+              )
+              .all(
+                ...rankParams,
+                ...pageParams,
+                ...(keyset ? [limit + 1] : [limit + 1, offset])
+              ) as ArticleReadDbRow[]
+          );
 
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const mapStartedAt = performance.now();
     const items = pageRows.map(mapArticleListItem);
+    timing.mapMs = elapsedMs(mapStartedAt);
     const nextCursor = hasMore
       ? cursorForArticleListRow(input.view, input.sort, pageRows.at(-1) ?? null)
       : null;
+    timing.totalMs = elapsedMs(totalStartedAt);
 
     return {
       items,
       nextOffset: hasMore ? offset + limit : null,
       nextCursor,
-      unreadCount
+      unreadCount,
+      timing
     };
   }
 
@@ -529,8 +544,10 @@ export class SqliteArticleRepository implements ArticleRepository {
     filterParams: unknown[];
     limit: number;
     offset: number;
+    cursor: Extract<ArticleListCursor, { type: "recommended" }> | null;
+    timing: ArticleListTiming;
   }): ArticleReadDbRow[] {
-    const targetCount = input.offset + input.limit + 1;
+    const targetCount = input.cursor ? input.limit + 1 : input.offset + input.limit + 1;
     const rankedCandidates = this.listRankedRecommendedCandidates(input, targetCount);
     const missingUnrankedCount = Math.max(0, targetCount - rankedCandidates.length);
     const candidates =
@@ -540,8 +557,12 @@ export class SqliteArticleRepository implements ArticleRepository {
             ...this.listUnrankedRecommendedCandidates(input, missingUnrankedCount)
           ]
         : rankedCandidates;
-    const pageCandidates = candidates.slice(input.offset, input.offset + input.limit + 1);
-    return this.hydrateRecommendedCandidates(input.rankContext, pageCandidates);
+    const pageCandidates = input.cursor
+      ? candidates.slice(0, input.limit + 1)
+      : candidates.slice(input.offset, input.offset + input.limit + 1);
+    return measureArticleListTiming(input.timing, "hydrateMs", () =>
+      this.hydrateRecommendedCandidates(input.rankContext, pageCandidates)
+    );
   }
 
   private listRankedRecommendedCandidates(
@@ -549,29 +570,37 @@ export class SqliteArticleRepository implements ArticleRepository {
       rankContext: string;
       conditions: string[];
       filterParams: unknown[];
+      cursor: Extract<ArticleListCursor, { type: "recommended" }> | null;
+      timing: ArticleListTiming;
     },
     targetCount: number
   ): RecommendedCandidateRow[] {
     let candidates: RecommendedCandidateRow[] = [];
     const windows = recommendedCandidateWindows(targetCount);
     for (const candidateLimit of windows) {
-      const active = this.selectRankedRecommendedCandidates({
-        rankContext: input.rankContext,
-        excludeRankContext: null,
-        conditions: input.conditions,
-        filterParams: input.filterParams,
-        limit: candidateLimit
-      });
+      const active = measureArticleListTiming(input.timing, "rankCandidateMs", () =>
+        this.selectRankedRecommendedCandidates({
+          rankContext: input.rankContext,
+          excludeRankContext: null,
+          conditions: input.conditions,
+          filterParams: input.filterParams,
+          cursor: input.cursor,
+          limit: candidateLimit
+        })
+      );
       const base =
         input.rankContext === BASE_RANK_CONTEXT
           ? []
-          : this.selectRankedRecommendedCandidates({
-              rankContext: BASE_RANK_CONTEXT,
-              excludeRankContext: input.rankContext,
-              conditions: input.conditions,
-              filterParams: input.filterParams,
-              limit: candidateLimit
-            });
+          : measureArticleListTiming(input.timing, "rankCandidateMs", () =>
+              this.selectRankedRecommendedCandidates({
+                rankContext: BASE_RANK_CONTEXT,
+                excludeRankContext: input.rankContext,
+                conditions: input.conditions,
+                filterParams: input.filterParams,
+                cursor: input.cursor,
+                limit: candidateLimit
+              })
+            );
       candidates = mergeRecommendedCandidates(active, base);
       if (
         candidates.length >= targetCount ||
@@ -588,8 +617,12 @@ export class SqliteArticleRepository implements ArticleRepository {
     excludeRankContext: string | null;
     conditions: string[];
     filterParams: unknown[];
+    cursor: Extract<ArticleListCursor, { type: "recommended" }> | null;
     limit: number;
   }): RecommendedCandidateRow[] {
+    if (input.cursor && (input.cursor.rankMissing ?? 0) > 0) {
+      return [];
+    }
     const excludeActive = input.excludeRankContext
       ? `
         and not exists (
@@ -601,6 +634,7 @@ export class SqliteArticleRepository implements ArticleRepository {
       `
       : "";
     const excludeParams = input.excludeRankContext ? [input.excludeRankContext] : [];
+    const keyset = rankedRecommendedKeysetCondition(input.cursor);
     return this.db
       .prepare(
         `
@@ -618,6 +652,7 @@ export class SqliteArticleRepository implements ArticleRepository {
           where ars.rank_context = ?
             ${excludeActive}
             and ${input.conditions.join(" and ")}
+            ${keyset ? `and ${keyset.sql}` : ""}
           order by
             ars.score desc,
             case when ars.rerank_position is null then 1 else 0 end,
@@ -631,6 +666,7 @@ export class SqliteArticleRepository implements ArticleRepository {
         input.rankContext,
         ...excludeParams,
         ...input.filterParams,
+        ...(keyset?.params ?? []),
         input.limit
       ) as RecommendedCandidateRow[];
   }
@@ -640,38 +676,45 @@ export class SqliteArticleRepository implements ArticleRepository {
       rankContext: string;
       conditions: string[];
       filterParams: unknown[];
+      cursor: Extract<ArticleListCursor, { type: "recommended" }> | null;
+      timing: ArticleListTiming;
     },
     limit: number
   ): RecommendedCandidateRow[] {
     if (limit <= 0) {
       return [];
     }
-    return this.db
-      .prepare(
-        `
-          select
-            a.id,
-            null as sortScore,
-            1 as sortRerankMissing,
-            null as sortRerankPosition,
-            1 as sortRankMissing,
-            coalesce(a.published_at, a.discovered_at) as sortPublishedAt
-          ${baseArticleReadFrom()}
-          where ${input.conditions.join(" and ")}
-            and rs.article_id is null
-            and base_rs.article_id is null
-          order by
-            coalesce(a.published_at, a.discovered_at) desc,
-            a.id desc
-          limit ?
-        `
-      )
-      .all(
-        input.rankContext,
-        BASE_RANK_CONTEXT,
-        ...input.filterParams,
-        limit
-      ) as RecommendedCandidateRow[];
+    const keyset = unrankedRecommendedKeysetCondition(input.cursor);
+    return measureArticleListTiming(input.timing, "unrankedCandidateMs", () =>
+      this.db
+        .prepare(
+          `
+            select
+              a.id,
+              null as sortScore,
+              1 as sortRerankMissing,
+              null as sortRerankPosition,
+              1 as sortRankMissing,
+              coalesce(a.published_at, a.discovered_at) as sortPublishedAt
+            ${baseArticleReadFrom()}
+            where ${input.conditions.join(" and ")}
+              and rs.article_id is null
+              and base_rs.article_id is null
+              ${keyset ? `and ${keyset.sql}` : ""}
+            order by
+              coalesce(a.published_at, a.discovered_at) desc,
+              a.id desc
+            limit ?
+          `
+        )
+        .all(
+          input.rankContext,
+          BASE_RANK_CONTEXT,
+          ...input.filterParams,
+          ...(keyset?.params ?? []),
+          limit
+        ) as RecommendedCandidateRow[]
+    );
   }
 
   private hydrateRecommendedCandidates(
@@ -735,6 +778,8 @@ export class SqliteArticleRepository implements ArticleRepository {
   }
 
   search(input: ArticleSearchInput): ArticleSearchResult {
+    const totalStartedAt = performance.now();
+    const timing = createArticleListTiming();
     const query = input.query.trim();
     if (!query) {
       return {
@@ -778,9 +823,12 @@ export class SqliteArticleRepository implements ArticleRepository {
       filterParams.push(input.to);
     }
 
-    const unreadCount = includeUnreadCount
-      ? this.countForSearchConditions(search, [...baseConditions, unreadArticleCondition()], filterParams)
-      : null;
+    let unreadCount: number | null = null;
+    if (includeUnreadCount) {
+      const startedAt = performance.now();
+      unreadCount = this.countForSearchConditions(search, [...baseConditions, unreadArticleCondition()], filterParams);
+      timing.unreadCountMs = elapsedMs(startedAt);
+    }
 
     const conditions = [...baseConditions];
     switch (input.state ?? "all") {
@@ -800,35 +848,41 @@ export class SqliteArticleRepository implements ArticleRepository {
         break;
     }
 
-    const rows = this.db
-      .prepare(
-        `
-          ${search.sql}
-          ${baseArticleReadSelect()}
-          ${baseArticleReadFrom()}
-          join search_hits on search_hits.article_id = a.id
-          where ${conditions.join(" and ")}
-          ${orderByForSearch(input.sort ?? "relevance")}
-          limit ?
-          offset ?
-        `
-      )
-      .all(
-        ...search.params,
-        rankContext,
-        BASE_RANK_CONTEXT,
-        ...filterParams,
-        limit + 1,
-        offset
-      ) as ArticleReadDbRow[];
+    const rows = measureArticleListTiming(timing, "pageQueryMs", () =>
+      this.db
+        .prepare(
+          `
+            ${search.sql}
+            ${baseArticleReadSelect()}
+            ${baseArticleReadFrom()}
+            join search_hits on search_hits.article_id = a.id
+            where ${conditions.join(" and ")}
+            ${orderByForSearch(input.sort ?? "relevance")}
+            limit ?
+            offset ?
+          `
+        )
+        .all(
+          ...search.params,
+          rankContext,
+          BASE_RANK_CONTEXT,
+          ...filterParams,
+          limit + 1,
+          offset
+        ) as ArticleReadDbRow[]
+    );
 
     const hasMore = rows.length > limit;
+    const mapStartedAt = performance.now();
     const items = (hasMore ? rows.slice(0, limit) : rows).map(mapArticleListItem);
+    timing.mapMs = elapsedMs(mapStartedAt);
+    timing.totalMs = elapsedMs(totalStartedAt);
 
     return {
       items,
       nextOffset: hasMore ? offset + limit : null,
-      unreadCount
+      unreadCount,
+      timing
     };
   }
 
@@ -1330,6 +1384,17 @@ function cursorForArticleListRow(
   if ((view ?? "latest") === "latest") {
     return { type: "latest", publishedAt: row.sortPublishedAt, id: row.id };
   }
+  if (view === "recommended") {
+    return {
+      type: "recommended",
+      rankMissing: row.sortRankMissing ?? 1,
+      rerankMissing: row.sortRerankMissing ?? 1,
+      rerankPosition: row.sortRerankPosition,
+      score: row.rankScore,
+      publishedAt: row.sortPublishedAt,
+      id: row.id
+    };
+  }
   if (view === "favorites" && row.favoritedAt !== null) {
     return {
       type: "favorites",
@@ -1353,6 +1418,76 @@ function cursorForArticleListRow(
     };
   }
   return null;
+}
+
+function rankedRecommendedKeysetCondition(
+  cursor: Extract<ArticleListCursor, { type: "recommended" }> | null
+): { sql: string; params: unknown[] } | null {
+  if (!cursor) {
+    return null;
+  }
+
+  const scoreExpr = "coalesce(ars.score, -1.0e308)";
+  const rerankMissingExpr = "case when ars.rerank_position is null then 1 else 0 end";
+  const rerankPositionExpr = "coalesce(ars.rerank_position, 9223372036854775807)";
+  const score = cursor.score ?? -1.0e308;
+  const rerankMissing = cursor.rerankMissing ?? 1;
+  const rerankPosition = cursor.rerankPosition ?? 9223372036854775807;
+  return {
+    sql: `(
+      ${scoreExpr} < ?
+      or (${scoreExpr} = ? and ${rerankMissingExpr} > ?)
+      or (${scoreExpr} = ? and ${rerankMissingExpr} = ? and ${rerankPositionExpr} > ?)
+      or (${scoreExpr} = ? and ${rerankMissingExpr} = ? and ${rerankPositionExpr} = ? and coalesce(a.published_at, a.discovered_at) < ?)
+      or (${scoreExpr} = ? and ${rerankMissingExpr} = ? and ${rerankPositionExpr} = ? and coalesce(a.published_at, a.discovered_at) = ? and a.id < ?)
+    )`,
+    params: [
+      score,
+      score, rerankMissing,
+      score, rerankMissing, rerankPosition,
+      score, rerankMissing, rerankPosition, cursor.publishedAt,
+      score, rerankMissing, rerankPosition, cursor.publishedAt, cursor.id
+    ]
+  };
+}
+
+function unrankedRecommendedKeysetCondition(
+  cursor: Extract<ArticleListCursor, { type: "recommended" }> | null
+): { sql: string; params: unknown[] } | null {
+  if (!cursor || (cursor.rankMissing ?? 0) === 0) {
+    return null;
+  }
+
+  return desc2("coalesce(a.published_at, a.discovered_at)", "a.id", cursor.publishedAt, cursor.id);
+}
+
+function createArticleListTiming(): ArticleListTiming {
+  return {
+    unreadCountMs: 0,
+    rankCandidateMs: 0,
+    unrankedCandidateMs: 0,
+    hydrateMs: 0,
+    pageQueryMs: 0,
+    mapMs: 0,
+    totalMs: 0
+  };
+}
+
+function measureArticleListTiming<T>(
+  timing: ArticleListTiming,
+  field: keyof Omit<ArticleListTiming, "totalMs">,
+  work: () => T
+): T {
+  const startedAt = performance.now();
+  try {
+    return work();
+  } finally {
+    timing[field] += elapsedMs(startedAt);
+  }
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
 }
 
 function rankedReadLaterKeysetCondition(cursor: Extract<ArticleListCursor, { type: "read_later" }>): {

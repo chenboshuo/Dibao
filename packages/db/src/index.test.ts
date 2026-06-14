@@ -2215,16 +2215,40 @@ describe("db package", () => {
       insertRank(db, "article_active_high", 0.9, 3000, "active");
       insertRank(db, "article_active_low", 0.7, 3000, "active");
 
-      expect(
-        articles
-          .list({ view: "recommended", rankContext: "active", limit: 2 })
-          .items.map((item) => item.id)
-      ).toEqual(["article_base_only", "article_active_high"]);
+      const firstPage = articles.list({ view: "recommended", rankContext: "active", limit: 2 });
+      expect(firstPage.items.map((item) => item.id)).toEqual([
+        "article_base_only",
+        "article_active_high"
+      ]);
+      expect(firstPage.nextCursor).toMatchObject({ type: "recommended" });
+      expect(firstPage.timing).toMatchObject({
+        unreadCountMs: expect.any(Number),
+        rankCandidateMs: expect.any(Number),
+        hydrateMs: expect.any(Number)
+      });
       expect(
         articles
           .list({ view: "recommended", rankContext: "active", limit: 3, offset: 2 })
           .items.map((item) => item.id)
       ).toEqual(["article_active_low", "article_unranked"]);
+      expect(
+        articles
+          .list({
+            view: "recommended",
+            rankContext: "active",
+            limit: 3,
+            cursor: firstPage.nextCursor ?? undefined
+          })
+          .items.map((item) => item.id)
+      ).toEqual(["article_active_low", "article_unranked"]);
+      const withoutCount = articles.list({
+        view: "recommended",
+        rankContext: "active",
+        includeUnreadCount: false,
+        limit: 2
+      });
+      expect(withoutCount.unreadCount).toBeNull();
+      expect(withoutCount.timing?.unreadCountMs).toBe(0);
     } finally {
       db.close();
     }

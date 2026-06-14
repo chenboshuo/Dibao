@@ -446,6 +446,15 @@ export type ArticleListCursor =
       offset: number;
     }
   | {
+      type: "recommended";
+      rankMissing?: number;
+      rerankMissing?: number;
+      rerankPosition?: number | null;
+      score?: number | null;
+      publishedAt: number;
+      id: string;
+    }
+  | {
       type: "latest";
       publishedAt: number;
       id: string;
@@ -974,6 +983,17 @@ export type ArticleListResult = {
   nextOffset: number | null;
   nextCursor?: ArticleListCursor | null;
   unreadCount: number | null;
+  timing?: ArticleListTiming;
+};
+
+export type ArticleListTiming = {
+  unreadCountMs: number;
+  rankCandidateMs: number;
+  unrankedCandidateMs: number;
+  hydrateMs: number;
+  pageQueryMs: number;
+  mapMs: number;
+  totalMs: number;
 };
 
 export type UpsertArticleInput = {

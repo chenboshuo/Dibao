@@ -178,6 +178,29 @@ async function withRequestTimeout<T>(
     window.clearTimeout(timeoutId);
   }
 }
+
+function articleDetailPlaceholder(article: ArticleListItem): ArticleDetail {
+  return {
+    ...article,
+    contentHtml: null,
+    contentText: article.summary,
+    extractionStatus: "pending",
+    extractionError: null
+  };
+}
+
+function logReaderPerformance(event: string, data: Record<string, unknown>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const enabled =
+    window.localStorage.getItem("dibao:perf") === "1" ||
+    new URLSearchParams(window.location.search).get("perf") === "1";
+  if (!enabled) {
+    return;
+  }
+  console.debug("dibao.reader.performance", { event, ...data });
+}
 const LazyFullContentPreviewPage = lazy(() =>
   import("./fullContent/FullContentPreviewPage.js").then((module) => ({ default: module.FullContentPreviewPage }))
 );
@@ -1061,6 +1084,7 @@ export function App() {
         timeWindow: supportsQuickFilters(view) ? selectedTimeWindow : "all",
         sort: articleSortForView(view, sort, laterSort)
       };
+      const requestStartedAt = performance.now();
       const response = await withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
         dibaoApi.listArticles({
           ...requestInput,
@@ -1080,6 +1104,12 @@ export function App() {
       setArticles(
         articlesVisibleForUnreadFilter(responseArticles, supportsUnreadOnly(view) && onlyUnread)
       );
+      logReaderPerformance("articleList.loaded", {
+        view,
+        requestMs: Math.round(performance.now() - requestStartedAt),
+        articlesLength: responseArticles.length,
+        hasMore: response.page.nextCursor !== null
+      });
       if (response.meta.unreadCount !== null) {
         setUnreadCount(
           unreadCountWithKnownLocalStates(
@@ -1091,30 +1121,35 @@ export function App() {
         );
       }
       setNextArticleCursor(response.page.nextCursor);
-      void withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
-        dibaoApi.listArticles({
-          ...requestInput,
-          limit: 1,
-          includeUnreadCount: true,
-          signal
-        })
-      )
-        .then((countResponse) => {
-          if (
-            requestVersion === articleRequestVersion.current &&
-            countResponse.meta.unreadCount !== null
-          ) {
-            setUnreadCount(
-              unreadCountWithKnownLocalStates(
-                countResponse.meta.unreadCount,
-                response.data,
-                articleStateById.current,
-                locallyUpdatedArticleIds.current
-              )
-            );
-          }
-        })
-        .catch(() => undefined);
+      window.setTimeout(() => {
+        if (requestVersion !== articleRequestVersion.current) {
+          return;
+        }
+        void withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+          dibaoApi.listArticles({
+            ...requestInput,
+            limit: 1,
+            includeUnreadCount: true,
+            signal
+          })
+        )
+          .then((countResponse) => {
+            if (
+              requestVersion === articleRequestVersion.current &&
+              countResponse.meta.unreadCount !== null
+            ) {
+              setUnreadCount(
+                unreadCountWithKnownLocalStates(
+                  countResponse.meta.unreadCount,
+                  response.data,
+                  articleStateById.current,
+                  locallyUpdatedArticleIds.current
+                )
+              );
+            }
+          })
+          .catch(() => undefined);
+      }, 300);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
         return;
@@ -1156,6 +1191,7 @@ export function App() {
         to: form.to || null,
         limit: 50
       };
+      const requestStartedAt = performance.now();
       const response = await withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
         dibaoApi.searchArticles({
           ...requestInput,
@@ -1173,6 +1209,11 @@ export function App() {
       );
       rememberArticleStates(responseArticles, articleStateById.current);
       setArticles(responseArticles);
+      logReaderPerformance("searchList.loaded", {
+        requestMs: Math.round(performance.now() - requestStartedAt),
+        articlesLength: responseArticles.length,
+        hasMore: response.page.nextCursor !== null
+      });
       if (response.meta.unreadCount !== null) {
         setUnreadCount(
           unreadCountWithKnownLocalStates(
@@ -1184,30 +1225,35 @@ export function App() {
         );
       }
       setNextArticleCursor(response.page.nextCursor);
-      void withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
-        dibaoApi.searchArticles({
-          ...requestInput,
-          limit: 1,
-          includeUnreadCount: true,
-          signal
-        })
-      )
-        .then((countResponse) => {
-          if (
-            requestVersion === articleRequestVersion.current &&
-            countResponse.meta.unreadCount !== null
-          ) {
-            setUnreadCount(
-              unreadCountWithKnownLocalStates(
-                countResponse.meta.unreadCount,
-                response.data,
-                articleStateById.current,
-                locallyUpdatedArticleIds.current
-              )
-            );
-          }
-        })
-        .catch(() => undefined);
+      window.setTimeout(() => {
+        if (requestVersion !== articleRequestVersion.current) {
+          return;
+        }
+        void withRequestTimeout(ARTICLE_LIST_REQUEST_TIMEOUT_MS, (signal) =>
+          dibaoApi.searchArticles({
+            ...requestInput,
+            limit: 1,
+            includeUnreadCount: true,
+            signal
+          })
+        )
+          .then((countResponse) => {
+            if (
+              requestVersion === articleRequestVersion.current &&
+              countResponse.meta.unreadCount !== null
+            ) {
+              setUnreadCount(
+                unreadCountWithKnownLocalStates(
+                  countResponse.meta.unreadCount,
+                  response.data,
+                  articleStateById.current,
+                  locallyUpdatedArticleIds.current
+                )
+              );
+            }
+          })
+          .catch(() => undefined);
+      }, 300);
     } catch (error) {
       if (requestVersion !== articleRequestVersion.current) {
         return;
@@ -1402,42 +1448,58 @@ export function App() {
       setRankExplanation(null);
       setExplanationError(null);
       setIsExplanationOpen(false);
+      const listArticle = articlesRef.current.find((article) => article.id === articleId);
+      if (listArticle) {
+        setArticleDetail((current) =>
+          current?.id === articleId ? current : articleDetailPlaceholder(listArticle)
+        );
+      }
+
+      const knownState =
+        articleStateById.current.get(articleId) ??
+        listArticle?.state ??
+        null;
+      if (!openedArticleIds.current.has(articleId)) {
+        openedArticleIds.current.add(articleId);
+        if (knownState) {
+          applyArticleState(articleId, optimisticOpenedState(knownState));
+        }
+        void dibaoApi.postArticleAction(articleId, {
+          type: "open",
+          value: true
+        })
+          .then((result) => {
+            if (!cancelled) {
+              applyArticleState(articleId, result.state);
+            }
+          })
+          .catch(() => {
+            openedArticleIds.current.delete(articleId);
+            if (!cancelled) {
+              setArticleActionError(t.actions.errors.open);
+            }
+          });
+      }
 
       try {
         const detail = await withRequestTimeout(ARTICLE_DETAIL_REQUEST_TIMEOUT_MS, (signal) =>
           dibaoApi.getArticle(articleId, { signal })
         );
-        const knownState = locallyUpdatedArticleIds.current.has(articleId)
+        const overlayState = locallyUpdatedArticleIds.current.has(articleId)
           ? articleStateById.current.get(articleId)
           : null;
-        const detailWithKnownState = knownState ? { ...detail, state: knownState } : detail;
+        const detailWithKnownState = overlayState ? { ...detail, state: overlayState } : detail;
         if (!cancelled) {
           articleStateById.current.set(articleId, detailWithKnownState.state);
           setArticleDetail(detailWithKnownState);
           setArticleActionError(null);
           setIsDetailLoading(false);
         }
-        if (!cancelled && !openedArticleIds.current.has(articleId)) {
-          openedArticleIds.current.add(articleId);
-          applyArticleState(articleId, optimisticOpenedState(detailWithKnownState.state));
-          try {
-            const result = await dibaoApi.postArticleAction(articleId, {
-              type: "open",
-              value: true
-            });
-            if (!cancelled) {
-              applyArticleState(articleId, result.state);
-            }
-          } catch {
-            openedArticleIds.current.delete(articleId);
-            if (!cancelled) {
-              setArticleActionError(t.actions.errors.open);
-            }
-          }
-        }
       } catch (error) {
         if (!cancelled) {
-          setArticleDetail(null);
+          if (!listArticle) {
+            setArticleDetail(null);
+          }
           setDetailError(userMessageForError(error, t.errors.api));
         }
       } finally {
@@ -1466,7 +1528,6 @@ export function App() {
     };
   }, [
     currentArticleView,
-    refreshArticleExplanation,
     selectedArticleId,
     submittedSearchForm.sort,
     t.actions.errors.open,
@@ -2219,6 +2280,8 @@ export function App() {
     }
 
     const requestVersion = articleRequestVersion.current;
+    const requestStartedAt = performance.now();
+    const previousLength = articlesRef.current.length;
     setIsLoadingMoreArticles(true);
     setLoadMoreError(null);
 
@@ -2262,17 +2325,24 @@ export function App() {
         locallyUpdatedArticleIds.current
       );
       rememberArticleStates(responseArticles, articleStateById.current);
+      const visibleResponseArticles =
+        appPage.type === "search"
+          ? responseArticles
+          : articlesVisibleForUnreadFilter(
+              responseArticles,
+              supportsUnreadOnly(currentArticleView) && unreadOnly
+            );
       setArticles((current) =>
-        appendUniqueArticles(
-          current,
-          appPage.type === "search"
-            ? responseArticles
-            : articlesVisibleForUnreadFilter(
-                responseArticles,
-                supportsUnreadOnly(currentArticleView) && unreadOnly
-              )
-        )
+        appendUniqueArticles(current, visibleResponseArticles)
       );
+      logReaderPerformance("articleList.loadMore", {
+        view: appPage.type === "search" ? "search" : currentArticleView,
+        requestMs: Math.round(performance.now() - requestStartedAt),
+        previousArticlesLength: previousLength,
+        receivedArticlesLength: responseArticles.length,
+        visibleReceivedArticlesLength: visibleResponseArticles.length,
+        hasMore: response.page.nextCursor !== null
+      });
       if (response.meta.unreadCount !== null) {
         setUnreadCount(
           unreadCountWithKnownLocalStates(
@@ -2382,7 +2452,9 @@ export function App() {
         requestForArticleAction(intent, previousState)
       );
       applyArticleState(article.id, result.state);
-      void refreshArticleExplanation(article.id);
+      if (isExplanationOpen && selectedArticleIdRef.current === article.id) {
+        void refreshArticleExplanation(article.id);
+      }
     } catch {
       applyArticleState(article.id, previousState);
       setArticleActionError(actionErrorMessageFor(intent, t));
@@ -2530,6 +2602,10 @@ export function App() {
 
   function handleSelectArticle(articleId: string) {
     setIsExplanationOpen(false);
+    const listArticle = articlesRef.current.find((article) => article.id === articleId);
+    if (listArticle) {
+      setArticleDetail(articleDetailPlaceholder(listArticle));
+    }
     const href =
       appPage.type === "search"
         ? urlForSearchPage(submittedSearchForm, articleId)
