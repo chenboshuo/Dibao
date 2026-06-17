@@ -76,7 +76,10 @@ test("mobile feed diagnostics stay compact without horizontal overflow", async (
   await page.getByRole("menuitem", { name: "订阅源" }).click();
   await expect(page.getByRole("region", { name: "订阅源管理" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "订阅源健康" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "添加订阅源" })).toBeVisible();
+  await page.getByRole("button", { name: "添加订阅源" }).click();
   await expect(page.getByLabel("网站或 RSS / Atom URL")).toBeVisible();
+  await page.getByRole("dialog", { name: "添加订阅源" }).getByRole("button", { name: "取消" }).click();
   await expect(page.getByRole("button", { name: "只看异常" })).toBeVisible();
 
   const overflow = await page.evaluate(

@@ -151,7 +151,7 @@ import {
   INTEREST_FAMILY_REBUILD_JOB_TYPE,
   type RecommendationClusterFamily
 } from "./interest-family-service.js";
-import { JobRunner } from "./job-runner.js";
+import { JobRunner, type JobRunnerEvent } from "./job-runner.js";
 import {
   DEFAULT_JOB_HISTORY_CLEANUP_INTERVAL_MS,
   DEFAULT_JOB_HISTORY_RETENTION_DAYS,
@@ -1059,6 +1059,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     pollIntervalMs: options.jobRunnerIntervalMs,
     retryDelayMs: options.jobRetryDelayMs,
     maxJobsPerDrain: options.jobRunnerMaxJobsPerDrain,
+    onEvent: (event) => {
+      app.log.info(jobRunnerEventLog(event), "job.runner");
+    },
     beforeRun: (job) => {
       if (foregroundQuietWindowMs <= 0 || !isForegroundDeferrableJobType(job.type)) {
         return { run: true };
@@ -6339,6 +6342,20 @@ function articleListSummaryPreview(summary: string | null): string | null {
   }
 
   return text.length > 360 ? `${text.slice(0, 360)}...` : text;
+}
+
+function jobRunnerEventLog(event: JobRunnerEvent) {
+  return {
+    event: event.event,
+    jobId: event.job.id,
+    type: event.job.type,
+    status: event.job.status,
+    attempts: event.job.attempts,
+    maxAttempts: event.job.maxAttempts,
+    ...("error" in event ? { error: event.error } : {}),
+    ...("reason" in event ? { reason: event.reason } : {}),
+    ...("runAfter" in event ? { runAfter: timestampToIsoValue(event.runAfter) } : {})
+  };
 }
 
 function timestampToIso(value: number | null): string | null {

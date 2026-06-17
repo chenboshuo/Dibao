@@ -7,15 +7,22 @@ type ManagedProcess = {
 
 const managed: ManagedProcess[] = [];
 let shuttingDown = false;
+const useWorkerProcess =
+  process.env.DIBAO_CONTAINER_WORKER_PROCESS === "true" &&
+  process.env.DIBAO_BACKGROUND_JOBS !== "false";
 
 const http = startProcess("http", "apps/server/dist/index.js", {
-  DIBAO_BACKGROUND_JOBS: "false",
+  DIBAO_BACKGROUND_JOBS: useWorkerProcess
+    ? "false"
+    : process.env.DIBAO_BACKGROUND_JOBS === "false"
+      ? "false"
+      : "true",
   DIBAO_PROCESS_ROLE: "http"
 });
 managed.push(http);
 watchProcess(http);
 
-if (process.env.DIBAO_BACKGROUND_JOBS !== "false") {
+if (useWorkerProcess) {
   void startWorkerWhenHttpReady();
 }
 

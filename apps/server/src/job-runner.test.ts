@@ -194,6 +194,53 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("keeps polling for jobs enqueued after start by another database connection", async () => {
+    const databasePath = tempDatabasePath();
+    const workerDb = openDatabase(databasePath, { migrate: true });
+    const writerDb = openDatabase(databasePath);
+    const workerJobs = new SqliteJobRepository(workerDb);
+    const writerJobs = new SqliteJobRepository(writerDb);
+    const calls: string[] = [];
+    const events: string[] = [];
+    const runner = new JobRunner({
+      jobs: workerJobs,
+      handlers: {
+        feed_refresh: (job) => {
+          calls.push(job.id);
+        }
+      },
+      pollIntervalMs: 20,
+      now: () => Date.now(),
+      onEvent: (event) => {
+        events.push(`${event.event}:${event.job.id}`);
+      }
+    });
+
+    try {
+      runner.start();
+      const now = Date.now();
+      writerJobs.enqueue({
+        id: "job_cross_connection",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_cross_connection" }),
+        maxAttempts: 1,
+        runAfter: now,
+        now
+      });
+
+      await waitUntil(() => writerJobs.findById("job_cross_connection")?.status === "succeeded");
+      expect(calls).toEqual(["job_cross_connection"]);
+      expect(events).toEqual([
+        "claimed:job_cross_connection",
+        "succeeded:job_cross_connection"
+      ]);
+    } finally {
+      runner.stop();
+      writerDb.close();
+      workerDb.close();
+    }
+  });
+
   it("defers a job before handler execution when the runner gate asks for quiet time", async () => {
     const db = createEmptyDatabase();
     const jobs = new SqliteJobRepository(db);
@@ -1988,6 +2035,23 @@ let fixtureId = 0;
 function randomFixtureId(): string {
   fixtureId += 1;
   return String(fixtureId);
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await sleep(10);
+  }
+  expect(predicate()).toBe(true);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function tempDatabasePath(): string {
