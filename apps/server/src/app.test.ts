@@ -2133,6 +2133,24 @@ describe("server API vertical slice", () => {
           ]
         }
       });
+
+      const reenabled = await app.inject({
+        method: "POST",
+        url: "/api/plugins/app.dibao.daily-brief/enable",
+        headers: { cookie }
+      });
+      expect(reenabled.statusCode, reenabled.body).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const afterReenable = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/health",
+        headers: { cookie }
+      });
+      expect(afterReenable.statusCode, afterReenable.body).toBe(200);
+      expect(afterReenable.json().data).toMatchObject({
+        status: "enabled",
+        lastError: null
+      });
     } finally {
       await app.close();
       db.close();

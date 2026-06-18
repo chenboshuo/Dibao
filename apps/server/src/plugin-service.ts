@@ -288,6 +288,7 @@ export type PluginServiceOptions = {
 type PluginRuntime = {
   pluginId: string;
   child: ChildProcess | null;
+  disposed: boolean;
   hooks: Set<string>;
   tasks: Set<string>;
   apiGet: Set<string>;
@@ -1002,6 +1003,7 @@ export class PluginService {
     const runtime: PluginRuntime = {
       pluginId: install.id,
       child: null,
+      disposed: false,
       hooks: new Set(),
       tasks: new Set(),
       apiGet: new Set(),
@@ -1022,6 +1024,7 @@ export class PluginService {
         });
       },
       dispose: () => {
+        runtime.disposed = true;
         const error = new PluginServiceError(503, "PLUGIN_RUNTIME_UNAVAILABLE", "Plugin host stopped");
         rejectPendingPluginCalls(pending, error);
         if (child && !child.killed) {
@@ -1129,6 +1132,9 @@ export class PluginService {
           return;
         }
         this.runtimes.delete(install.id);
+        if (runtime.disposed) {
+          return;
+        }
         const current = this.options.plugins.findInstall(install.id);
         if (current?.status === "enabled") {
           this.options.plugins.setStatus(install.id, "failed", error.message, this.now());
