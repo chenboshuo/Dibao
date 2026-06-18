@@ -32,6 +32,7 @@ export interface JobRepository {
   findById(id: string): JobRow | null;
   list(input?: JobListInput): JobRow[];
   listOpenByType(type: JobType): JobRow[];
+  cancelOpenByTypePrefix(typePrefix: string, error: string, now: number): number;
   cancel(id: string, error: string, now: number): JobRow | null;
   defer(id: string, error: string, runAfter: number, now: number): JobRow | null;
   markFailed(id: string, error: string, now: number): JobRow | null;
@@ -253,6 +254,25 @@ export class SqliteJobRepository implements JobRepository {
     ).map(mapJob);
   }
 
+  cancelOpenByTypePrefix(typePrefix: string, error: string, now: number): number {
+    const result = this.db
+      .prepare(
+        `
+          update jobs
+          set
+            status = 'cancelled',
+            error = ?,
+            finished_at = ?,
+            updated_at = ?
+          where type like ? escape '\\'
+            and status in ('queued', 'running')
+        `
+      )
+      .run(error, now, now, `${escapeLikePattern(typePrefix)}%`);
+
+    return result.changes;
+  }
+
   cancel(id: string, error: string, now: number): JobRow | null {
     this.db
       .prepare(
@@ -430,4 +450,8 @@ function baseJobSelect(): string {
 
 function mapJob(row: JobDbRow): JobRow {
   return row;
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
 }

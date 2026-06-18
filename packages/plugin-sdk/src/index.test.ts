@@ -1,6 +1,8 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  dibaoPluginBetaApis,
+  dibaoPluginStableApis,
   pluginPackageSha256,
   signPluginPackage,
   validatePluginPackage,
@@ -70,5 +72,55 @@ describe("plugin-sdk", () => {
         }
       })
     ).toEqual({ ok: false, errors: ["Plugin signature verification failed"] });
+  });
+
+  it("validates migrations and exposes 0.2 API stability constants", () => {
+    expect(dibaoPluginStableApis).toContain("database.migrations");
+    expect(dibaoPluginBetaApis).toContain("database.defineTable");
+
+    expect(validatePluginPackage({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.migrator",
+        name: "Migrator",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.2.0", maxVersion: "<0.3.0" },
+        capabilities: ["database:plugin"],
+        migrations: [
+          {
+            version: "001",
+            name: "create_notes",
+            path: "migrations/001_create_notes.sql"
+          }
+        ]
+      },
+      files: {
+        "migrations/001_create_notes.sql": "create table plugin_notes (id integer primary key);"
+      }
+    })).toEqual({ ok: true });
+
+    expect(validatePluginPackage({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.bad-migrator",
+        name: "Bad Migrator",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.2.0", maxVersion: "<0.3.0" },
+        capabilities: ["database:plugin"],
+        migrations: [
+          {
+            version: "001",
+            name: "create_notes",
+            path: "migrations/missing.sql"
+          }
+        ]
+      },
+      files: {}
+    })).toEqual({
+      ok: false,
+      errors: ["migration file is missing: migrations/missing.sql"]
+    });
   });
 });

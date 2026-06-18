@@ -1,49 +1,67 @@
 # Dibao Plugin Installation Guide
 
-This guide is for Dibao administrators installing third-party plugins. Third-party plugins run code on your self-hosted server, so only install plugins from sources you trust.
+Last updated: 2026-06-18
 
-## Recommended Flow: Upload A Plugin File
+This guide is for Dibao administrators installing third-party plugins. In 0.2, server plugins run in isolated Node host processes and web plugins render in sandboxed iframes, but third-party server plugins are still trusted local code. Dibao does not claim hostile-code sandboxing. Install only from sources you trust.
 
-1. Download the `.dibao-plugin` file from the plugin developer's release page.
-2. If the developer provides a SHA-256 checksum, verify the file locally first.
-3. Open Dibao settings and go to the Plugins tab.
-4. Choose the `.dibao-plugin` file in the third-party plugin installer and click Install.
-5. Newly installed third-party plugins stay disabled by default. Review the plugin name, publisher, capabilities, and compatibility before enabling it.
+## Before Installing
 
-## Advanced Flow: URL Or JSON Package
+- Source: verify the developer, release page, version, and changelog.
+- Signature: prefer signed packages and make sure the key id maps to a trusted public key.
+- Capabilities: confirm requested capabilities match the feature.
+- API stability: Stable APIs are suitable for long-term use; Beta APIs may change during 0.2.x.
+- Server-code risk: enabling a plugin executes its server entry.
 
-Dibao's plugin API also supports installing from a plugin package URL or a plugin package JSON body. These flows are mainly for automation, development, or examples in developer documentation. Most users should install the `.dibao-plugin` file instead of typing these values by hand.
+## Recommended Flow: Upload `.dibao-plugin`
 
-URL installation requires the plugin developer to provide:
+1. Download the `.dibao-plugin` file from the developer release page.
+2. Verify SHA-256 locally if provided.
+3. Open Settings -> Plugins.
+4. Upload the plugin file and click Install.
+5. Newly installed third-party plugins stay disabled. Review source, signature trust, capabilities, Stable/Beta API usage, and lastError before enabling.
 
-- A package URL, usually pointing to a `.dibao-plugin` file.
-- A SHA-256 checksum, recommended.
+## Trusted Keys
 
-JSON package installation requires a complete plugin package JSON with `manifest` and `files`. If you are installing someone else's released plugin, prefer the `.dibao-plugin` file.
+Dibao uses Ed25519 signatures. Administrators provide trusted public keys through deployment configuration. Packages signed by unknown keys are rejected, and tampered packages fail verification. Never copy private keys from chat logs or untrusted pages.
 
-Related API docs:
+## Advanced Install: URL Or JSON
+
+Automation can use:
 
 - [`POST /api/plugins/install`](./api-contract.md#post-apipluginsinstall)
 - [`POST /api/plugins/install/upload`](./api-contract.md#post-apipluginsinstallupload)
 
-## Docker Upgrades
+Recommended update metadata:
 
-You usually do not need to reinstall third-party plugins after rebuilding or upgrading the official Docker image. This depends on mounting the `/data` directory as persistent storage in Docker or Docker Compose.
+```json
+{
+  "pluginId": "dev.example.reader-tools",
+  "latestVersion": "0.1.1",
+  "packageUrl": "https://example.com/reader-tools-0.1.1.dibao-plugin",
+  "sha256": "..."
+}
+```
 
-After an upgrade, Dibao rescans official plugins and preserves third-party plugin records:
+## Docker Persistence
 
-- Compatible plugins recover their previous state.
-- Incompatible plugins keep their data but move to `incompatible` until you update the plugin or upgrade Dibao.
-- Disabled plugins do not register hooks, tasks, or UI extensions.
-
-Persistent paths:
+When `/data` is mounted correctly, plugin packages and data survive image upgrades:
 
 - `/data/plugins/installed`
 - `/data/plugins/data/<plugin-id>`
-- SQLite tables: `plugin_installs`, `plugin_capability_grants`, `plugin_settings`, `plugin_kv`, `plugin_migrations`, `plugin_update_checks`
+- SQLite tables: `plugin_installs`, `plugin_capability_grants`, `plugin_settings`, `plugin_kv`, `plugin_migrations`, `plugin_update_checks`, `plugin_secrets`, `plugin_deliveries`
 
-## Updating Plugins
+Official Daily Brief and Webhook plugins are scanned from the image. Third-party plugins remain in the data volume.
 
-If the plugin manifest provides an `updateUrl`, the Plugins tab shows Check update. Dibao downloads the update into a staging area, verifies the plugin ID, compatibility range, and SHA-256, then replaces the old package. If the update fails, Dibao keeps the old package.
+## Updates And Rollback
 
-If the plugin does not provide an `updateUrl`, download the newer `.dibao-plugin` file from the developer's release page and upload it again.
+If a plugin has `updateUrl`, the Plugins page can check updates. Dibao downloads into staging, validates ID/compatibility/checksum, then swaps the old package. Failures keep the old package.
+
+Rollback options:
+
+- Upload an older `.dibao-plugin` again.
+- If a new version fails activation, the plugin moves to `failed` and data is preserved.
+- Incompatible plugins move to `incompatible` until the plugin or Dibao is updated.
+
+## Uninstall
+
+When uninstalling a third-party plugin, choose whether to delete plugin data. Keeping data helps future reinstall or rollback. Deleting data removes install records, settings, KV, secrets, deliveries, and migration records.

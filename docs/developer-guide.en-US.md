@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-16
 
-This is the developer documentation entry point maintained from `0.2.0` onward. Developer documentation is maintained only in Simplified Chinese and English. Plugin development is a sub-unit of this guide and is also maintained as standalone files.
+This is the developer documentation entry point maintained from `0.2.0` onward. Core developer documentation is maintained in Simplified Chinese and English. Plugin development is a sub-unit of this guide and is also maintained as standalone Simplified Chinese, English, and Japanese files.
 
 ## Scope
 
@@ -54,10 +54,11 @@ Read:
 
 - [Plugin development guide](./plugin-development.en-US.md)
 - [插件开发指南](./plugin-development.zh-CN.md)
+- [プラグイン開発ガイド](./plugin-development.ja-JP.md)
 - [Plugin system design](./plugin-system-design.md)
 - [Runtime performance guidelines](./runtime-performance.md)
 
-Plugin development docs are maintained in Chinese and English only. Other UI locales do not receive separate developer documentation.
+Plugin APIs in 0.2 are split into Stable and Beta. Manifest v1, lifecycle, settings/storage/secrets/deliveries/tasks, basic hooks, iframe bridge, and manifest migrations are Stable. `database.defineTable`, ranking, article snapshot/content, and diagnostics-style APIs are Beta.
 
 ## Compatibility Rules
 

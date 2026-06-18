@@ -1,13 +1,13 @@
 # Dibao Plugin System Design
 
-Last updated: 2026-05-31
+Last updated: 2026-06-18
 
 本文定义邸报 `0.2` 插件系统的产品和工程设计。目标是让非核心功能、官方可选功能和第三方功能可以在不改动主应用核心代码的情况下接入 UI、业务流程 Hook、前台任务和后台任务。
 
 相关 issue：
 
 - [#2 Plugin System](https://github.com/Pls-1q43/Dibao/issues/2)
-- [#1 Daily Brief](https://github.com/Pls-1q43/Dibao/issues/1)，作为第一个官方插件候选
+- [#1 Daily Brief](https://github.com/Pls-1q43/Dibao/issues/1)，已作为官方插件进入 0.2 插件体系
 
 ## Goals
 
@@ -29,6 +29,8 @@ Last updated: 2026-05-31
 ## Core Model
 
 插件由一个 manifest 和一个或多个运行时入口组成。
+
+0.2 的服务端运行时是独立 Node host 子进程。插件仍导出 `activate(ctx)`，但 `ctx` 通过 JSON-RPC 调用主进程白名单 Host API；主进程不向插件暴露 raw DB、`process`、Fastify request/reply 或内部 service。
 
 ```text
 example.dibao-plugin
@@ -172,7 +174,7 @@ Third-party rich UI should render in a sandboxed iframe using `postMessage` and 
 
 The host bridge exposes typed calls such as `getSettings`, `updatePluginSettings`, `startTask`, `listJobs`, `readArticles`, and `openArticle`. This keeps third-party UI from directly reaching app internals.
 
-Official bundled plugins may use the same bridge or a trusted React adapter. The contribution contract should remain identical so official plugins do not rely on private UI internals.
+Official bundled plugins use the same public bridge and server Host API as third-party plugins. The contribution contract should remain identical so official plugins do not rely on private UI internals.
 
 ## Settings Page Tab Refactor
 
@@ -359,7 +361,7 @@ plugin_update_checks
   error TEXT
 ```
 
-Secrets should not be stored in `plugin_settings` or manifest. Use a dedicated encrypted/obfuscated local secret store later; until then, only official plugins should request secrets.
+Secrets must not be stored in `plugin_settings` or manifest. 0.2 provides `plugin_secrets` and encrypted plugin secret APIs for official and trusted third-party plugins that declare `secrets:plugin`.
 
 Plugin package and data paths:
 
@@ -504,7 +506,7 @@ Development artifacts:
 - `@dibao/plugin-sdk`: TypeScript types, host API, manifest schema and test helpers.
 - `@dibao/plugin-cli`: `create`, `validate`, `build`, `pack`, `sign`, `dev`.
 - plugin template with server entry, web iframe panel, locales and README.
-- standalone plugin development documentation in Simplified Chinese and English only. The plugin docs are part of the broader developer documentation set, but must also exist as independent files so plugin authors can read them without opening the full developer guide.
+- standalone plugin development documentation in Simplified Chinese, English, and Japanese. The plugin docs are part of the broader developer documentation set, but must also exist as independent files so plugin authors can read them without opening the full developer guide.
 
 Distribution options:
 
@@ -556,13 +558,17 @@ Official plugins:
 - still declare capabilities and settings;
 - should use the same public plugin APIs as third-party plugins unless a private API is explicitly documented as internal.
 
-Candidate official plugins:
+Official plugins in 0.2:
 
 - `app.dibao.daily-brief`: scheduled daily brief from top personalized articles in the past 24 hours, diversified by interest cluster.
+- `app.dibao.webhook`: event-driven webhook rules, secrets, deliveries, and test delivery flow.
+
+Candidate future official plugins:
+
 - `app.dibao.reading-export`: export selected articles/briefs to Markdown or OPML-like bundles.
 - `app.dibao.provider-diagnostics`: richer provider/index diagnostics separated from normal reader paths.
 
-`app.dibao.daily-brief` is the best first official plugin because it exercises UI tabs, settings tab injection, scheduled background work, foreground generation, ranking read access and plugin storage.
+`app.dibao.daily-brief` remains the reference official plugin because it exercises UI tabs, settings tab injection, scheduled background work, foreground generation, ranking read access and plugin storage.
 
 ## Updates
 
@@ -631,7 +637,7 @@ Default third-party plugin trust rules:
 - No arbitrary app filesystem access; plugin data is namespaced.
 - Hook and task timeouts are mandatory.
 
-Server-side JavaScript plugins are still trusted local code in `0.2`. The UI should say this plainly. A stronger future sandbox can use a worker/WASI-style runtime, but the host API and manifest should be designed so that stronger isolation can replace the implementation later.
+Server-side JavaScript plugins are isolated in a child process but are still trusted local code in `0.2`. The UI should say this plainly. A stronger future sandbox can use a worker/WASI-style runtime, but the Host API and manifest should be designed so that stronger isolation can replace the implementation later.
 
 ## Compatibility And Versioning
 

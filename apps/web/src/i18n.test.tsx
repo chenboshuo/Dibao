@@ -1180,6 +1180,18 @@ describe("web i18n", () => {
     expect(html.indexOf("智能能力")).toBeLessThan(html.indexOf("关于"));
   });
 
+  it("keeps plugin iframes sandboxed and bridge-scoped", () => {
+    const appRuntime = readFileSync(new URL("./AppRuntime.tsx", import.meta.url), "utf8");
+    const settingsWorkspace = readFileSync(new URL("./settings/SettingsWorkspace.tsx", import.meta.url), "utf8");
+
+    expect(appRuntime).toContain('sandbox="allow-scripts allow-forms"');
+    expect(settingsWorkspace).toContain('sandbox="allow-scripts allow-forms"');
+    expect(appRuntime).toContain("event.source !== frameRef.current?.contentWindow");
+    expect(settingsWorkspace).toContain("event.source !== frameRef.current?.contentWindow");
+    expect(appRuntime).toContain("data.pluginId !== props.plugin.id");
+    expect(settingsWorkspace).toContain("data.pluginId !== props.plugin.id");
+  });
+
   it("renders provider connection and embedding job status separately", () => {
     const html = renderToStaticMarkup(
       <DibaoI18nProvider>

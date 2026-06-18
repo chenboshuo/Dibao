@@ -3667,25 +3667,30 @@ function PluginWorkspace(props: {
   onOpenArticle: (articleId: string) => void;
 }) {
   const { t } = useI18n();
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
     async function handleMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) {
+      if (!props.plugin || event.source !== frameRef.current?.contentWindow) {
         return;
       }
       const data = event.data as {
         type?: unknown;
+        pluginId?: unknown;
         articleId?: unknown;
         url?: unknown;
         requestId?: unknown;
         method?: unknown;
         payload?: unknown;
       };
+      if (data.pluginId !== props.plugin.id) {
+        return;
+      }
       if (data.type === "dibao.openArticle" && typeof data.articleId === "string") {
         props.onOpenArticle(data.articleId);
         return;
       }
-      if (!props.plugin || data.type !== "dibao.bridge" || typeof data.requestId !== "string") {
+      if (data.type !== "dibao.bridge" || typeof data.requestId !== "string" || data.requestId.length > 128) {
         return;
       }
       try {
@@ -3705,7 +3710,7 @@ function PluginWorkspace(props: {
             ok: true,
             result
           },
-          event.origin
+          "*"
         );
       } catch (error) {
         (event.source as WindowProxy | null)?.postMessage(
@@ -3717,7 +3722,7 @@ function PluginWorkspace(props: {
             ok: false,
             error: userMessageForError(error, t.errors.api)
           },
-          event.origin
+          "*"
         );
       }
     }
@@ -3750,6 +3755,8 @@ function PluginWorkspace(props: {
     <section className={styles.pluginWorkspace} aria-label={props.plugin.name}>
       <iframe
         className={styles.pluginFrame}
+        ref={frameRef}
+        sandbox="allow-scripts allow-forms"
         src={`${baseUrl}?${params.toString()}`}
         title={props.plugin.name || t.common.brandName}
       />
@@ -3860,7 +3867,12 @@ async function handlePluginBridgeRequest(
       if (typeof input.path !== "string") {
         throw new Error("path is required");
       }
-      return await dibaoApi.callPluginApi(plugin.id, input.path, input.body ?? {});
+      return await dibaoApi.callPluginApi(
+        plugin.id,
+        input.path,
+        input.body ?? {},
+        input.method === "GET" ? "GET" : "POST"
+      );
     default:
       throw new Error("Unsupported plugin bridge method");
   }

@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { verifyPluginPackageSignature, type DibaoPluginSignature } from "@dibao/plugin-sdk";
 import type {
   ArticleInteractionStatus,
@@ -31,7 +32,7 @@ import {
   assertControlledFetchTarget,
   controlledFetchText
 } from "./controlled-fetch.js";
-import { PermanentJobFailure, type JobHandler } from "./job-runner.js";
+import { DeferredJobRun, PermanentJobFailure, type JobHandler } from "./job-runner.js";
 
 export const PLUGIN_CAPABILITIES = [
   "articles:read",
@@ -71,6 +72,9 @@ const PLUGIN_EVENT_SET = new Set<string>(PLUGIN_EVENT_CATALOG);
 const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/;
 const PLUGIN_SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const PLUGIN_HOOK_TIMEOUT_MS = 2_000;
+const PLUGIN_ACTIVATION_TIMEOUT_MS = 10_000;
+const PLUGIN_API_TIMEOUT_MS = 30_000;
+const PLUGIN_TASK_PAUSED_RETRY_MS = 6 * 60 * 60 * 1000;
 const PLUGIN_DELIVERY_TASK_ID = "__delivery";
 const PLUGIN_OUTBOUND_TIMEOUT_MS = 10_000;
 const PLUGIN_OUTBOUND_MAX_REQUEST_BYTES = 256 * 1024;
@@ -97,6 +101,7 @@ export type PluginManifest = {
     web?: string;
   };
   capabilities: string[];
+  migrations?: PluginMigrationContribution[];
   contributes?: {
     settingsTabs?: PluginPanelContribution[];
     tabs?: PluginPanelContribution[];
@@ -155,6 +160,13 @@ export type PluginSetupStepContribution = {
   defaultEnabled?: boolean;
 };
 
+export type PluginMigrationContribution = {
+  version: string;
+  name: string;
+  path: string;
+  checksum?: string;
+};
+
 type PluginPackage = {
   manifest?: unknown;
   files?: Record<string, string>;
@@ -187,6 +199,7 @@ export type PluginListItem = {
   trustLevel: PluginInstallRow["trustLevel"];
   capabilities: string[];
   grantedCapabilities: string[];
+  apiStability: PluginApiStabilitySummary;
   contributes: PluginManifest["contributes"];
   contributions: PluginRuntimeContributions;
   installedAt: string;
@@ -274,10 +287,14 @@ export type PluginServiceOptions = {
 
 type PluginRuntime = {
   pluginId: string;
-  hooks: Map<string, Array<(payload: unknown) => Promise<void> | void>>;
-  tasks: Map<string, (job: JobRow) => Promise<void> | void>;
-  apiGet: Map<string, (input: PluginApiInput) => Promise<unknown> | unknown>;
-  apiPost: Map<string, (input: PluginApiInput) => Promise<unknown> | unknown>;
+  child: ChildProcess | null;
+  hooks: Set<string>;
+  tasks: Set<string>;
+  apiGet: Set<string>;
+  apiPost: Set<string>;
+  pending: Map<string, PluginRuntimePending>;
+  invoke: (kind: "hook" | "task" | "api", name: string, input: unknown, timeoutMs?: number) => Promise<unknown>;
+  dispose: () => void;
 };
 
 type PluginApiInput = {
@@ -286,8 +303,31 @@ type PluginApiInput = {
 };
 
 type PluginApiRouteMatch = {
-  handler: (input: PluginApiInput) => Promise<unknown> | unknown;
+  route: string;
   params: Record<string, string>;
+};
+
+type PluginRuntimePending = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+type PluginHostSerializedError = {
+  message?: unknown;
+  statusCode?: unknown;
+  code?: unknown;
+  details?: unknown;
+};
+
+type PluginHostCommand = {
+  command: string;
+  args: string[];
+};
+
+type PluginApiStabilitySummary = {
+  stable: string[];
+  beta: string[];
 };
 
 type PluginRuntimeContributions = {
@@ -436,6 +476,12 @@ export class PluginService {
     };
   }
 
+  dispose(): void {
+    for (const pluginId of [...this.runtimes.keys()]) {
+      this.disposeRuntime(pluginId);
+    }
+  }
+
   async checkUpdate(pluginId: string): Promise<PluginListItem> {
     const install = this.requireInstall(pluginId);
     if (!install.updateUrl) {
@@ -453,11 +499,12 @@ export class PluginService {
     });
 
     if (typeof metadata.packageUrl === "string") {
-      await this.installFromUrl(metadata.packageUrl, {
+      const updated = await this.installFromUrl(metadata.packageUrl, {
         expectedId: pluginId,
         expectedSha256: stringOrNull(metadata.sha256) ?? stringOrNull(metadata.checksum),
         previousStatus: install.status
       });
+      return install.status === "enabled" ? await this.enable(pluginId) : updated;
     }
 
     return this.requireListItem(pluginId);
@@ -466,11 +513,16 @@ export class PluginService {
   disable(pluginId: string): PluginListItem {
     this.requireInstall(pluginId);
     this.options.plugins.setStatus(pluginId, "disabled", null, this.now());
-    this.runtimes.delete(pluginId);
+    this.disposeRuntime(pluginId);
+    this.options.jobs.cancelOpenByTypePrefix?.(
+      `plugin:${pluginId}:`,
+      "Plugin disabled",
+      this.now()
+    );
     return this.requireListItem(pluginId);
   }
 
-  enable(pluginId: string): PluginListItem {
+  async enable(pluginId: string): Promise<PluginListItem> {
     const install = this.requireInstall(pluginId);
     const manifest = parseStoredManifest(install);
     const compatibility = isDibaoVersionCompatible(this.options.dibaoVersion, manifest.dibao);
@@ -479,13 +531,16 @@ export class PluginService {
       return this.requireListItem(pluginId);
     }
     try {
+      this.disposeRuntime(pluginId);
+      this.applyPluginMigrations(pluginId, manifest);
       this.seedDefaultSchedules(pluginId, manifest);
       this.options.plugins.grantCapabilities(pluginId, manifest.capabilities, this.now());
       this.options.plugins.setStatus(pluginId, "enabled", null, this.now());
-      this.runtimes.delete(pluginId);
+      await this.ensureRuntime(this.requireInstall(pluginId));
       return this.requireListItem(pluginId);
     } catch (error) {
       this.options.plugins.setStatus(pluginId, "failed", errorMessage(error), this.now());
+      this.disposeRuntime(pluginId);
       throw error;
     }
   }
@@ -493,21 +548,21 @@ export class PluginService {
   async emitHook(hook: string, payload: unknown): Promise<void> {
     const installs = this.enabledInstallsForHook(hook);
     for (const install of installs) {
-      const runtime = await this.ensureRuntime(install);
-      const handlers = runtime.hooks.get(hook) ?? [];
-      for (const handler of handlers) {
-        try {
-          await withTimeout(Promise.resolve(handler(payload)), PLUGIN_HOOK_TIMEOUT_MS);
-          this.options.plugins.setKv(
-            install.id,
-            `hook:${hook}:last`,
-            { hook, receivedAt: this.now(), payload },
-            this.now()
-          );
-        } catch (error) {
-          this.options.plugins.setStatus(install.id, "failed", errorMessage(error), this.now());
-          this.runtimes.delete(install.id);
+      try {
+        const runtime = await this.ensureRuntime(install);
+        if (!runtime.hooks.has(hook)) {
+          continue;
         }
+        await runtime.invoke("hook", hook, payload, PLUGIN_HOOK_TIMEOUT_MS);
+        this.options.plugins.setKv(
+          install.id,
+          `hook:${hook}:last`,
+          { hook, receivedAt: this.now(), payload },
+          this.now()
+        );
+      } catch (error) {
+        this.options.plugins.setStatus(install.id, "failed", errorMessage(error), this.now());
+        this.disposeRuntime(install.id);
       }
     }
   }
@@ -610,19 +665,34 @@ export class PluginService {
     }
     const install = this.requireInstall(parsed.pluginId);
     if (install.status !== "enabled") {
-      throw new Error(`Plugin is not enabled: ${parsed.pluginId}`);
+      throw new DeferredJobRun(
+        `Plugin paused: ${parsed.pluginId} is ${install.status}`,
+        this.now() + PLUGIN_TASK_PAUSED_RETRY_MS
+      );
     }
     if (parsed.taskId === PLUGIN_DELIVERY_TASK_ID) {
       await this.handleDeliveryJob(parsed.pluginId, job);
       return;
     }
-    const runtime = await this.ensureRuntime(install);
-    const handler = runtime.tasks.get(parsed.taskId);
-    if (!handler) {
-      throw new Error(`Plugin task is not registered: ${parsed.taskId}`);
+    let runtime: PluginRuntime;
+    try {
+      runtime = await this.ensureRuntime(install);
+    } catch (error) {
+      this.options.plugins.setStatus(parsed.pluginId, "failed", errorMessage(error), this.now());
+      this.disposeRuntime(parsed.pluginId);
+      throw new DeferredJobRun(
+        `Plugin runtime unavailable: ${redactText(errorMessage(error))}`,
+        this.now() + PLUGIN_TASK_PAUSED_RETRY_MS
+      );
+    }
+    if (!runtime.tasks.has(parsed.taskId)) {
+      throw new DeferredJobRun(
+        `Plugin task paused: ${parsed.taskId} is not registered`,
+        this.now() + PLUGIN_TASK_PAUSED_RETRY_MS
+      );
     }
     try {
-      await handler(job);
+      await runtime.invoke("task", parsed.taskId, job);
       void this.emitHook("plugin.taskSucceeded", {
         pluginId: parsed.pluginId,
         taskId: parsed.taskId,
@@ -866,7 +936,12 @@ export class PluginService {
       throw new PluginServiceError(404, "NOT_FOUND", "Plugin API route not found");
     }
     try {
-      const result = await match.handler({ params: match.params, body });
+      const result = await runtime.invoke(
+        "api",
+        `${method} ${match.route}`,
+        { params: match.params, body },
+        PLUGIN_API_TIMEOUT_MS
+      );
       this.logApiPerformance({
         route: normalizedPath,
         pluginId,
@@ -921,233 +996,342 @@ export class PluginService {
 
   private async activateRuntime(install: PluginInstallRow): Promise<PluginRuntime> {
     const manifest = parseStoredManifest(install);
+    let child: ChildProcess | null = null;
+    let invokeSequence = 0;
+    const pending = new Map<string, PluginRuntimePending>();
     const runtime: PluginRuntime = {
       pluginId: install.id,
-      hooks: new Map(),
-      tasks: new Map(),
-      apiGet: new Map(),
-      apiPost: new Map()
+      child: null,
+      hooks: new Set(),
+      tasks: new Set(),
+      apiGet: new Set(),
+      apiPost: new Set(),
+      pending,
+      invoke: (kind, name, input, timeoutMs = PLUGIN_API_TIMEOUT_MS) => {
+        if (!child || !child.connected) {
+          return Promise.reject(new PluginServiceError(503, "PLUGIN_RUNTIME_UNAVAILABLE", "Plugin host is not running"));
+        }
+        const id = `plugin_${install.id}_${++invokeSequence}`;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            reject(new PluginServiceError(504, "PLUGIN_TIMEOUT", `Plugin ${kind} timed out: ${name}`));
+          }, timeoutMs);
+          pending.set(id, { resolve, reject, timer });
+          child?.send?.({ type: "plugin.invoke", id, kind, name, input });
+        });
+      },
+      dispose: () => {
+        const error = new PluginServiceError(503, "PLUGIN_RUNTIME_UNAVAILABLE", "Plugin host stopped");
+        rejectPendingPluginCalls(pending, error);
+        if (child && !child.killed) {
+          child.kill();
+        }
+      }
     };
     if (!install.packagePath || !manifest.entry?.server) {
       return runtime;
     }
     const entryPath = this.resolveAssetPath(install.id, manifest.entry.server);
     if (!entryPath) {
-      return runtime;
+      throw new PluginServiceError(500, "PLUGIN_ENTRY_MISSING", "Plugin server entry was not found");
     }
-    const moduleUrl = pathToFileURL(entryPath);
-    moduleUrl.searchParams.set("pluginVersion", install.version);
-    moduleUrl.searchParams.set("updatedAt", String(install.updatedAt));
-    const module = await import(moduleUrl.href) as {
-      default?: { activate?: (ctx: unknown) => Promise<void> | void } | ((ctx: unknown) => Promise<void> | void);
-      activate?: (ctx: unknown) => Promise<void> | void;
-    };
-    const activate =
-      typeof module.default === "function"
-        ? module.default
-        : module.default?.activate ?? module.activate;
-    if (typeof activate === "function") {
-      await activate(this.createContext(install, runtime));
-    }
-    return runtime;
+
+    const host = resolvePluginHostCommand();
+    const hostConfig = Buffer.from(JSON.stringify({
+      pluginId: install.id,
+      manifest,
+      entryPath
+    }), "utf8").toString("base64url");
+    child = spawn(host.command, host.args, {
+      env: {
+        ...process.env,
+        DIBAO_PLUGIN_HOST_CONFIG: hostConfig
+      },
+      stdio: ["ignore", "ignore", "pipe", "ipc"]
+    });
+    runtime.child = child;
+
+    return await new Promise<PluginRuntime>((resolveRuntime, rejectRuntime) => {
+      let settled = false;
+      let stderr = "";
+      const activationTimer = setTimeout(() => {
+        rejectActivation(new PluginServiceError(504, "PLUGIN_TIMEOUT", "Plugin activation timed out"));
+      }, PLUGIN_ACTIVATION_TIMEOUT_MS);
+
+      const rejectActivation = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(activationTimer);
+        runtime.dispose();
+        rejectRuntime(error);
+      };
+
+      const resolveActivation = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(activationTimer);
+        resolveRuntime(runtime);
+      };
+
+      child?.stderr?.on("data", (chunk: Buffer) => {
+        stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4000);
+      });
+
+      child?.on("message", (message: unknown) => {
+        if (!message || typeof message !== "object") {
+          return;
+        }
+        const record = message as Record<string, unknown>;
+        if (record.type === "plugin.ready") {
+          resolveActivation();
+          return;
+        }
+        if (record.type === "plugin.failed") {
+          rejectActivation(errorFromPluginHost(record.error as PluginHostSerializedError | undefined));
+          return;
+        }
+        if (record.type === "plugin.register") {
+          try {
+            this.registerPluginContribution(runtime, manifest, record.kind, record.name);
+          } catch (error) {
+            rejectActivation(error instanceof Error ? error : new Error(String(error)));
+          }
+          return;
+        }
+        if (record.type === "plugin.response") {
+          settlePluginInvocation(runtime, record);
+          return;
+        }
+        if (record.type === "host.call") {
+          const id = typeof record.id === "string" ? record.id : "";
+          const method = typeof record.method === "string" ? record.method : "";
+          void this.handleHostCall(install, method, record.args)
+            .then((result) => sendHostResponse(child, id, { ok: true, result }))
+            .catch((error) => sendHostResponse(child, id, { ok: false, error: serializePluginHostError(error) }));
+        }
+      });
+
+      child?.once("exit", (code, signal) => {
+        const suffix = stderr ? `: ${redactText(stderr.trim())}` : "";
+        const error = new PluginServiceError(
+          503,
+          "PLUGIN_RUNTIME_EXITED",
+          `Plugin host exited (${signal ?? code ?? "unknown"})${suffix}`
+        );
+        rejectPendingPluginCalls(pending, error);
+        if (!settled) {
+          rejectActivation(error);
+          return;
+        }
+        this.runtimes.delete(install.id);
+        const current = this.options.plugins.findInstall(install.id);
+        if (current?.status === "enabled") {
+          this.options.plugins.setStatus(install.id, "failed", error.message, this.now());
+        }
+      });
+    });
   }
 
-  private createContext(install: PluginInstallRow, runtime: PluginRuntime): Record<string, unknown> {
+  private disposeRuntime(pluginId: string): void {
+    const existing = this.runtimes.get(pluginId);
+    this.runtimes.delete(pluginId);
+    if (!existing) {
+      return;
+    }
+    void existing.then((runtime) => runtime.dispose()).catch(() => {
+      // Activation failures already clean up their child process.
+    });
+  }
+
+  private registerPluginContribution(
+    runtime: PluginRuntime,
+    manifest: PluginManifest,
+    kind: unknown,
+    name: unknown
+  ): void {
+    if (typeof name !== "string" || !name.trim()) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin registered an invalid contribution");
+    }
+    if (kind === "hook") {
+      if (!PLUGIN_EVENT_SET.has(name)) {
+        throw new PluginServiceError(400, "VALIDATION_ERROR", `Unknown plugin event: ${name}`);
+      }
+      if (!(manifest.contributes?.hooks?.includes(name) ?? false)) {
+        throw new PluginServiceError(403, "FORBIDDEN", `Plugin hook is not declared: ${name}`);
+      }
+      runtime.hooks.add(name);
+      return;
+    }
+    if (kind === "task") {
+      if (!(manifest.contributes?.tasks?.some((task) => task.id === name) ?? false)) {
+        throw new PluginServiceError(403, "FORBIDDEN", `Plugin task is not declared: ${name}`);
+      }
+      runtime.tasks.add(name);
+      return;
+    }
+    if (kind === "api:get") {
+      runtime.apiGet.add(normalizeApiPath(name));
+      return;
+    }
+    if (kind === "api:post") {
+      runtime.apiPost.add(normalizeApiPath(name));
+      return;
+    }
+    throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin registered an unsupported contribution");
+  }
+
+  private async handleHostCall(install: PluginInstallRow, method: string, args: unknown): Promise<unknown> {
+    const pluginId = install.id;
     const manifest = parseStoredManifest(install);
-    const hasCapability = (capability: string) => manifest.capabilities.includes(capability);
     const requireCapability = (capability: string) => {
-      if (!hasCapability(capability)) {
+      if (!manifest.capabilities.includes(capability)) {
         throw new PluginServiceError(403, "FORBIDDEN", `Plugin capability required: ${capability}`);
       }
     };
-    const pluginId = install.id;
-    return {
-      pluginId,
-      manifest,
-      now: this.now,
-      hooks: {
-        on: (hook: string, handler: (payload: unknown) => Promise<void> | void) => {
-          if (!PLUGIN_EVENT_SET.has(hook)) {
-            throw new PluginServiceError(400, "VALIDATION_ERROR", `Unknown plugin event: ${hook}`);
-          }
-          if (!(manifest.contributes?.hooks?.includes(hook) ?? false)) {
-            throw new PluginServiceError(403, "FORBIDDEN", `Plugin hook is not declared: ${hook}`);
-          }
-          const handlers = runtime.hooks.get(hook) ?? [];
-          handlers.push(handler);
-          runtime.hooks.set(hook, handlers);
+    const record = parseJsonObject(args) ?? {};
+    switch (method) {
+      case "now":
+        return this.now();
+      case "events.catalog":
+        return [...PLUGIN_EVENT_CATALOG];
+      case "events.emit": {
+        const event = stringValue(record.event);
+        if (!(manifest.contributes?.events?.includes(event) ?? false)) {
+          throw new PluginServiceError(403, "FORBIDDEN", `Plugin event is not declared: ${event}`);
         }
-      },
-      events: {
-        catalog: () => [...PLUGIN_EVENT_CATALOG],
-        emit: async (event: string, payload: unknown) => {
-          if (!(manifest.contributes?.events?.includes(event) ?? false)) {
-            throw new PluginServiceError(403, "FORBIDDEN", `Plugin event is not declared: ${event}`);
-          }
-          await this.emitHook(event, {
-            pluginId,
-            emittedAt: this.now(),
-            payload
-          });
-        }
-      },
-      tasks: {
-        register: (taskId: string, handler: (job: JobRow) => Promise<void> | void) => {
-          runtime.tasks.set(taskId, handler);
-        },
-        start: (taskId: string, payload?: Record<string, unknown>) => {
-          requireCapability("jobs:write");
-          return this.startTask(pluginId, taskId, payload);
-        }
-      },
-      api: {
-        get: (path: string, handler: (input: PluginApiInput) => Promise<unknown> | unknown) => {
-          runtime.apiGet.set(normalizeApiPath(path), handler);
-        },
-        post: (path: string, handler: (input: PluginApiInput) => Promise<unknown> | unknown) => {
-          runtime.apiPost.set(normalizeApiPath(path), handler);
-        }
-      },
-      storage: {
-        get: <T>(key: string) => {
-          requireCapability("files:plugin-data");
-          return this.options.plugins.getKv<T>(pluginId, key);
-        },
-        set: (key: string, value: unknown) => {
-          requireCapability("files:plugin-data");
-          this.options.plugins.setKv(pluginId, key, value, this.now());
-        },
-        listByPrefix: <T>(prefix: string) => {
-          requireCapability("files:plugin-data");
-          return this.options.plugins.listKvByPrefix<T>(pluginId, prefix);
-        },
-        delete: (key: string) => {
-          requireCapability("files:plugin-data");
-          this.options.plugins.deleteKv(pluginId, key);
-        }
-      },
-      settings: {
-        get: <T>(key: string) => {
-          requireCapability("settings:plugin");
-          return this.options.plugins.getSetting<T>(pluginId, key);
-        },
-        set: (key: string, value: unknown) => {
-          requireCapability("settings:plugin");
-          this.options.plugins.setSetting(pluginId, key, value, this.now());
-        },
-        list: () => {
-          requireCapability("settings:plugin");
-          return this.options.plugins.listSettings(pluginId);
-        }
-      },
-      secrets: {
-        list: () => {
-          requireCapability("secrets:plugin");
-          return this.listSecretMetadata(pluginId);
-        },
-        get: (key: string) => {
-          requireCapability("secrets:plugin");
-          return this.readSecret(pluginId, key);
-        },
-        set: (key: string, value: string, hint?: string | null) => {
-          requireCapability("secrets:plugin");
-          return this.setSecret(pluginId, key, value, hint);
-        },
-        delete: (key: string) => {
-          requireCapability("secrets:plugin");
-          this.deleteSecret(pluginId, key);
-        }
-      },
-      network: {
-        fetch: async (input: PluginOutboundFetchInput) => {
-          requireCapability("network:outbound");
-          return await this.pluginFetch(input);
-        }
-      },
-      deliveries: {
-        enqueue: (input: PluginDeliveryEnqueueInput) => {
-          requireCapability("deliveries:write");
-          return this.enqueueDelivery(pluginId, input);
-        },
-        get: (deliveryId: string) => {
-          requireCapability("deliveries:read");
-          return this.getDelivery(pluginId, deliveryId);
-        },
-        list: (input: { status?: PluginDeliveryStatus; limit?: number } = {}) => {
-          requireCapability("deliveries:read");
-          return this.listDeliveries(pluginId, input);
-        },
-        cancel: (deliveryId: string) => {
-          requireCapability("deliveries:write");
-          return this.cancelDelivery(pluginId, deliveryId);
-        },
-        flush: async (deliveryId: string) => {
-          requireCapability("deliveries:write");
-          return await this.flushDelivery(pluginId, deliveryId);
-        }
-      },
-      database: {
-        defineTable: (definition: PluginTableDefinition) => {
-          requireCapability("database:plugin");
-          this.definePluginTable(pluginId, definition);
-        },
-        insert: (tableName: string, record: Record<string, unknown>) => {
-          requireCapability("database:plugin");
-          return this.insertPluginRow(pluginId, tableName, record);
-        },
-        get: (tableName: string, rowId: number) => {
-          requireCapability("database:plugin");
-          return this.getPluginRow(pluginId, tableName, rowId);
-        },
-        list: (tableName: string, input: PluginTableListInput = {}) => {
-          requireCapability("database:plugin");
-          return this.listPluginRows(pluginId, tableName, input);
-        },
-        delete: (tableName: string, rowId: number) => {
-          requireCapability("database:plugin");
-          this.deletePluginRow(pluginId, tableName, rowId);
-        }
-      },
-      scheduler: {
-        configureDaily: (taskId: string, input: { enabled: boolean; localTime: string; timezone?: string | null }) => {
-          requireCapability("jobs:write");
-          this.options.plugins.upsertSchedule({
-            pluginId,
-            taskId,
-            enabled: input.enabled,
-            schedule: "daily",
-            localTime: input.localTime,
-            timezone: input.timezone ?? "UTC",
-            nextRunAt: nextDailyRunAt(this.now(), input.localTime, input.timezone ?? "UTC"),
-            now: this.now()
-          });
-        }
-      },
-      ranking: {
-        listRankedWinners: (input: { windowMs: number; limit: number }) => {
-          requireCapability("ranking:read");
-          return this.listRankedWinners(input);
-        },
-        listTopicTargets: () => {
-          requireCapability("ranking:read");
-          return this.listTopicTargets();
-        }
-      },
-      articles: {
-        countDiscovered: (input: { startAt: number; endAt: number }) => {
-          requireCapability("articles:read");
-          return this.countDiscoveredArticles(input);
-        },
-        openableSummary: (articleId: string) => {
-          requireCapability("articles:read");
-          return this.openableArticleSummary(articleId);
-        },
-        snapshot: (articleId: string, input: { includeContent?: boolean } = {}) => {
-          requireCapability("articles:read");
-          return this.articleSnapshot(articleId, input);
-        }
+        await this.emitHook(event, {
+          pluginId,
+          emittedAt: this.now(),
+          payload: record.payload
+        });
+        return { ok: true };
       }
-    };
+      case "tasks.start": {
+        requireCapability("jobs:write");
+        const taskId = stringValue(record.taskId);
+        return this.startTask(pluginId, taskId, objectValue(record.payload));
+      }
+      case "storage.get":
+        requireCapability("files:plugin-data");
+        return this.options.plugins.getKv(pluginId, stringValue(record.key));
+      case "storage.set":
+        requireCapability("files:plugin-data");
+        this.options.plugins.setKv(pluginId, stringValue(record.key), record.value, this.now());
+        return { ok: true };
+      case "storage.listByPrefix":
+        requireCapability("files:plugin-data");
+        return this.options.plugins.listKvByPrefix(pluginId, stringValue(record.prefix));
+      case "storage.delete":
+        requireCapability("files:plugin-data");
+        this.options.plugins.deleteKv(pluginId, stringValue(record.key));
+        return { ok: true };
+      case "settings.get":
+        requireCapability("settings:plugin");
+        return this.options.plugins.getSetting(pluginId, stringValue(record.key));
+      case "settings.set":
+        requireCapability("settings:plugin");
+        this.options.plugins.setSetting(pluginId, stringValue(record.key), record.value, this.now());
+        return { ok: true };
+      case "settings.list":
+        requireCapability("settings:plugin");
+        return this.options.plugins.listSettings(pluginId);
+      case "secrets.list":
+        requireCapability("secrets:plugin");
+        return this.listSecretMetadata(pluginId);
+      case "secrets.get":
+        requireCapability("secrets:plugin");
+        return this.readSecret(pluginId, stringValue(record.key));
+      case "secrets.set":
+        requireCapability("secrets:plugin");
+        return this.setSecret(pluginId, stringValue(record.key), typeof record.value === "string" ? record.value : "", stringOrNull(record.hint));
+      case "secrets.delete":
+        requireCapability("secrets:plugin");
+        this.deleteSecret(pluginId, stringValue(record.key));
+        return { ok: true };
+      case "network.fetch":
+        requireCapability("network:outbound");
+        return await this.pluginFetch(args as PluginOutboundFetchInput);
+      case "deliveries.enqueue":
+        requireCapability("deliveries:write");
+        return this.enqueueDelivery(pluginId, args as PluginDeliveryEnqueueInput);
+      case "deliveries.get":
+        requireCapability("deliveries:read");
+        return this.getDelivery(pluginId, stringValue(record.deliveryId));
+      case "deliveries.list":
+        requireCapability("deliveries:read");
+        return this.listDeliveries(pluginId, {
+          status: isPluginDeliveryStatus(record.status) ? record.status : undefined,
+          limit: typeof record.limit === "number" ? record.limit : undefined
+        });
+      case "deliveries.cancel":
+        requireCapability("deliveries:write");
+        return this.cancelDelivery(pluginId, stringValue(record.deliveryId));
+      case "deliveries.flush":
+        requireCapability("deliveries:write");
+        return await this.flushDelivery(pluginId, stringValue(record.deliveryId));
+      case "database.defineTable":
+        requireCapability("database:plugin");
+        this.definePluginTable(pluginId, args as PluginTableDefinition);
+        return { ok: true };
+      case "database.insert":
+        requireCapability("database:plugin");
+        return this.insertPluginRow(pluginId, stringValue(record.tableName), objectValue(record.record));
+      case "database.get":
+        requireCapability("database:plugin");
+        return this.getPluginRow(pluginId, stringValue(record.tableName), Number(record.rowId));
+      case "database.list":
+        requireCapability("database:plugin");
+        return this.listPluginRows(pluginId, stringValue(record.tableName), objectValue(record.input) as PluginTableListInput);
+      case "database.delete":
+        requireCapability("database:plugin");
+        this.deletePluginRow(pluginId, stringValue(record.tableName), Number(record.rowId));
+        return { ok: true };
+      case "scheduler.configureDaily": {
+        requireCapability("jobs:write");
+        const input = objectValue(record.input);
+        const localTime = stringValue(input.localTime);
+        const timezone = stringOrNull(input.timezone) ?? "UTC";
+        this.options.plugins.upsertSchedule({
+          pluginId,
+          taskId: stringValue(record.taskId),
+          enabled: input.enabled === true,
+          schedule: "daily",
+          localTime,
+          timezone,
+          nextRunAt: nextDailyRunAt(this.now(), localTime, timezone),
+          now: this.now()
+        });
+        return { ok: true };
+      }
+      case "ranking.listRankedWinners":
+        requireCapability("ranking:read");
+        return this.listRankedWinners({
+          windowMs: typeof record.windowMs === "number" ? record.windowMs : 60_000,
+          limit: typeof record.limit === "number" ? record.limit : 50
+        });
+      case "ranking.listTopicTargets":
+        requireCapability("ranking:read");
+        return this.listTopicTargets();
+      case "articles.countDiscovered":
+        requireCapability("articles:read");
+        return this.countDiscoveredArticles({
+          startAt: typeof record.startAt === "number" ? record.startAt : 0,
+          endAt: typeof record.endAt === "number" ? record.endAt : this.now()
+        });
+      case "articles.openableSummary":
+        requireCapability("articles:read");
+        return this.openableArticleSummary(stringValue(record.articleId));
+      case "articles.snapshot":
+        requireCapability("articles:read");
+        return this.articleSnapshot(stringValue(record.articleId), objectValue(record.input) as { includeContent?: boolean });
+      default:
+        throw new PluginServiceError(404, "NOT_FOUND", `Unsupported plugin host API: ${method}`);
+    }
   }
 
   private readSecret(pluginId: string, key: string): string | null {
@@ -1793,6 +1977,7 @@ export class PluginService {
       trustLevel: install.trustLevel,
       capabilities: manifest.capabilities,
       grantedCapabilities: this.options.plugins.listCapabilityGrants(install.id),
+      apiStability: pluginApiStability(manifest),
       contributes: manifest.contributes ?? {},
       contributions: runtimeContributions(manifest.contributes),
       installedAt: new Date(install.installedAt).toISOString(),
@@ -1830,6 +2015,51 @@ export class PluginService {
         now: this.now()
       });
     }
+  }
+
+  private applyPluginMigrations(pluginId: string, manifest: PluginManifest): void {
+    const migrations = manifest.migrations ?? [];
+    if (migrations.length === 0) {
+      return;
+    }
+    this.options.db.transaction(() => {
+      for (const migration of migrations) {
+        const sqlPath = this.resolveAssetPath(pluginId, migration.path);
+        if (!sqlPath) {
+          throw new PluginServiceError(400, "VALIDATION_ERROR", `Plugin migration file not found: ${migration.path}`);
+        }
+        const sql = readFileSync(sqlPath, "utf8");
+        const checksum = createHash("sha256").update(sql).digest("hex");
+        if (migration.checksum && migration.checksum !== checksum) {
+          throw new PluginServiceError(409, "CONFLICT", `Plugin migration checksum mismatch: ${migration.version}`);
+        }
+        const existing = this.options.db
+          .prepare(
+            `
+              select name, checksum
+              from plugin_migrations
+              where plugin_id = ?
+                and version = ?
+            `
+          )
+          .get(pluginId, migration.version) as { name: string; checksum: string | null } | undefined;
+        if (existing) {
+          if (existing.name !== migration.name || existing.checksum !== checksum) {
+            throw new PluginServiceError(409, "CONFLICT", `Plugin migration changed after apply: ${migration.version}`);
+          }
+          continue;
+        }
+        this.options.db.exec(sql);
+        this.options.db
+          .prepare(
+            `
+              insert into plugin_migrations (plugin_id, version, name, checksum, applied_at)
+              values (?, ?, ?, ?, ?)
+            `
+          )
+          .run(pluginId, migration.version, migration.name, checksum, this.now());
+      }
+    })();
   }
 
   private definePluginTable(pluginId: string, definition: PluginTableDefinition): void {
@@ -2058,6 +2288,7 @@ export class PluginService {
       rmSync(stagingPath, { recursive: true, force: true });
       throw new PluginServiceError(500, "INTERNAL_ERROR", "Plugin package install failed", error);
     }
+    this.disposeRuntime(manifest.id);
 
     const dataPath = join(this.pluginRuntimeDataDir, manifest.id);
     mkdirSync(dataPath, { recursive: true });
@@ -2160,6 +2391,7 @@ function parsePluginManifest(input: unknown): PluginManifest {
     }
   }
   const contributes = normalizeContributions(manifest.contributes);
+  const migrations = normalizePluginMigrations(manifest.migrations);
   for (const hook of contributes.hooks ?? []) {
     if (!PLUGIN_EVENT_SET.has(hook)) {
       throw new PluginServiceError(400, "VALIDATION_ERROR", `Unsupported plugin hook: ${hook}`);
@@ -2182,8 +2414,31 @@ function parsePluginManifest(input: unknown): PluginManifest {
     },
     entry: manifest.entry,
     capabilities,
+    migrations,
     contributes
   };
+}
+
+function normalizePluginMigrations(input: unknown): PluginMigrationContribution[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  return input.map((item) => {
+    const record = parseJsonObject(item);
+    const version = stringValue(record?.version);
+    const name = stringValue(record?.name);
+    const path = stringValue(record?.path);
+    const checksum = stringOrNull(record?.checksum) ?? undefined;
+    if (!version || !name || !path) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", "Plugin migrations require version, name, and path");
+    }
+    if (seen.has(version)) {
+      throw new PluginServiceError(400, "VALIDATION_ERROR", `Duplicate plugin migration version: ${version}`);
+    }
+    seen.add(version);
+    return { version, name, path, checksum };
+  });
 }
 
 function normalizeContributions(
@@ -2550,21 +2805,159 @@ function parseJsonObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function objectValue(value: unknown): Record<string, unknown> {
+  return parseJsonObject(value) ?? {};
+}
+
 function normalizeApiPath(path: string): string {
   const trimmed = path.trim();
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+function resolvePluginHostCommand(): PluginHostCommand {
+  const jsPath = fileURLToPath(new URL("./plugin-host-process.js", import.meta.url));
+  if (existsSync(jsPath)) {
+    return { command: process.execPath, args: [jsPath] };
+  }
+  const tsPath = fileURLToPath(new URL("./plugin-host-process.ts", import.meta.url));
+  if (!existsSync(tsPath)) {
+    throw new PluginServiceError(500, "INTERNAL_ERROR", "Plugin host process entry was not found");
+  }
+  const tsxCliPath = findUpFrom(process.cwd(), "node_modules/tsx/dist/cli.mjs") ??
+    findUpFrom(dirname(tsPath), "node_modules/tsx/dist/cli.mjs");
+  if (!tsxCliPath) {
+    throw new PluginServiceError(500, "INTERNAL_ERROR", "Plugin host TypeScript runner was not found");
+  }
+  return { command: process.execPath, args: [tsxCliPath, tsPath] };
+}
+
+function findUpFrom(startDir: string, relativePath: string): string | null {
+  let current = resolve(startDir);
+  while (true) {
+    const candidate = join(current, relativePath);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function settlePluginInvocation(runtime: PluginRuntime, record: Record<string, unknown>): void {
+  const id = typeof record.id === "string" ? record.id : "";
+  const pending = runtime.pending.get(id);
+  if (!pending) {
+    return;
+  }
+  runtime.pending.delete(id);
+  clearTimeout(pending.timer);
+  if (record.ok === true) {
+    pending.resolve(record.result);
+    return;
+  }
+  pending.reject(errorFromPluginHost(record.error as PluginHostSerializedError | undefined));
+}
+
+function rejectPendingPluginCalls(pending: Map<string, PluginRuntimePending>, error: Error): void {
+  for (const [id, item] of pending.entries()) {
+    clearTimeout(item.timer);
+    item.reject(error);
+    pending.delete(id);
+  }
+}
+
+function sendHostResponse(
+  child: ChildProcess | null,
+  id: string,
+  response: { ok: true; result: unknown } | { ok: false; error: PluginHostSerializedError }
+): void {
+  if (!child || !child.connected || !id) {
+    return;
+  }
+  child.send({ type: "host.response", id, ...response });
+}
+
+function serializePluginHostError(error: unknown): PluginHostSerializedError {
+  if (error instanceof PluginServiceError) {
+    return {
+      message: error.message,
+      statusCode: error.statusCode,
+      code: error.code,
+      details: error.details
+    };
+  }
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  return {
+    message: errorMessage(error),
+    ...(typeof record.statusCode === "number" ? { statusCode: record.statusCode } : {}),
+    ...(typeof record.code === "string" ? { code: record.code } : {}),
+    ...(Object.hasOwn(record, "details") ? { details: record.details } : {})
+  };
+}
+
+function errorFromPluginHost(error: PluginHostSerializedError | undefined): Error {
+  const message = typeof error?.message === "string" ? error.message : "Plugin host call failed";
+  const statusCode = typeof error?.statusCode === "number" ? error.statusCode : 500;
+  const code = typeof error?.code === "string" ? error.code : "PLUGIN_HOST_ERROR";
+  return new PluginServiceError(statusCode, code, message, error?.details);
+}
+
+function isPluginDeliveryStatus(value: unknown): value is PluginDeliveryStatus {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
+}
+
+function pluginApiStability(manifest: PluginManifest): PluginApiStabilitySummary {
+  const stable = new Set<string>([
+    "manifest.v1",
+    "lifecycle.installEnableDisableUpdate",
+    "settings",
+    "storage",
+    "tasks",
+    "hooks.basic",
+    "events.catalog",
+    "iframe.bridge"
+  ]);
+  const beta = new Set<string>();
+  if ((manifest.migrations ?? []).length > 0) {
+    stable.add("database.migrations");
+  }
+  if (manifest.capabilities.includes("secrets:plugin")) {
+    stable.add("secrets");
+  }
+  if (manifest.capabilities.includes("deliveries:read") || manifest.capabilities.includes("deliveries:write")) {
+    stable.add("deliveries");
+  }
+  if (manifest.capabilities.includes("network:outbound")) {
+    stable.add("network.outbound");
+  }
+  if (manifest.capabilities.includes("database:plugin")) {
+    stable.add("database.migrations");
+    beta.add("database.defineTable");
+  }
+  if (manifest.capabilities.includes("ranking:read") || manifest.capabilities.includes("ranking:write")) {
+    beta.add("ranking");
+  }
+  if (manifest.capabilities.includes("articles:read") || manifest.capabilities.includes("articles:write")) {
+    beta.add("articles.snapshot");
+  }
+  return {
+    stable: [...stable].sort(),
+    beta: [...beta].sort()
+  };
+}
+
 function matchPluginApiRoute(
-  routes: Map<string, (input: PluginApiInput) => Promise<unknown> | unknown>,
+  routes: Set<string>,
   path: string
 ): PluginApiRouteMatch | null {
-  const exact = routes.get(path);
-  if (exact) {
-    return { handler: exact, params: {} };
+  if (routes.has(path)) {
+    return { route: path, params: {} };
   }
   const pathParts = splitApiPath(path);
-  for (const [pattern, handler] of routes.entries()) {
+  for (const pattern of routes.values()) {
     const patternParts = splitApiPath(pattern);
     if (patternParts.length !== pathParts.length || !patternParts.some((part) => part.startsWith(":"))) {
       continue;
@@ -2587,7 +2980,7 @@ function matchPluginApiRoute(
       }
     }
     if (matched) {
-      return { handler, params };
+      return { route: pattern, params };
     }
   }
   return null;

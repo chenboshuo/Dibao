@@ -561,6 +561,10 @@ export type PluginListItem = {
   trustLevel: "official" | "trusted" | "untrusted";
   capabilities: string[];
   grantedCapabilities: string[];
+  apiStability: {
+    stable: string[];
+    beta: string[];
+  };
   contributes: PluginContribution;
   contributions: PluginContributions;
   webEntryUrl?: string | null;
@@ -1568,15 +1572,16 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
     async callPluginApi<T = unknown>(
       pluginId: string,
       path: string,
-      body: unknown = {}
+      body: unknown = {},
+      method: "GET" | "POST" = "POST"
     ): Promise<T> {
       const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
       return (
         await request<T>(
           `/api/plugins/${encodeURIComponent(pluginId)}/api/${normalizedPath}`,
           {
-            method: "POST",
-            body: JSON.stringify(body)
+            method,
+            ...(method === "POST" ? { body: JSON.stringify(body) } : {})
           }
         )
       ).data;

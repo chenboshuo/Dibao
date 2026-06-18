@@ -12,49 +12,49 @@ const DEFAULT_SETTINGS = {
 const SUMMARY_MAX_LENGTH = 280;
 
 export default {
-  activate(ctx) {
-    ensureSchedule(ctx);
+  async activate(ctx) {
+    await ensureSchedule(ctx);
 
-    ctx.hooks.on("maintenance.tick", () => {
-      ensureSchedule(ctx);
+    ctx.hooks.on("maintenance.tick", async () => {
+      await ensureSchedule(ctx);
     });
 
     ctx.tasks.register(TASK_ID, async () => {
-      const settings = readSettings(ctx);
+      const settings = await readSettings(ctx);
       if (!settings.enabled) {
         return;
       }
       await generateBrief(ctx, settings);
     });
 
-    ctx.api.get("/state", () => {
-      const settings = readSettings(ctx);
-      const targets = readTargets(ctx);
-      const briefs = listBriefs(ctx, targets);
+    ctx.api.get("/state", async () => {
+      const settings = await readSettings(ctx);
+      const targets = await readTargets(ctx);
+      const briefs = await listBriefs(ctx, targets);
       return {
         settings,
         targets,
         briefs,
         latest: latestFromBriefs(briefs),
-        generatedAt: ctx.now()
+        generatedAt: await ctx.now()
       };
     });
 
-    ctx.api.get("/briefs", () => {
-      const briefs = listBriefs(ctx);
+    ctx.api.get("/briefs", async () => {
+      const briefs = await listBriefs(ctx);
       return {
         briefs,
         latest: latestFromBriefs(briefs),
-        generatedAt: ctx.now()
+        generatedAt: await ctx.now()
       };
     });
 
-    ctx.api.post("/settings", ({ body }) => {
-      const next = sanitizeSettings(body, readSettings(ctx));
-      writeSettings(ctx, next);
-      ensureSchedule(ctx, next);
-      const targets = readTargets(ctx);
-      const briefs = listBriefs(ctx, targets);
+    ctx.api.post("/settings", async ({ body }) => {
+      const next = sanitizeSettings(body, await readSettings(ctx));
+      await writeSettings(ctx, next);
+      await ensureSchedule(ctx, next);
+      const targets = await readTargets(ctx);
+      const briefs = await listBriefs(ctx, targets);
       return {
         settings: next,
         targets,
@@ -64,12 +64,13 @@ export default {
     });
 
     ctx.api.post("/generate", async ({ body }) => {
-      const settings = readSettings(ctx);
+      const settings = await readSettings(ctx);
       const force = body && typeof body === "object" && body.force === true;
-      const hadTodayBrief = Boolean(ctx.storage.get(briefKey(ctx.now(), settings.timezone)));
+      const now = await ctx.now();
+      const hadTodayBrief = Boolean(await ctx.storage.get(briefKey(now, settings.timezone)));
       const brief = await generateBrief(ctx, settings, { force });
-      const targets = readTargets(ctx);
-      const briefs = listBriefs(ctx, targets);
+      const targets = await readTargets(ctx);
+      const briefs = await listBriefs(ctx, targets);
       return {
         brief: hydrateBriefLabels(brief, targets),
         briefs,
@@ -79,43 +80,61 @@ export default {
   }
 };
 
-function readSettings(ctx) {
+async function readSettings(ctx) {
+  const [
+    enabled,
+    scheduledLocalTime,
+    timezone,
+    articleCount,
+    excludedFamilyIds,
+    excludedClusterIds
+  ] = await Promise.all([
+    ctx.settings.get("enabled"),
+    ctx.settings.get("scheduledLocalTime"),
+    ctx.settings.get("timezone"),
+    ctx.settings.get("articleCount"),
+    ctx.settings.get("excludedFamilyIds"),
+    ctx.settings.get("excludedClusterIds")
+  ]);
   return {
-    enabled: readBoolean(ctx.settings.get("enabled"), DEFAULT_SETTINGS.enabled),
-    scheduledLocalTime: readLocalTime(ctx.settings.get("scheduledLocalTime"), DEFAULT_SETTINGS.scheduledLocalTime),
-    timezone: readString(ctx.settings.get("timezone"), DEFAULT_SETTINGS.timezone),
-    articleCount: readInteger(ctx.settings.get("articleCount"), 5, 50, DEFAULT_SETTINGS.articleCount),
-    excludedFamilyIds: readStringArray(ctx.settings.get("excludedFamilyIds")),
-    excludedClusterIds: readStringArray(ctx.settings.get("excludedClusterIds"))
+    enabled: readBoolean(enabled, DEFAULT_SETTINGS.enabled),
+    scheduledLocalTime: readLocalTime(scheduledLocalTime, DEFAULT_SETTINGS.scheduledLocalTime),
+    timezone: readString(timezone, DEFAULT_SETTINGS.timezone),
+    articleCount: readInteger(articleCount, 5, 50, DEFAULT_SETTINGS.articleCount),
+    excludedFamilyIds: readStringArray(excludedFamilyIds),
+    excludedClusterIds: readStringArray(excludedClusterIds)
   };
 }
 
-function writeSettings(ctx, settings) {
-  ctx.settings.set("enabled", settings.enabled);
-  ctx.settings.set("scheduledLocalTime", settings.scheduledLocalTime);
-  ctx.settings.set("timezone", settings.timezone);
-  ctx.settings.set("articleCount", settings.articleCount);
-  ctx.settings.set("excludedFamilyIds", settings.excludedFamilyIds);
-  ctx.settings.set("excludedClusterIds", settings.excludedClusterIds);
+async function writeSettings(ctx, settings) {
+  await Promise.all([
+    ctx.settings.set("enabled", settings.enabled),
+    ctx.settings.set("scheduledLocalTime", settings.scheduledLocalTime),
+    ctx.settings.set("timezone", settings.timezone),
+    ctx.settings.set("articleCount", settings.articleCount),
+    ctx.settings.set("excludedFamilyIds", settings.excludedFamilyIds),
+    ctx.settings.set("excludedClusterIds", settings.excludedClusterIds)
+  ]);
 }
 
-function ensureSchedule(ctx, settings = readSettings(ctx)) {
-  ctx.scheduler.configureDaily(TASK_ID, {
-    enabled: settings.enabled,
-    localTime: settings.scheduledLocalTime,
-    timezone: settings.timezone
+async function ensureSchedule(ctx, settings) {
+  const resolvedSettings = settings ?? await readSettings(ctx);
+  await ctx.scheduler.configureDaily(TASK_ID, {
+    enabled: resolvedSettings.enabled,
+    localTime: resolvedSettings.scheduledLocalTime,
+    timezone: resolvedSettings.timezone
   });
 }
 
 async function generateBrief(ctx, settings, options = {}) {
-  const now = ctx.now();
+  const now = await ctx.now();
   const key = briefKey(now, settings.timezone);
-  const existing = ctx.storage.get(key);
+  const existing = await ctx.storage.get(key);
   if (existing && options.force !== true) {
     return existing;
   }
 
-  const candidates = ctx.ranking.listRankedWinners({
+  const candidates = await ctx.ranking.listRankedWinners({
     windowMs: DAY_MS,
     limit: Math.max(settings.articleCount * 5, 50)
   });
@@ -132,20 +151,20 @@ async function generateBrief(ctx, settings, options = {}) {
     windowEndAt,
     timezone: settings.timezone,
     articleCount: selected.length,
-    receivedArticleCount: countDiscoveredArticles(ctx, windowStartAt, windowEndAt),
+    receivedArticleCount: await countDiscoveredArticles(ctx, windowStartAt, windowEndAt),
     topicCount: groups.length,
     emptyReason: selected.length === 0 ? "no_articles_for_settings" : null,
     groups
   };
 
-  ctx.storage.set(key, brief);
-  pruneBriefs(ctx);
+  await ctx.storage.set(key, brief);
+  await pruneBriefs(ctx);
   return brief;
 }
 
-function readTargets(ctx) {
+async function readTargets(ctx) {
   return typeof ctx.ranking.listTopicTargets === "function"
-    ? ctx.ranking.listTopicTargets()
+    ? await ctx.ranking.listTopicTargets()
     : { families: [], clusters: [] };
 }
 
@@ -187,32 +206,31 @@ function briefArticle(article, now) {
   };
 }
 
-function countDiscoveredArticles(ctx, startAt, endAt) {
+async function countDiscoveredArticles(ctx, startAt, endAt) {
   if (!ctx.articles || typeof ctx.articles.countDiscovered !== "function") {
     return null;
   }
-  return ctx.articles.countDiscovered({ startAt, endAt });
+  return await ctx.articles.countDiscovered({ startAt, endAt });
 }
 
-function listBriefs(ctx, targets = readTargets(ctx)) {
-  return ctx.storage
-    .listByPrefix("brief:")
+async function listBriefs(ctx, targets) {
+  const resolvedTargets = targets ?? await readTargets(ctx);
+  return (await ctx.storage.listByPrefix("brief:"))
     .map((item) => item.value)
     .sort((left, right) => right.generatedAt - left.generatedAt)
     .slice(0, 30)
-    .map((brief) => hydrateBriefLabels(brief, targets));
+    .map((brief) => hydrateBriefLabels(brief, resolvedTargets));
 }
 
 function latestFromBriefs(briefs) {
   return briefs[0] ?? null;
 }
 
-function pruneBriefs(ctx) {
-  const rows = ctx.storage
-    .listByPrefix("brief:")
+async function pruneBriefs(ctx) {
+  const rows = (await ctx.storage.listByPrefix("brief:"))
     .sort((left, right) => right.value.generatedAt - left.value.generatedAt);
   for (const row of rows.slice(30)) {
-    ctx.storage.delete(row.key);
+    await ctx.storage.delete(row.key);
   }
 }
 

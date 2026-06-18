@@ -44,6 +44,11 @@ const pluginCopy = {
     contributions: "贡献",
     status: "状态",
     lastError: "错误",
+    source: "来源",
+    trust: "信任",
+    stableApi: "Stable API",
+    betaApi: "Beta API",
+    thirdPartyRisk: "第三方插件会以本地可信代码运行在独立进程中；启用前请确认来源、签名信任和能力范围。",
     installTitle: "安装第三方插件",
     installBody: "上传开发者提供的 .dibao-plugin 文件。URL、JSON 包和校验和等高级安装方式请参考说明。",
     installDocs: "查看插件安装说明",
@@ -73,6 +78,11 @@ const pluginCopy = {
     contributions: "Contributions",
     status: "Status",
     lastError: "Error",
+    source: "Source",
+    trust: "Trust",
+    stableApi: "Stable API",
+    betaApi: "Beta API",
+    thirdPartyRisk: "Third-party plugins run as trusted local code in an isolated process. Review source, signature trust, and capabilities before enabling.",
     installTitle: "Install third-party plugin",
     installBody: "Upload the .dibao-plugin file from the plugin developer. See the guide for URL, JSON package, and checksum flows.",
     installDocs: "Read plugin installation guide",
@@ -102,6 +112,11 @@ const pluginCopy = {
     contributions: "追加項目",
     status: "状態",
     lastError: "エラー",
+    source: "提供元",
+    trust: "信頼",
+    stableApi: "Stable API",
+    betaApi: "Beta API",
+    thirdPartyRisk: "サードパーティプラグインは、独立プロセス内の信頼済みローカルコードとして実行されます。有効化前に提供元、署名の信頼、権限を確認してください。",
     installTitle: "サードパーティプラグインをインストール",
     installBody: "開発者から提供された .dibao-plugin ファイルをアップロードします。URL、JSON パッケージ、チェックサムの手順はガイドを参照してください。",
     installDocs: "プラグインのインストール手順を見る",
@@ -1422,6 +1437,8 @@ function PluginSettingsTabPanel(props: {
   plugin: PluginListItem;
   tab: PluginSettingsTab["tab"];
 }) {
+  const { t } = useI18n();
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
   const baseUrl =
     props.plugin.webEntryUrl ??
     `/api/plugins/${encodeURIComponent(props.plugin.id)}/assets/web/index.html`;
@@ -1429,6 +1446,58 @@ function PluginSettingsTabPanel(props: {
   params.set("route", props.tab.route);
   params.set("panel", "settings");
   params.set("settingsTab", props.tab.id);
+
+  useEffect(() => {
+    async function handleMessage(event: MessageEvent) {
+      if (!props.active || event.source !== frameRef.current?.contentWindow) {
+        return;
+      }
+      const data = event.data as {
+        type?: unknown;
+        pluginId?: unknown;
+        requestId?: unknown;
+        method?: unknown;
+        payload?: unknown;
+      };
+      if (
+        data.type !== "dibao.bridge" ||
+        data.pluginId !== props.plugin.id ||
+        typeof data.requestId !== "string" ||
+        data.requestId.length > 128
+      ) {
+        return;
+      }
+      try {
+        const result = await handlePluginSettingsBridgeRequest(props.plugin, data.method, data.payload);
+        (event.source as WindowProxy | null)?.postMessage(
+          {
+            type: "dibao.bridge.response",
+            schemaVersion: 1,
+            pluginId: props.plugin.id,
+            requestId: data.requestId,
+            ok: true,
+            result
+          },
+          "*"
+        );
+      } catch (error) {
+        (event.source as WindowProxy | null)?.postMessage(
+          {
+            type: "dibao.bridge.response",
+            schemaVersion: 1,
+            pluginId: props.plugin.id,
+            requestId: data.requestId,
+            ok: false,
+            error: userMessageForError(error, t.errors.api)
+          },
+          "*"
+        );
+      }
+    }
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [props.active, props.plugin, t.errors.api]);
 
   return (
     <section
@@ -1438,11 +1507,76 @@ function PluginSettingsTabPanel(props: {
     >
       <iframe
         className={styles.pluginSettingsFrame}
+        ref={frameRef}
+        sandbox="allow-scripts allow-forms"
         src={`${baseUrl}?${params.toString()}`}
         title={props.tab.label}
       />
     </section>
   );
+}
+
+async function handlePluginSettingsBridgeRequest(
+  plugin: PluginListItem,
+  method: unknown,
+  payload: unknown
+): Promise<unknown> {
+  const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  switch (method) {
+    case "getSettings":
+      return await dibaoApi.getPluginSettings(plugin.id);
+    case "updatePluginSettings":
+      return await dibaoApi.updatePluginSettings(
+        plugin.id,
+        input.settings && typeof input.settings === "object" && !Array.isArray(input.settings)
+          ? input.settings as Record<string, unknown>
+          : input
+      );
+    case "listPluginSecrets":
+      return await dibaoApi.listPluginSecrets(plugin.id);
+    case "setPluginSecret":
+      if (typeof input.key !== "string" || typeof input.value !== "string") {
+        throw new Error("key and value are required");
+      }
+      return await dibaoApi.setPluginSecret(plugin.id, input.key, {
+        value: input.value,
+        hint: typeof input.hint === "string" ? input.hint : null
+      });
+    case "deletePluginSecret":
+      if (typeof input.key !== "string") {
+        throw new Error("key is required");
+      }
+      return await dibaoApi.deletePluginSecret(plugin.id, input.key);
+    case "listPluginDeliveries":
+      return await dibaoApi.listPluginDeliveries(plugin.id, {
+        status: isPluginDeliveryStatus(input.status) ? input.status : undefined,
+        limit: typeof input.limit === "number" ? input.limit : undefined
+      });
+    case "getPluginDelivery":
+      if (typeof input.deliveryId !== "string") {
+        throw new Error("deliveryId is required");
+      }
+      return await dibaoApi.getPluginDelivery(plugin.id, input.deliveryId);
+    case "startTask":
+      if (typeof input.taskId !== "string") {
+        throw new Error("taskId is required");
+      }
+      return await dibaoApi.startPluginTask(plugin.id, input.taskId);
+    case "pluginApi":
+      if (typeof input.path !== "string") {
+        throw new Error("path is required");
+      }
+      return await dibaoApi.callPluginApi(
+        plugin.id,
+        input.path,
+        input.body ?? {},
+        input.method === "GET" ? "GET" : "POST"
+      );
+    case "openArticle":
+      return { ok: true };
+    default:
+      throw new Error("Unsupported plugin bridge method");
+  }
 }
 
 function PluginManagerSection(props: {
@@ -1554,6 +1688,7 @@ function PluginManagerSection(props: {
         <div>
           <h4>{copy.installTitle}</h4>
           <p>{copy.installBody}</p>
+          <p>{copy.thirdPartyRisk}</p>
           <a
             className={styles.textLink}
             href={pluginInstallDocsUrl[props.locale]}
@@ -1617,6 +1752,17 @@ function PluginManagerSection(props: {
               {copy.capabilities}:{" "}
               {plugin.capabilities.length > 0 ? plugin.capabilities.join(", ") : "-"}
             </p>
+            <p>
+              {copy.source}: {plugin.sourceType}
+              {plugin.sourceUrl ? ` · ${plugin.sourceUrl}` : ""} · {copy.trust}: {plugin.trustLevel}
+            </p>
+            <p>
+              {copy.stableApi}: {plugin.apiStability?.stable?.length ? plugin.apiStability.stable.join(", ") : "-"}
+            </p>
+            <p>
+              {copy.betaApi}: {plugin.apiStability?.beta?.length ? plugin.apiStability.beta.join(", ") : "-"}
+            </p>
+            {!plugin.official ? <p>{copy.thirdPartyRisk}</p> : null}
             <p>
               {copy.contributions}: {pluginContributionText(plugin)}
             </p>
@@ -1700,6 +1846,10 @@ function pluginContributionText(plugin: PluginListItem): string {
     plugin.contributes.tasks?.length ? `tasks:${plugin.contributes.tasks.length}` : null
   ].filter((part): part is string => Boolean(part));
   return parts.length > 0 ? parts.join(" · ") : "-";
+}
+
+function isPluginDeliveryStatus(value: unknown): value is "queued" | "running" | "succeeded" | "failed" | "cancelled" {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
 }
 
 function latestReleaseText(

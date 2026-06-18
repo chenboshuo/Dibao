@@ -952,6 +952,127 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("keeps a plugin failed when server activation throws", async () => {
+    const db = createEmptyDatabase();
+    const signedPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.activation-fail",
+        name: "Activation Fail",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": "export function activate() { throw new Error('activation boom'); }\n"
+      }
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir: createTempDir(),
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: signedPackage.trustedPublicKeys
+    });
+    try {
+      const installed = await injectJson(app, "POST", "/api/plugins/install", {
+        package: signedPackage.packageContent
+      });
+      expect(installed.statusCode, installed.body).toBe(200);
+
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/com.example.activation-fail/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(500);
+      expect(enabled.body).toContain("activation boom");
+
+      const listed = await app.inject({ method: "GET", url: "/api/plugins" });
+      expect(listed.json().data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "com.example.activation-fail",
+            status: "failed",
+            lastError: expect.stringContaining("activation boom")
+          })
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("applies manifest migrations and rejects same-version checksum drift", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const keyId = "migration-test-key";
+    const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    const packageForSql = (sql: string) => JSON.stringify(signPluginPackage({
+      pluginPackage: {
+        manifest: {
+          manifestVersion: 1,
+          id: "com.example.migrations",
+          name: "Migrations",
+          version: "1.0.0",
+          publisher: "Example",
+          dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+          capabilities: ["database:plugin"],
+          migrations: [
+            {
+              version: "001",
+              name: "create_notes",
+              path: "migrations/001_create_notes.sql"
+            }
+          ],
+          contributes: {}
+        },
+        files: {
+          "migrations/001_create_notes.sql": sql
+        }
+      },
+      privateKeyPem,
+      publicKeyPem,
+      keyId
+    }));
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: { [keyId]: publicKeyPem }
+    });
+    try {
+      const install = await injectJson(app, "POST", "/api/plugins/install", {
+        package: packageForSql("create table if not exists plugin_migration_notes (id integer primary key, body text);\n")
+      });
+      expect(install.statusCode, install.body).toBe(200);
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/com.example.migrations/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+      expect(
+        db.prepare("select name from sqlite_master where type = 'table' and name = ?")
+          .get("plugin_migration_notes")
+      ).toEqual({ name: "plugin_migration_notes" });
+      expect(
+        db.prepare("select name from plugin_migrations where plugin_id = ? and version = ?")
+          .get("com.example.migrations", "001")
+      ).toEqual({ name: "create_notes" });
+
+      const changed = await injectJson(app, "POST", "/api/plugins/install", {
+        package: packageForSql("create table if not exists plugin_migration_notes (id integer primary key, body integer);\n")
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      const rejected = await app.inject({ method: "POST", url: "/api/plugins/com.example.migrations/enable" });
+      expect(rejected.statusCode, rejected.body).toBe(409);
+      expect(rejected.body).toContain("changed after apply");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("enforces outbound network capability at runtime", async () => {
     const db = createEmptyDatabase();
     const signedPackage = signedPluginPackageFixture({

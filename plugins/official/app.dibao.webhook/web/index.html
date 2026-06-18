@@ -195,32 +195,57 @@
       let lastFocusedTemplateInput = null;
       let draftCounter = 0;
       let busy = false;
+      const bridgeHandlers = new Map();
 
       const api = async (path, options = {}) => {
-        const response = await fetch(`/api/plugins/${pluginId}/api/${path}`, {
-          credentials: "same-origin",
-          headers: { "content-type": "application/json" },
-          ...options
-        });
-        const body = await response.json();
-        if (!response.ok) {
-          throw new Error(body.error?.message || "Plugin request failed");
-        }
-        return body.data;
+        const method = String(options.method || "GET").toUpperCase() === "POST" ? "POST" : "GET";
+        const body = options.body ? JSON.parse(options.body) : {};
+        return await bridge("pluginApi", { path, method, body });
       };
 
       const coreApi = async (path, options = {}) => {
-        const response = await fetch(`/api/plugins/${pluginId}/${path}`, {
-          credentials: "same-origin",
-          headers: { "content-type": "application/json" },
-          ...options
-        });
-        const body = await response.json();
-        if (!response.ok) {
-          throw new Error(body.error?.message || "Plugin request failed");
+        const deliveryMatch = String(path).match(/^deliveries\/([^/]+)$/);
+        if (deliveryMatch) {
+          return await bridge("getPluginDelivery", { deliveryId: decodeURIComponent(deliveryMatch[1]) });
         }
-        return body.data;
+        throw new Error("Unsupported plugin bridge request");
       };
+
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (data.type !== "dibao.bridge.response" || data.pluginId !== pluginId || typeof data.requestId !== "string") return;
+        const handler = bridgeHandlers.get(data.requestId);
+        if (!handler) return;
+        bridgeHandlers.delete(data.requestId);
+        if (data.ok) {
+          handler.resolve(data.result);
+        } else {
+          handler.reject(new Error(data.error || "Plugin bridge request failed"));
+        }
+      });
+
+      function bridge(method, payload) {
+        const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
+        return new Promise((resolve, reject) => {
+          bridgeHandlers.set(requestId, { resolve, reject });
+          window.parent.postMessage(
+            {
+              type: "dibao.bridge",
+              schemaVersion: 1,
+              pluginId,
+              requestId,
+              method,
+              payload
+            },
+            "*"
+          );
+          window.setTimeout(() => {
+            if (!bridgeHandlers.has(requestId)) return;
+            bridgeHandlers.delete(requestId);
+            reject(new Error("宿主响应超时，请重试。"));
+          }, 10000);
+        });
+      }
 
       document.addEventListener("focusin", (event) => {
         if (event.target.matches("input[data-template-target], textarea[data-template-target], [data-map-value]")) {

@@ -304,22 +304,14 @@
       };
 
       const api = async (path, options = {}) => {
-        const response = await fetch(`/api/plugins/${pluginId}/api/${path}`, {
-          credentials: "same-origin",
-          headers: { "content-type": "application/json" },
-          ...options
-        });
-        const body = await response.json();
-        if (!response.ok) {
-          throw new Error(body.error?.message || "Plugin request failed");
-        }
-        return body.data;
+        const method = String(options.method || "GET").toUpperCase() === "POST" ? "POST" : "GET";
+        const body = options.body ? JSON.parse(options.body) : {};
+        return await bridge("pluginApi", { path, method, body });
       };
 
       window.addEventListener("message", (event) => {
-        if (event.origin !== window.location.origin) return;
         const data = event.data || {};
-        if (data.type !== "dibao.bridge.response" || typeof data.requestId !== "string") return;
+        if (data.type !== "dibao.bridge.response" || data.pluginId !== pluginId || typeof data.requestId !== "string") return;
         const handler = bridgeHandlers.get(data.requestId);
         if (!handler) return;
         bridgeHandlers.delete(data.requestId);
@@ -370,7 +362,7 @@
 
       async function load() {
         try {
-          await Promise.all([loadSession(), loadBriefs()]);
+          await loadBriefs();
           if (state.activePanel === "settings") {
             await loadSettings();
           }
@@ -379,14 +371,6 @@
         } finally {
           document.getElementById("loading").hidden = true;
           render();
-        }
-      }
-
-      async function loadSession() {
-        const response = await fetch("/api/auth/session", { credentials: "same-origin" });
-        const body = await response.json();
-        if (response.ok) {
-          state.auth = body.data || state.auth;
         }
       }
 
@@ -926,7 +910,7 @@
               method,
               payload
             },
-            window.location.origin
+            "*"
           );
           window.setTimeout(() => {
             if (!bridgeHandlers.has(requestId)) return;

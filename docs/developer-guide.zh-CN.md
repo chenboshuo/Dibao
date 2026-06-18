@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-16
 
-本文是从 `0.2.0` 开始维护的开发者文档入口。开发者文档只提供简体中文和英文两个版本；插件开发文档是本指南的一个子单元，同时也作为独立文件维护。
+本文是从 `0.2.0` 开始维护的开发者文档入口。核心开发者文档提供简体中文和英文两个版本；插件开发文档是本指南的一个子单元，并单独维护简体中文、英文和日文版本。
 
 ## 适用范围
 
@@ -54,10 +54,11 @@ npm run ops:migrate:core
 
 - [插件开发指南](./plugin-development.zh-CN.md)
 - [Plugin development guide](./plugin-development.en-US.md)
+- [プラグイン開発ガイド](./plugin-development.ja-JP.md)
 - [插件系统设计](./plugin-system-design.md)
 - [运行时性能准则](./runtime-performance.md)
 
-插件开发文档固定为中英文双语，不再为其他 UI 语言单独维护开发者文档。
+插件 API 稳定层级在 0.2 中分为 Stable 和 Beta。manifest v1、生命周期、settings/storage/secrets/deliveries/tasks、基础 hooks、iframe bridge 和 manifest migrations 属于 Stable；`database.defineTable`、ranking、article snapshot/content 和 diagnostics 类能力属于 Beta。
 
 ## 兼容性约定
 

@@ -1433,6 +1433,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     retentionCleanupScheduler.stop();
     feedRefreshScheduler.stop();
     jobRunner.stop();
+    pluginService.dispose();
     if (maintenanceTickTimer) {
       clearInterval(maintenanceTickTimer);
       maintenanceTickTimer = null;
@@ -1598,7 +1599,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
       }
       try {
-        const plugin = parsed.enabled ? pluginService.enable(request.params.id) : pluginService.disable(request.params.id);
+        const plugin = parsed.enabled ? await pluginService.enable(request.params.id) : pluginService.disable(request.params.id);
         if (parsed.enabled && parsed.timezone) {
           pluginService.updateSettings(request.params.id, { timezone: parsed.timezone });
         }
@@ -1704,7 +1705,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.post<{ Params: PluginParams }>("/api/plugins/:id/enable", async (request, reply) => {
     try {
-      return { data: pluginService.enable(request.params.id) };
+      return { data: await pluginService.enable(request.params.id) };
     } catch (error) {
       return sendPluginError(reply, error);
     }
@@ -2893,6 +2894,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (!assetPath) {
         return sendApiError(reply, 404, "NOT_FOUND", "Plugin asset not found");
       }
+      applyPluginAssetSecurityHeaders(reply, assetPath);
       return sendStaticFile(reply, request.method, assetPath);
     } catch (error) {
       return sendPluginError(reply, error);
@@ -3050,6 +3052,27 @@ function sendStaticFile(reply: FastifyReply, method: string, filePath: string) {
   }
 
   return reply.send(readFileSync(filePath));
+}
+
+function applyPluginAssetSecurityHeaders(reply: FastifyReply, filePath: string): void {
+  reply.header("X-Content-Type-Options", "nosniff");
+  if (extname(filePath).toLowerCase() !== ".html") {
+    return;
+  }
+  reply.header(
+    "Content-Security-Policy",
+    [
+      "default-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'self'",
+      "script-src 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'none'"
+    ].join("; ")
+  );
 }
 
 function applyStaticCacheHeaders(reply: FastifyReply, filePath: string): void {

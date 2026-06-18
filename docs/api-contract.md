@@ -2465,7 +2465,18 @@ POST /api/recommendation/ftrl/promote
 
 ## Plugins
 
-插件 API 用于管理官方和第三方插件。第三方插件安装后默认不启用；启用时执行兼容性、权限和 migration 检查。
+插件 API 用于管理官方和第三方插件。第三方插件安装后默认不启用；启用时执行兼容性、权限、manifest migrations 和 server entry 预激活检查。服务端插件运行在独立 Node host 子进程中，通过 JSON-RPC Host API 调用核心能力；Web 插件运行在 sandboxed iframe 中。
+
+插件开发文档：
+
+- [插件开发指南](./plugin-development.zh-CN.md)
+- [Plugin development guide](./plugin-development.en-US.md)
+- [プラグイン開発ガイド](./plugin-development.ja-JP.md)
+
+0.2 API 稳定层级：
+
+- Stable：manifest v1、安装/启停/更新、settings、storage、secrets、deliveries、tasks、基础 hooks、iframe bridge、manifest migrations。
+- Beta：`database.defineTable`、ranking、article snapshot/content、diagnostics/recommendation transparency 类能力。
 
 插件状态：
 
@@ -2500,6 +2511,10 @@ failed
       "trustLevel": "untrusted",
       "capabilities": ["articles:read"],
       "grantedCapabilities": [],
+      "apiStability": {
+        "stable": ["iframe.bridge", "lifecycle.installEnableDisableUpdate", "manifest.v1"],
+        "beta": ["articles.snapshot"]
+      },
       "contributes": {
         "settingsTabs": [],
         "tabs": [],
@@ -2549,11 +2564,11 @@ failed
 
 ### POST /api/plugins/:id/enable
 
-启用插件。启用时会校验 Dibao 版本兼容性并写入 capability grants。
+启用插件。启用时会校验 Dibao 版本兼容性、应用 manifest migrations、写入 capability grants，并预激活 server entry。预激活失败时插件状态变为 `failed`，返回错误。
 
 ### POST /api/plugins/:id/disable
 
-停用插件。停用插件不会删除插件数据。
+停用插件。停用插件不会删除插件数据；会停止运行时贡献点并取消 queued/running 插件任务。
 
 ### POST /api/plugins/:id/update
 
@@ -2577,7 +2592,7 @@ failed
 
 ### GET /api/plugins/:id/assets/*
 
-读取插件包内静态资源。第三方 rich UI 通过 sandboxed iframe 加载这里的 asset。
+读取插件包内静态资源。第三方 rich UI 通过 sandboxed iframe 加载这里的 asset。HTML asset 会带插件 CSP，禁止直接网络连接和表单提交；插件 UI 必须通过 bridge 访问宿主。
 
 ### POST /api/plugins/:id/tasks/:taskId
 
@@ -2586,6 +2601,8 @@ failed
 ```text
 plugin:<pluginId>:<taskId>
 ```
+
+如果插件缺失对应 handler，任务会被延后重试，表现为可恢复的 plugin-paused 语义，不作为普通永久失败。
 
 ### GET /api/plugins/:id/tasks/:runId
 

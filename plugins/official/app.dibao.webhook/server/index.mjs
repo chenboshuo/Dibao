@@ -42,26 +42,26 @@ export default {
 
     ctx.api.get("/state", () => state(ctx));
 
-    ctx.api.post("/rules", ({ body }) => {
-      const current = readRules(ctx);
+    ctx.api.post("/rules", async ({ body }) => {
+      const current = await readRules(ctx);
       const rule = normalizeRule(body, { replaceDraftId: true });
-      writeRules(ctx, [rule, ...current]);
-      return state(ctx);
+      await writeRules(ctx, [rule, ...current]);
+      return await state(ctx);
     });
 
-    ctx.api.post("/rules/:id", ({ params, body }) => {
-      const current = readRules(ctx);
+    ctx.api.post("/rules/:id", async ({ params, body }) => {
+      const current = await readRules(ctx);
       const existing = current.find((rule) => rule.id === params.id);
       if (!existing) {
         throw httpError(404, "Webhook rule not found");
       }
       const next = normalizeRule({ ...existing, ...objectValue(body), id: existing.id });
-      writeRules(ctx, current.map((rule) => rule.id === existing.id ? next : rule));
-      return state(ctx);
+      await writeRules(ctx, current.map((rule) => rule.id === existing.id ? next : rule));
+      return await state(ctx);
     });
 
     ctx.api.post("/rules/:id/test", async ({ params, body }) => {
-      const rule = readRules(ctx).find((candidate) => candidate.id === params.id);
+      const rule = (await readRules(ctx)).find((candidate) => candidate.id === params.id);
       if (!rule) {
         throw httpError(404, "Webhook rule not found");
       }
@@ -74,39 +74,39 @@ export default {
         test: true
       }, { force: true, test: true });
       const completedDelivery = delivery ? await ctx.deliveries.flush(delivery.id) : delivery;
-      return { delivery: completedDelivery, state: state(ctx) };
+      return { delivery: completedDelivery, state: await state(ctx) };
     });
 
-    ctx.api.post("/rules/:id/delete", ({ params }) => {
-      writeRules(ctx, readRules(ctx).filter((rule) => rule.id !== params.id));
-      return state(ctx);
+    ctx.api.post("/rules/:id/delete", async ({ params }) => {
+      await writeRules(ctx, (await readRules(ctx)).filter((rule) => rule.id !== params.id));
+      return await state(ctx);
     });
 
-    ctx.api.post("/secrets/:key", ({ params, body }) => {
+    ctx.api.post("/secrets/:key", async ({ params, body }) => {
       const input = objectValue(body);
       const value = typeof input.value === "string" ? input.value : "";
       if (!value) {
         throw httpError(400, "Secret value is required");
       }
       return {
-        secret: ctx.secrets.set(params.key, value, nullableString(input.hint)),
-        state: state(ctx)
+        secret: await ctx.secrets.set(params.key, value, nullableString(input.hint)),
+        state: await state(ctx)
       };
     });
 
-    ctx.api.post("/secrets/:key/delete", ({ params }) => {
-      ctx.secrets.delete(params.key);
-      return state(ctx);
+    ctx.api.post("/secrets/:key/delete", async ({ params }) => {
+      await ctx.secrets.delete(params.key);
+      return await state(ctx);
     });
   }
 };
 
 async function handleEvent(ctx, eventName, event) {
-  for (const rule of readRules(ctx)) {
+  for (const rule of await readRules(ctx)) {
     if (!rule.enabled || rule.eventName !== eventName) {
       continue;
     }
-    const context = buildContext(ctx, rule, eventName, event);
+    const context = await buildContext(ctx, rule, eventName, event);
     if (matchesConditions(rule.conditions, context)) {
       await dispatchRuleWithContext(ctx, rule, context, {});
     }
@@ -114,7 +114,7 @@ async function handleEvent(ctx, eventName, event) {
 }
 
 async function dispatchRule(ctx, rule, eventName, event, options = {}) {
-  const context = buildContext(ctx, rule, eventName, event, options);
+  const context = await buildContext(ctx, rule, eventName, event, options);
   if (!options.force && !matchesConditions(rule.conditions, context)) {
     return null;
   }
@@ -152,15 +152,15 @@ async function dispatchRuleWithContext(ctx, rule, context, options = {}) {
   if (idempotencyKey) {
     request.idempotencyKey = idempotencyKey;
   }
-  return ctx.deliveries.enqueue(request);
+  return await ctx.deliveries.enqueue(request);
 }
 
-function buildContext(ctx, rule, eventName, event, options = {}) {
+async function buildContext(ctx, rule, eventName, event, options = {}) {
   const eventObject = objectValue(event);
   const articleId = stringValue(eventObject.articleId);
   const includeContent = rule.includeContent === true;
   const article = articleId
-    ? ctx.articles.snapshot(articleId, { includeContent })
+    ? await ctx.articles.snapshot(articleId, { includeContent })
     : null;
   return {
     pluginId: PLUGIN_ID,
@@ -169,13 +169,13 @@ function buildContext(ctx, rule, eventName, event, options = {}) {
     event: eventObject,
     article,
     feed: article?.feed ?? (eventObject.feedId ? { id: eventObject.feedId } : null),
-    generatedAt: ctx.now(),
+    generatedAt: await ctx.now(),
     test: options.test === true
   };
 }
 
-function readRules(ctx) {
-  const value = ctx.storage.get(RULES_KEY);
+async function readRules(ctx) {
+  const value = await ctx.storage.get(RULES_KEY);
   if (!Array.isArray(value)) {
     return [];
   }
@@ -190,26 +190,26 @@ function readRules(ctx) {
     return { ...rule, id: `rule_${randomUUID()}` };
   });
   if (repairedDraftId || deduped.length !== normalized.length) {
-    ctx.storage.set(RULES_KEY, repaired.map(normalizeRule));
+    await ctx.storage.set(RULES_KEY, repaired.map(normalizeRule));
   }
   return repaired;
 }
 
-function writeRules(ctx, rules) {
-  ctx.storage.set(RULES_KEY, dedupeRules(rules.map(normalizeRule)));
+async function writeRules(ctx, rules) {
+  await ctx.storage.set(RULES_KEY, dedupeRules(rules.map(normalizeRule)));
 }
 
-function state(ctx) {
-  const available = typeof ctx.events.catalog === "function" ? ctx.events.catalog() : EVENTS;
+async function state(ctx) {
+  const available = typeof ctx.events.catalog === "function" ? await ctx.events.catalog() : EVENTS;
   return {
     pluginId: PLUGIN_ID,
-    rules: readRules(ctx),
-    secrets: ctx.secrets.list(),
-    deliveries: ctx.deliveries.list({ limit: 50 }),
+    rules: await readRules(ctx),
+    secrets: await ctx.secrets.list(),
+    deliveries: await ctx.deliveries.list({ limit: 50 }),
     events: EVENTS
       .filter((eventName) => available.includes(eventName))
       .map((eventName) => EVENT_CATALOG[eventName] ?? eventMetadata(eventName, eventName, "稳定插件事件。", [], [])),
-    generatedAt: ctx.now()
+    generatedAt: await ctx.now()
   };
 }
 

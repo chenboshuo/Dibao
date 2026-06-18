@@ -44,6 +44,10 @@ async function main(argv: string[]): Promise<void> {
 function createPlugin(targetDir: string): void {
   mkdirSync(join(targetDir, "server"), { recursive: true });
   mkdirSync(join(targetDir, "web"), { recursive: true });
+  mkdirSync(join(targetDir, "locales"), { recursive: true });
+  mkdirSync(join(targetDir, "migrations"), { recursive: true });
+  mkdirSync(join(targetDir, "tests"), { recursive: true });
+  mkdirSync(join(targetDir, "scripts"), { recursive: true });
   const id = `dev.example.${basename(targetDir).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
   writeFileSync(
     join(targetDir, "plugin.json"),
@@ -56,23 +60,77 @@ function createPlugin(targetDir: string): void {
         publisher: "Example",
         dibao: { minVersion: "0.2.0", maxVersion: "<0.3.0" },
         entry: { server: "server/index.mjs", web: "web/index.html" },
-        capabilities: ["settings:plugin", "files:plugin-data"],
+        capabilities: ["settings:plugin", "files:plugin-data", "jobs:write"],
         contributes: {
           actions: [],
           routes: [],
-          settingsTabs: [],
-          hooks: [],
-          tasks: []
+          settingsTabs: [
+            {
+              id: "settings",
+              title: "Example Plugin",
+              slot: "settings.tabs",
+              route: "settings",
+              order: 90,
+              icon: "settings"
+            }
+          ],
+          hooks: ["maintenance.tick"],
+          tasks: [
+            {
+              id: "example.refresh",
+              kind: "background",
+              schedule: "manual",
+              defaultEnabled: false
+            }
+          ]
         }
       },
       null,
       2
     )}\n`
   );
-  writeFileSync(join(targetDir, "server/index.mjs"), "export default { activate() {} };\n");
-  writeFileSync(
-    join(targetDir, "web/index.html"),
-    `<!doctype html>
+  writeFileSync(join(targetDir, "server/index.mjs"), serverTemplate());
+  writeFileSync(join(targetDir, "web/index.html"), webTemplate(id));
+  writeFileSync(join(targetDir, "README.md"), readmeTemplate(id));
+  writeFileSync(join(targetDir, "RELEASE_CHECKLIST.md"), releaseChecklistTemplate());
+  writeFileSync(join(targetDir, "tests/README.md"), testReadmeTemplate());
+  writeFileSync(join(targetDir, "scripts/sign.example.sh"), signExampleTemplate());
+  writeFileSync(join(targetDir, "locales/zh-CN.json"), `${JSON.stringify({ name: "示例插件", description: "邸报 0.2 插件模板。" }, null, 2)}\n`);
+  writeFileSync(join(targetDir, "locales/en-US.json"), `${JSON.stringify({ name: "Example Plugin", description: "Dibao 0.2 plugin template." }, null, 2)}\n`);
+  writeFileSync(join(targetDir, "locales/ja-JP.json"), `${JSON.stringify({ name: "サンプルプラグイン", description: "Dibao 0.2 プラグインテンプレート。" }, null, 2)}\n`);
+  writeFileSync(join(targetDir, "migrations/README.md"), "Add raw SQL migrations here and list them in plugin.json when your plugin needs durable schema changes. Request the database:plugin capability only when needed.\n");
+  console.log(`Created plugin template in ${targetDir}`);
+}
+
+function serverTemplate(): string {
+  return `export default {
+  async activate(ctx) {
+    ctx.hooks.on("maintenance.tick", async () => {
+      await ctx.storage.set("lastMaintenanceTickAt", await ctx.now());
+    });
+
+    ctx.tasks.register("example.refresh", async () => {
+      await ctx.storage.set("lastRefreshAt", await ctx.now());
+    });
+
+    ctx.api.get("/state", async () => ({
+      settings: await ctx.settings.list(),
+      lastRefreshAt: await ctx.storage.get("lastRefreshAt"),
+      generatedAt: await ctx.now()
+    }));
+
+    ctx.api.post("/settings", async ({ body }) => {
+      const input = body && typeof body === "object" ? body : {};
+      await ctx.settings.set("enabled", input.enabled === true);
+      return { settings: await ctx.settings.list() };
+    });
+  }
+};
+`;
+}
+
+function webTemplate(pluginId: string): string {
+  return `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -86,15 +144,116 @@ function createPlugin(targetDir: string): void {
         <div>
           <p class="kicker">Plugin</p>
           <h1>Dibao Plugin</h1>
-          <p>Use Core-provided plugin UI classes for controls, cards, forms, and empty states.</p>
+          <p id="summary">Loading plugin state...</p>
         </div>
       </section>
+      <section class="panel">
+        <pre id="output" class="code-block"></pre>
+      </section>
     </main>
+    <script>
+      const pluginId = ${JSON.stringify(pluginId)};
+      const pending = new Map();
+
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (data.type !== "dibao.bridge.response" || data.pluginId !== pluginId || typeof data.requestId !== "string") return;
+        const handler = pending.get(data.requestId);
+        if (!handler) return;
+        pending.delete(data.requestId);
+        data.ok ? handler.resolve(data.result) : handler.reject(new Error(data.error || "Plugin bridge request failed"));
+      });
+
+      function bridge(method, payload) {
+        const requestId = \`\${Date.now()}:\${Math.random().toString(16).slice(2)}\`;
+        return new Promise((resolve, reject) => {
+          pending.set(requestId, { resolve, reject });
+          window.parent.postMessage({ type: "dibao.bridge", schemaVersion: 1, pluginId, requestId, method, payload }, "*");
+          window.setTimeout(() => {
+            if (!pending.has(requestId)) return;
+            pending.delete(requestId);
+            reject(new Error("Host response timed out"));
+          }, 10000);
+        });
+      }
+
+      async function pluginApi(path, body, method = "GET") {
+        return await bridge("pluginApi", { path, method, body });
+      }
+
+      pluginApi("state")
+        .then((state) => {
+          document.getElementById("summary").textContent = "Plugin bridge is connected.";
+          document.getElementById("output").textContent = JSON.stringify(state, null, 2);
+        })
+        .catch((error) => {
+          document.getElementById("summary").textContent = error.message;
+        });
+    </script>
   </body>
 </html>
-`
-  );
-  console.log(`Created plugin template in ${targetDir}`);
+`;
+}
+
+function readmeTemplate(pluginId: string): string {
+  return `# ${pluginId}
+
+This is a Dibao 0.2 plugin template.
+
+## Development
+
+- Edit \`plugin.json\` to declare capabilities, contributions, and optional migrations.
+- Implement server code in \`server/index.mjs\`; host APIs are asynchronous JSON-RPC calls.
+- Implement web UI in \`web/index.html\`; use the sandboxed iframe bridge instead of direct \`fetch\`.
+- Keep third-party code trusted and auditable. Dibao 0.2 isolates plugins in a Node host process, but does not claim hostile-code sandboxing.
+
+## Commands
+
+\`\`\`sh
+dibao-plugin validate .
+dibao-plugin pack . --out ${pluginId}.dibao-plugin
+dibao-plugin sign ${pluginId}.dibao-plugin --private-key private.pem --public-key public.pem --key-id example --out ${pluginId}.signed.dibao-plugin
+\`\`\`
+`;
+}
+
+function releaseChecklistTemplate(): string {
+  return `# Release Checklist
+
+- [ ] \`dibao-plugin validate .\` passes.
+- [ ] Server handlers only use declared capabilities.
+- [ ] Web UI works inside a sandboxed iframe and uses the bridge for host calls.
+- [ ] Any migrations are listed in \`plugin.json\` with stable version and checksum.
+- [ ] Package is signed with a trusted key and the public key id is documented.
+- [ ] README documents install, update, rollback, settings, secrets, and known limitations.
+- [ ] Manual smoke test covers install, enable, disable, update, and rollback.
+`;
+}
+
+function testReadmeTemplate(): string {
+  return `# Plugin Tests
+
+Recommended smoke cases:
+
+- Validate manifest and package.
+- Enable plugin and confirm server activation succeeds.
+- Call each plugin API route through the iframe bridge.
+- Disable plugin and confirm queued plugin jobs are cancelled or paused.
+- Tamper with a signed package and confirm verification fails.
+`;
+}
+
+function signExampleTemplate(): string {
+  return `#!/usr/bin/env sh
+set -eu
+
+dibao-plugin pack . --out plugin.dibao-plugin
+dibao-plugin sign plugin.dibao-plugin \\
+  --private-key private.pem \\
+  --public-key public.pem \\
+  --key-id example-key \\
+  --out plugin.signed.dibao-plugin
+`;
 }
 
 function validatePackage(inputPath: string): void {

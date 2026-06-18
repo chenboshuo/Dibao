@@ -15,6 +15,87 @@ export type DibaoPluginPackage = {
   signature?: DibaoPluginSignature;
 };
 
+export type DibaoPluginManifest = {
+  manifestVersion: 1;
+  id: string;
+  name: string;
+  version: string;
+  publisher: string;
+  dibao: {
+    minVersion: string;
+    maxVersion: string;
+  };
+  entry?: {
+    server?: string;
+    web?: string;
+  };
+  capabilities: DibaoPluginCapability[];
+  migrations?: DibaoPluginMigration[];
+  contributes?: {
+    settingsTabs?: DibaoPluginPanelContribution[];
+    tabs?: DibaoPluginPanelContribution[];
+    routes?: DibaoPluginRouteContribution[];
+    actions?: DibaoPluginActionContribution[];
+    hooks?: DibaoPluginEvent[];
+    events?: DibaoPluginEvent[];
+    tasks?: DibaoPluginTaskContribution[];
+    setupSteps?: DibaoPluginSetupStepContribution[];
+  };
+};
+
+export type DibaoPluginMigration = {
+  version: string;
+  name: string;
+  path: string;
+  checksum?: string;
+};
+
+export type DibaoPluginPanelContribution = {
+  id: string;
+  title: string;
+  slot: DibaoPluginSlot | string;
+  order?: number;
+  icon?: string;
+  route?: string;
+  primaryNav?: boolean;
+  primaryMobile?: boolean;
+};
+
+export type DibaoPluginRouteContribution = {
+  id: string;
+  path: string;
+  title: string;
+  panel: string;
+  order?: number;
+  icon?: string;
+  primaryNav?: boolean;
+  primaryMobile?: boolean;
+};
+
+export type DibaoPluginActionContribution = {
+  id: string;
+  title: string;
+  slot: DibaoPluginSlot | string;
+  icon?: string;
+  command: string;
+  order?: number;
+};
+
+export type DibaoPluginTaskContribution = {
+  id: string;
+  kind: "foreground" | "background";
+  schedule?: "manual" | "interval" | "daily" | "weekly";
+  defaultEnabled?: boolean;
+};
+
+export type DibaoPluginSetupStepContribution = {
+  id: string;
+  title: string;
+  body?: string;
+  order?: number;
+  defaultEnabled?: boolean;
+};
+
 export const dibaoPluginCapabilities = [
   "articles:read",
   "articles:write",
@@ -52,6 +133,110 @@ export const dibaoPluginEvents = [
 ] as const;
 
 export type DibaoPluginEvent = typeof dibaoPluginEvents[number];
+
+export const dibaoPluginSlots = [
+  "app.main.nav.items",
+  "app.main.tabs",
+  "article.list.item.actions.end",
+  "article.list.toolbar.end",
+  "article.reader.bottomSheet.actions",
+  "settings.tabs",
+  "algorithm.jobs.actions"
+] as const;
+
+export type DibaoPluginSlot = typeof dibaoPluginSlots[number];
+
+export const dibaoPluginStableApis = [
+  "manifest.v1",
+  "lifecycle.installEnableDisableUpdate",
+  "settings",
+  "storage",
+  "secrets",
+  "deliveries",
+  "tasks",
+  "hooks.basic",
+  "events.catalog",
+  "iframe.bridge",
+  "database.migrations",
+  "network.outbound"
+] as const;
+
+export const dibaoPluginBetaApis = [
+  "database.defineTable",
+  "ranking",
+  "articles.snapshot",
+  "diagnostics"
+] as const;
+
+export type DibaoPluginStableApi = typeof dibaoPluginStableApis[number];
+export type DibaoPluginBetaApi = typeof dibaoPluginBetaApis[number];
+
+export type DibaoPluginContext = {
+  pluginId: string;
+  manifest: DibaoPluginManifest;
+  now: () => Promise<number>;
+  hooks: {
+    on: (hook: DibaoPluginEvent, handler: (payload: unknown) => Promise<void> | void) => void;
+  };
+  events: {
+    catalog: () => Promise<DibaoPluginEvent[]>;
+    emit: (event: DibaoPluginEvent, payload: unknown) => Promise<unknown>;
+  };
+  tasks: {
+    register: (taskId: string, handler: (job: unknown) => Promise<void> | void) => void;
+    start: (taskId: string, payload?: Record<string, unknown>) => Promise<unknown>;
+  };
+  api: {
+    get: (path: string, handler: (input: { params: Record<string, string>; body: unknown }) => Promise<unknown> | unknown) => void;
+    post: (path: string, handler: (input: { params: Record<string, string>; body: unknown }) => Promise<unknown> | unknown) => void;
+  };
+  storage: {
+    get: <T = unknown>(key: string) => Promise<T | null>;
+    set: (key: string, value: unknown) => Promise<unknown>;
+    listByPrefix: <T = unknown>(prefix: string) => Promise<Array<{ key: string; value: T; updatedAt: number }>>;
+    delete: (key: string) => Promise<unknown>;
+  };
+  settings: {
+    get: <T = unknown>(key: string) => Promise<T | null>;
+    set: (key: string, value: unknown) => Promise<unknown>;
+    list: () => Promise<Record<string, unknown>>;
+  };
+  secrets: {
+    list: () => Promise<DibaoPluginSecretMetadata[]>;
+    get: (key: string) => Promise<string | null>;
+    set: (key: string, value: string, hint?: string | null) => Promise<DibaoPluginSecretMetadata>;
+    delete: (key: string) => Promise<unknown>;
+  };
+  deliveries: {
+    enqueue: (input: unknown) => Promise<DibaoPluginDelivery>;
+    get: (deliveryId: string) => Promise<DibaoPluginDelivery>;
+    list: (input?: { status?: DibaoPluginDeliveryStatus; limit?: number }) => Promise<DibaoPluginDelivery[]>;
+    cancel: (deliveryId: string) => Promise<DibaoPluginDelivery>;
+    flush: (deliveryId: string) => Promise<DibaoPluginDelivery>;
+  };
+  network: {
+    fetch: (input: unknown) => Promise<unknown>;
+  };
+  database: {
+    defineTable: (definition: unknown) => Promise<unknown>;
+    insert: (tableName: string, record: Record<string, unknown>) => Promise<{ id: number }>;
+    get: (tableName: string, rowId: number) => Promise<Record<string, unknown> | null>;
+    list: (tableName: string, input?: unknown) => Promise<Array<Record<string, unknown>>>;
+    delete: (tableName: string, rowId: number) => Promise<unknown>;
+  };
+  scheduler: {
+    configureDaily: (taskId: string, input: { enabled: boolean; localTime: string; timezone?: string | null }) => Promise<unknown>;
+  };
+  ranking: {
+    listRankedWinners: (input: { windowMs: number; limit: number }) => Promise<unknown[]>;
+    listTopicTargets: () => Promise<unknown>;
+  };
+  articles: {
+    countDiscovered: (input: { startAt: number; endAt: number }) => Promise<number>;
+    openableSummary: (articleId: string) => Promise<unknown>;
+    snapshot: (articleId: string, input?: { includeContent?: boolean }) => Promise<unknown>;
+  };
+};
 
 export type DibaoPluginSecretMetadata = {
   key: string;
@@ -183,11 +368,58 @@ export function validatePluginPackage(pluginPackage: DibaoPluginPackage): DibaoP
         errors.push(`manifest.capabilities contains unsupported capability: ${String(capability)}`);
       }
     }
+    const migrations = Array.isArray(manifest.migrations) ? manifest.migrations : [];
+    const migrationVersions = new Set<string>();
+    for (const migration of migrations) {
+      const record = migration && typeof migration === "object" && !Array.isArray(migration)
+        ? migration as Record<string, unknown>
+        : {};
+      const version = typeof record.version === "string" ? record.version.trim() : "";
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      const path = typeof record.path === "string" ? record.path.trim() : "";
+      if (!version || !name || !path) {
+        errors.push("manifest.migrations entries require version, name, and path");
+        continue;
+      }
+      if (migrationVersions.has(version)) {
+        errors.push(`manifest.migrations contains duplicate version: ${version}`);
+      }
+      migrationVersions.add(version);
+      if (pluginPackage.files && !Object.hasOwn(pluginPackage.files, path)) {
+        errors.push(`migration file is missing: ${path}`);
+      }
+      if (record.checksum !== undefined && typeof record.checksum !== "string") {
+        errors.push(`manifest.migrations checksum must be a string: ${version}`);
+      }
+    }
     const contributes = manifest.contributes as Record<string, unknown> | undefined;
     const hooks = Array.isArray(contributes?.hooks) ? contributes.hooks : [];
     for (const hook of hooks) {
       if (typeof hook !== "string" || !dibaoPluginEvents.includes(hook as DibaoPluginEvent)) {
         errors.push(`manifest.contributes.hooks contains unsupported event: ${String(hook)}`);
+      }
+    }
+    const events = Array.isArray(contributes?.events) ? contributes.events : [];
+    for (const event of events) {
+      if (typeof event !== "string" || !dibaoPluginEvents.includes(event as DibaoPluginEvent)) {
+        errors.push(`manifest.contributes.events contains unsupported event: ${String(event)}`);
+      }
+    }
+    const tasks = Array.isArray(contributes?.tasks) ? contributes.tasks : [];
+    const taskIds = new Set<string>();
+    for (const task of tasks) {
+      const record = task && typeof task === "object" && !Array.isArray(task)
+        ? task as Record<string, unknown>
+        : {};
+      const id = typeof record.id === "string" ? record.id.trim() : "";
+      if (!id) {
+        errors.push("manifest.contributes.tasks entries require id");
+      } else if (taskIds.has(id)) {
+        errors.push(`manifest.contributes.tasks contains duplicate id: ${id}`);
+      }
+      taskIds.add(id);
+      if (record.kind !== "foreground" && record.kind !== "background") {
+        errors.push(`manifest.contributes.tasks has invalid kind: ${id || "(missing id)"}`);
       }
     }
   }
