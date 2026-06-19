@@ -848,7 +848,7 @@ export class PluginService {
         const compatibility = isDibaoVersionCompatible(this.options.dibaoVersion, manifest.dibao);
         const existing = this.options.plugins.findInstall(manifest.id);
         const status = compatibility.ok
-          ? existing?.status === "enabled" || existing?.status === "disabled"
+          ? existing?.status === "enabled" || existing?.status === "disabled" || existing?.status === "failed"
             ? existing.status
             : "installed"
           : "incompatible";
@@ -863,7 +863,7 @@ export class PluginService {
           official: true,
           bundled: true,
           trustLevel: "official",
-          lastError: compatibility.ok ? null : compatibility.reason,
+          lastError: compatibility.ok ? (status === "failed" ? existing?.lastError ?? null : null) : compatibility.reason,
           now: this.now()
         });
         this.options.plugins.grantCapabilities(manifest.id, manifest.capabilities, this.now());
@@ -1020,7 +1020,26 @@ export class PluginService {
             reject(new PluginServiceError(504, "PLUGIN_TIMEOUT", `Plugin ${kind} timed out: ${name}`));
           }, timeoutMs);
           pending.set(id, { resolve, reject, timer });
-          child?.send?.({ type: "plugin.invoke", id, kind, name, input });
+          const sent = sendPluginChildMessage(child, { type: "plugin.invoke", id, kind, name, input }, (error) => {
+            const pendingCall = pending.get(id);
+            if (!pendingCall) {
+              return;
+            }
+            pending.delete(id);
+            clearTimeout(pendingCall.timer);
+            pendingCall.reject(
+              new PluginServiceError(
+                503,
+                "PLUGIN_RUNTIME_UNAVAILABLE",
+                `Plugin host is not accepting messages: ${error.message}`
+              )
+            );
+          });
+          if (!sent) {
+            pending.delete(id);
+            clearTimeout(timer);
+            reject(new PluginServiceError(503, "PLUGIN_RUNTIME_UNAVAILABLE", "Plugin host is not running"));
+          }
         });
       },
       dispose: () => {
@@ -2880,10 +2899,31 @@ function sendHostResponse(
   id: string,
   response: { ok: true; result: unknown } | { ok: false; error: PluginHostSerializedError }
 ): void {
-  if (!child || !child.connected || !id) {
+  if (!id) {
     return;
   }
-  child.send({ type: "host.response", id, ...response });
+  sendPluginChildMessage(child, { type: "host.response", id, ...response });
+}
+
+function sendPluginChildMessage(
+  child: ChildProcess | null,
+  message: Record<string, unknown>,
+  onError?: (error: Error) => void
+): boolean {
+  if (!child || !child.connected) {
+    return false;
+  }
+  try {
+    child.send(message, (error: Error | null) => {
+      if (error) {
+        onError?.(error);
+      }
+    });
+    return true;
+  } catch (error) {
+    onError?.(error instanceof Error ? error : new Error(String(error)));
+    return false;
+  }
 }
 
 function serializePluginHostError(error: unknown): PluginHostSerializedError {

@@ -14,6 +14,7 @@ import {
   SqliteFeedFolderRepository,
   SqliteJobRepository,
   SqliteFeedRepository,
+  SqlitePluginRepository,
   SqliteProfileRepository,
   SqliteRankingRepository,
   SqliteVecVectorStore,
@@ -2157,6 +2158,37 @@ describe("server API vertical slice", () => {
       expect(afterReenable.json().data).toMatchObject({
         status: "enabled",
         lastError: null
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("keeps a failed official Daily Brief plugin failed across catalog reconciliation", async () => {
+    const db = createEmptyDatabase();
+    const plugins = new SqlitePluginRepository(db);
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(catalog.statusCode, catalog.body).toBe(200);
+
+      plugins.setStatus("app.dibao.daily-brief", "failed", "Plugin host exited", 1000);
+
+      const reconciled = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(reconciled.statusCode, reconciled.body).toBe(200);
+      const dailyBrief = reconciled
+        .json()
+        .data.find((plugin: { id: string }) => plugin.id === "app.dibao.daily-brief");
+      expect(dailyBrief).toMatchObject({
+        id: "app.dibao.daily-brief",
+        status: "failed",
+        lastError: "Plugin host exited"
+      });
+      expect(plugins.findInstall("app.dibao.daily-brief")).toMatchObject({
+        status: "failed",
+        lastError: "Plugin host exited"
       });
     } finally {
       await app.close();
