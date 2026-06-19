@@ -149,6 +149,7 @@ const ARTICLE_DETAIL_REQUEST_TIMEOUT_MS = 12_000;
 const ARTICLE_STATE_OVERLAY_STORAGE_KEY = "dibao:article-state-overlay:v1";
 const ARTICLE_STATE_OVERLAY_TTL_MS = 24 * 60 * 60 * 1000;
 const ARTICLE_STATE_OVERLAY_LIMIT = 500;
+const AUTH_GATE_RETRY_DELAYS_MS = [500, 1500, 3000] as const;
 
 type IgnoredArticleQueueItem = {
   articleId: string;
@@ -195,6 +196,10 @@ async function withLongLoadingNotice<T>(
     window.clearTimeout(noticeId);
     window.clearTimeout(timeoutId);
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function articleDetailPlaceholder(article: ArticleListItem): ArticleDetail {
@@ -680,22 +685,27 @@ export function App() {
       setAppStage({ type: "auth-loading" });
       setAuthError(null);
 
-      try {
-        const session = await dibaoApi.getAuthSession();
-        if (!cancelled) {
-          const nextStage = stageForAuthSession(session);
-          setAuthUsername(session.authenticated ? session.username : null);
-          if (nextStage.type === "welcome" || nextStage.type === "login") {
-            resetReaderState();
+      for (let attempt = 0; !cancelled; attempt += 1) {
+        try {
+          const session = await dibaoApi.getAuthSession();
+          if (!cancelled) {
+            const nextStage = stageForAuthSession(session);
+            setAuthUsername(session.authenticated ? session.username : null);
+            if (nextStage.type === "welcome" || nextStage.type === "login") {
+              resetReaderState();
+            }
+            setAppStage(nextStage);
           }
-          setAppStage(nextStage);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setAuthError(userMessageForError(error, t.errors.api));
-          setAuthUsername(null);
-          resetReaderState();
-          setAppStage({ type: "login" });
+          return;
+        } catch (error) {
+          if (attempt >= AUTH_GATE_RETRY_DELAYS_MS.length) {
+            if (!cancelled) {
+              setAuthError(userMessageForError(error, t.errors.api));
+              setAppStage({ type: "auth-loading" });
+            }
+            return;
+          }
+          await delay(AUTH_GATE_RETRY_DELAYS_MS[attempt]);
         }
       }
     }
@@ -744,21 +754,27 @@ export function App() {
     async function loadSetupStatus() {
       setAuthError(null);
 
-      try {
-        const status = await dibaoApi.getSetupStatus();
-        if (!cancelled) {
-          setDerivedDataUpgrade(status.coreDatabaseMigration ?? status.derivedDataUpgrade ?? null);
-          const nextStage = stageForSetupStatus(status);
-          if (nextStage.type === "welcome") {
-            resetReaderState();
+      for (let attempt = 0; !cancelled; attempt += 1) {
+        try {
+          const status = await dibaoApi.getSetupStatus();
+          if (!cancelled) {
+            setDerivedDataUpgrade(status.coreDatabaseMigration ?? status.derivedDataUpgrade ?? null);
+            const nextStage = stageForSetupStatus(status);
+            if (nextStage.type === "welcome") {
+              resetReaderState();
+            }
+            setAppStage(nextStage);
           }
-          setAppStage(nextStage);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setAuthError(userMessageForError(error, t.errors.api));
-          resetReaderState();
-          setAppStage({ type: "login" });
+          return;
+        } catch (error) {
+          if (attempt >= AUTH_GATE_RETRY_DELAYS_MS.length) {
+            if (!cancelled) {
+              setAuthError(userMessageForError(error, t.errors.api));
+              setAppStage({ type: "setup-status-loading" });
+            }
+            return;
+          }
+          await delay(AUTH_GATE_RETRY_DELAYS_MS[attempt]);
         }
       }
     }
@@ -2938,7 +2954,7 @@ export function App() {
     return (
       <main className={styles.authShell}>
         {pwaStatusBanner}
-        <AuthGatePanel isSubmitting={false} mode="loading" />
+        <AuthGatePanel error={authError} isSubmitting={false} mode="loading" />
       </main>
     );
   }

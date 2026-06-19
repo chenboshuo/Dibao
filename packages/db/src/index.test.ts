@@ -2281,11 +2281,20 @@ describe("db package", () => {
         updatedAt: 1000
       });
 
-      sessions.createSession({
+      const createdSession = sessions.createSession({
         id: "session_1",
         sessionHash: "hash_1",
         createdAt: 2000,
         expiresAt: 3000,
+        userAgent: "vitest",
+        ipHash: "ip_hash"
+      });
+      expect(createdSession).toMatchObject({
+        id: "session_1",
+        sessionHash: "hash_1",
+        createdAt: 2000,
+        expiresAt: 3000,
+        lastSeenAt: 2000,
         userAgent: "vitest",
         ipHash: "ip_hash"
       });

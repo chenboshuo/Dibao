@@ -151,11 +151,15 @@ export class SqliteSessionRepository implements SessionRepository {
         input.ipHash ?? null
       );
 
-    const row = this.findByHash(input.sessionHash);
-    if (!row) {
-      throw new Error(`Failed to create session: ${input.id}`);
-    }
-    return row;
+    return {
+      id: input.id,
+      sessionHash: input.sessionHash,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt,
+      lastSeenAt: input.createdAt,
+      userAgent: input.userAgent ?? null,
+      ipHash: input.ipHash ?? null
+    };
   }
 
   deleteByHash(sessionHash: string): void {

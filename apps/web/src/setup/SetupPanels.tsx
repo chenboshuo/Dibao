@@ -95,6 +95,7 @@ export function AuthGatePanel(props: {
           </span>
         </div>
         <p>{t.auth.loading}</p>
+        {props.error ? <p className={styles.errorText}>{props.error}</p> : null}
       </section>
     );
   }
