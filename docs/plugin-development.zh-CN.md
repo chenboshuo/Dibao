@@ -164,6 +164,7 @@ function bridge(method, payload) {
 常用方法：
 
 - `pluginApi`: `{ method: "GET" | "POST", path, body }`
+- `getAuthSession`
 - `getSettings` / `updatePluginSettings`
 - `listPluginSecrets` / `setPluginSecret` / `deletePluginSecret`
 - `listPluginDeliveries` / `getPluginDelivery`

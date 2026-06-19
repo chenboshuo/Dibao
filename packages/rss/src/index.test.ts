@@ -47,6 +47,34 @@ describe("rss package", () => {
     expect(feed.items[0].publishedAt).toBe(Date.parse("2026-05-14T08:00:00.000Z"));
   });
 
+  it("preserves code block line breaks in RSS content text", () => {
+    const feed = parseFeedXml(
+      `<?xml version="1.0"?>
+      <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+        <channel>
+          <title>Code Feed</title>
+          <link>https://example.com/</link>
+          <item>
+            <title>Code item</title>
+            <link>https://example.com/code</link>
+            <guid>code-guid</guid>
+            <content:encoded><![CDATA[
+              <p>Before code.</p>
+              <pre><code>const value = 1;
+  console.log(value);</code></pre>
+              <p>After code.</p>
+            ]]></content:encoded>
+          </item>
+        </channel>
+      </rss>`,
+      "https://example.com/feed.xml"
+    );
+
+    expect(feed.items[0].contentText).toContain("Before code.");
+    expect(feed.items[0].contentText).toContain("const value = 1;\n  console.log(value);");
+    expect(feed.items[0].contentText).toContain("After code.");
+  });
+
   it("rejects non-http RSS site and item URLs while preserving safe relative item URLs", () => {
     const feed = parseFeedXml(
       `<?xml version="1.0"?>

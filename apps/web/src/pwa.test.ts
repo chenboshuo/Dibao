@@ -217,6 +217,7 @@ describe("service worker source", () => {
     expect(source).toContain("activate");
     expect(source).toContain("fetch");
     expect(source).toContain("/api/");
+    expect(source).toContain("/logo-64.png");
     expect(source).toContain("SKIP_WAITING");
   });
 });

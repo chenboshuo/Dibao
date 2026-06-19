@@ -1183,6 +1183,10 @@ describe("web i18n", () => {
   it("keeps plugin iframes sandboxed and bridge-scoped", () => {
     const appRuntime = readFileSync(new URL("./AppRuntime.tsx", import.meta.url), "utf8");
     const settingsWorkspace = readFileSync(new URL("./settings/SettingsWorkspace.tsx", import.meta.url), "utf8");
+    const dailyBrief = readFileSync(
+      new URL("../../../plugins/official/app.dibao.daily-brief/web/index.html", import.meta.url),
+      "utf8"
+    );
 
     expect(appRuntime).toContain('sandbox="allow-scripts allow-forms"');
     expect(settingsWorkspace).toContain('sandbox="allow-scripts allow-forms"');
@@ -1190,6 +1194,12 @@ describe("web i18n", () => {
     expect(settingsWorkspace).toContain("event.source !== frameRef.current?.contentWindow");
     expect(appRuntime).toContain("data.pluginId !== props.plugin.id");
     expect(settingsWorkspace).toContain("data.pluginId !== props.plugin.id");
+    expect(appRuntime).toContain('case "getAuthSession"');
+    expect(settingsWorkspace).toContain('case "getAuthSession"');
+    expect(dailyBrief).toContain('bridge("getAuthSession"');
+    expect(dailyBrief).toContain("article-title-link");
+    expect(dailyBrief).not.toContain("在邸报中打开");
+    expect(dailyBrief).not.toContain("打开原文");
   });
 
   it("renders provider connection and embedding job status separately", () => {

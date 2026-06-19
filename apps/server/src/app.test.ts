@@ -1399,6 +1399,7 @@ describe("server API vertical slice", () => {
       join(webDistDir, "index.html"),
       "<!doctype html><html><body><div id=\"root\">Dibao public shell</div></body></html>"
     );
+    writeFileSync(join(webDistDir, "logo-64.png"), "png");
     const app = buildRealServer({ db, logger: false, webDistDir, cookieSecure: false });
 
     try {
@@ -1410,9 +1411,15 @@ describe("server API vertical slice", () => {
         method: "GET",
         url: "/api/feeds"
       });
+      const publicLogo = await app.inject({
+        method: "GET",
+        url: "/logo-64.png"
+      });
 
       expect(root.statusCode, root.body).toBe(200);
       expect(root.body).toContain("Dibao public shell");
+      expect(publicLogo.statusCode, publicLogo.body).toBe(200);
+      expect(publicLogo.headers["content-type"]).toContain("image/png");
       expect(protectedApi.statusCode, protectedApi.body).toBe(401);
       expect(protectedApi.json()).toMatchObject({
         error: {

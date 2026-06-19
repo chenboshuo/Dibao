@@ -156,7 +156,7 @@ window.parent.postMessage({
 }, "*");
 ```
 
-Common methods: `pluginApi`, `getSettings`, `updatePluginSettings`, `listPluginSecrets`, `setPluginSecret`, `deletePluginSecret`, `listPluginDeliveries`, `getPluginDelivery`, `startTask`, `readArticles`, `getArticleState`, `recordArticleAction`, `getArticleExplanation`, and `openArticle`.
+Common methods: `pluginApi`, `getAuthSession`, `getSettings`, `updatePluginSettings`, `listPluginSecrets`, `setPluginSecret`, `deletePluginSecret`, `listPluginDeliveries`, `getPluginDelivery`, `startTask`, `readArticles`, `getArticleState`, `recordArticleAction`, `getArticleExplanation`, and `openArticle`.
 
 The host validates iframe source, `pluginId`, and `requestId`.
 

@@ -1,25 +1,29 @@
-const CACHE_VERSION = "dibao-pwa-v2";
+const CACHE_VERSION = "dibao-pwa-v3";
 const APP_SHELL_CACHE = `${CACHE_VERSION}:app-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}:runtime`;
 
-const APP_SHELL_URLS = [
-  "/",
-  "/index.html",
-  "/site.webmanifest",
+const PUBLIC_ICON_URLS = [
   "/logo.svg",
+  "/logo-16.png",
+  "/logo-32.png",
+  "/logo-48.png",
+  "/logo-64.png",
   "/logo-192.png",
   "/logo-512.png",
   "/apple-touch-icon.png",
   "/favicon.ico"
 ];
 
+const APP_SHELL_URLS = [
+  "/",
+  "/index.html",
+  "/site.webmanifest",
+  ...PUBLIC_ICON_URLS
+];
+
 const STATIC_PATHS = new Set([
   "/site.webmanifest",
-  "/logo.svg",
-  "/logo-192.png",
-  "/logo-512.png",
-  "/apple-touch-icon.png",
-  "/favicon.ico"
+  ...PUBLIC_ICON_URLS
 ]);
 
 self.addEventListener("install", (event) => {

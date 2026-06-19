@@ -3782,6 +3782,8 @@ async function handlePluginBridgeRequest(
 ): Promise<unknown> {
   const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
   switch (method) {
+    case "getAuthSession":
+      return await dibaoApi.getAuthSession();
     case "getSettings":
       return await dibaoApi.getPluginSettings(plugin.id);
     case "updatePluginSettings":

@@ -156,7 +156,7 @@ window.parent.postMessage({
 }, "*");
 ```
 
-主な methods: `pluginApi`、`getSettings`、`updatePluginSettings`、`listPluginSecrets`、`setPluginSecret`、`deletePluginSecret`、`listPluginDeliveries`、`getPluginDelivery`、`startTask`、`readArticles`、`getArticleState`、`recordArticleAction`、`getArticleExplanation`、`openArticle`。
+主な methods: `pluginApi`、`getAuthSession`、`getSettings`、`updatePluginSettings`、`listPluginSecrets`、`setPluginSecret`、`deletePluginSecret`、`listPluginDeliveries`、`getPluginDelivery`、`startTask`、`readArticles`、`getArticleState`、`recordArticleAction`、`getArticleExplanation`、`openArticle`。
 
 host は iframe source、`pluginId`、`requestId` を検証します。
 

@@ -15,6 +15,8 @@ describe("FullContentExtractionService", () => {
               <article>
                 <h1>Article Heading</h1>
                 <p>First useful paragraph for the article body.</p>
+                <pre><code>const value = 1;
+  console.log(value);</code></pre>
                 <p>Second useful paragraph with enough text.</p>
               </article>
               <footer>footer noise</footer>
@@ -29,7 +31,9 @@ describe("FullContentExtractionService", () => {
     expect(result.status).toBe("success");
     expect(result.title).toBe("Fixture Title");
     expect(result.contentText).toContain("First useful paragraph");
+    expect(result.contentText).toContain("const value = 1;\n  console.log(value);");
     expect(result.contentHtml).toContain("<p>First useful paragraph");
+    expect(result.contentHtml).toContain("<pre>const value = 1;\n  console.log(value);</pre>");
     expect(result.contentHtml).not.toContain("script");
     expect(result.contentHtml).not.toContain("navigation noise");
   });
