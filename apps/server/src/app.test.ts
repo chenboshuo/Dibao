@@ -2196,6 +2196,69 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("keeps official plugins enabled after transient hook timeouts", async () => {
+    const db = createEmptyDatabase();
+    const plugins = new SqlitePluginRepository(db);
+    const officialPluginsDir = createTempDir();
+    const pluginDataDir = createTempDir();
+    const pluginDir = join(officialPluginsDir, "app.dibao.timeout-test");
+    mkdirSync(join(pluginDir, "server"), { recursive: true });
+    writeFileSync(
+      join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        manifestVersion: 1,
+        id: "app.dibao.timeout-test",
+        name: "Timeout Test",
+        version: "1.0.0",
+        publisher: "Dibao",
+        dibao: { minVersion: "0.1.0", maxVersion: "<0.3.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [],
+        contributes: { hooks: ["settings.afterUpdated"] }
+      })
+    );
+    writeFileSync(
+      join(pluginDir, "server/index.mjs"),
+      [
+        "export default {",
+        "  activate(ctx) {",
+        "    ctx.hooks.on('settings.afterUpdated', async () => new Promise(() => {}));",
+        "  }",
+        "};"
+      ].join("\n")
+    );
+    const app = buildServer({
+      db,
+      logger: false,
+      officialPluginsDir,
+      pluginDataDir
+    });
+
+    try {
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/app.dibao.timeout-test/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+
+      const changed = await injectJson(app, "PATCH", "/api/settings", {
+        reader: { fontSize: 20 }
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+
+      expect(plugins.findInstall("app.dibao.timeout-test")).toMatchObject({
+        status: "enabled",
+        lastError: null
+      });
+      expect(plugins.getKv("app.dibao.timeout-test", "hook:settings.afterUpdated:lastError")).toMatchObject({
+        hook: "settings.afterUpdated",
+        error: "Plugin hook timed out: settings.afterUpdated"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("updates Daily Brief settings, schedules, topic filters, and readable summaries", async () => {
     const db = createFixtureDatabase();
     const embeddings = createActiveEmbeddingDiagnosticsFixture(db, {

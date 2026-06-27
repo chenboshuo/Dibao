@@ -562,7 +562,19 @@ export class PluginService {
           this.now()
         );
       } catch (error) {
-        this.options.plugins.setStatus(install.id, "failed", errorMessage(error), this.now());
+        const message = errorMessage(error);
+        if (install.official && isTransientPluginInvocationError(message)) {
+          const failedAt = this.now();
+          this.options.plugins.setKv(
+            install.id,
+            `hook:${hook}:lastError`,
+            { hook, failedAt, error: redactText(message) },
+            failedAt
+          );
+          this.disposeRuntime(install.id);
+          continue;
+        }
+        this.options.plugins.setStatus(install.id, "failed", message, this.now());
         this.disposeRuntime(install.id);
       }
     }
@@ -3285,6 +3297,10 @@ function isSensitiveHeader(name: string): boolean {
 
 function redactText(value: string): string {
   return value.replace(/(authorization|api[-_]?key|token|secret|signature)(["'\s:=]+)([^"',\s]+)/giu, "$1$2[redacted]");
+}
+
+function isTransientPluginInvocationError(message: string): boolean {
+  return /\bPlugin (?:hook|host call) timed out\b/u.test(message);
 }
 
 function readBooleanEnv(name: string): boolean | undefined {
