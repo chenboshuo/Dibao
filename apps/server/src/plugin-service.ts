@@ -3300,7 +3300,12 @@ function redactText(value: string): string {
 }
 
 function isTransientPluginInvocationError(message: string): boolean {
-  return /\bPlugin (?:hook|host call) timed out\b/u.test(message);
+  return (
+    /\bPlugin (?:hook|host call) timed out\b/u.test(message) ||
+    message === "Plugin host stopped" ||
+    message === "Plugin host is not running" ||
+    message.startsWith("Plugin host is not accepting messages:")
+  );
 }
 
 function readBooleanEnv(name: string): boolean | undefined {

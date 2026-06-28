@@ -2238,10 +2238,16 @@ describe("server API vertical slice", () => {
       const enabled = await app.inject({ method: "POST", url: "/api/plugins/app.dibao.timeout-test/enable" });
       expect(enabled.statusCode, enabled.body).toBe(200);
 
-      const changed = await injectJson(app, "PATCH", "/api/settings", {
-        reader: { fontSize: 20 }
-      });
+      const [changed, changedAgain] = await Promise.all([
+        injectJson(app, "PATCH", "/api/settings", {
+          reader: { fontSize: 20 }
+        }),
+        injectJson(app, "PATCH", "/api/settings", {
+          reader: { fontSize: 21 }
+        })
+      ]);
       expect(changed.statusCode, changed.body).toBe(200);
+      expect(changedAgain.statusCode, changedAgain.body).toBe(200);
 
       await new Promise((resolve) => setTimeout(resolve, 2200));
 
@@ -2251,7 +2257,7 @@ describe("server API vertical slice", () => {
       });
       expect(plugins.getKv("app.dibao.timeout-test", "hook:settings.afterUpdated:lastError")).toMatchObject({
         hook: "settings.afterUpdated",
-        error: "Plugin hook timed out: settings.afterUpdated"
+        error: expect.stringMatching(/^Plugin (?:hook timed out: settings\.afterUpdated|host stopped)$/u)
       });
     } finally {
       await app.close();
