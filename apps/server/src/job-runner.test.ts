@@ -34,6 +34,7 @@ import {
 } from "./feed-refresh-job-service.js";
 import { FeedRefreshService, type FeedFetcher } from "./feed-refresh-service.js";
 import { DeferredJobRun, JobRunner } from "./job-runner.js";
+import { JobHistoryCleanupScheduler } from "./job-history-cleanup-scheduler.js";
 import {
   ProfileDecayJobService,
   PROFILE_DECAY_JOB_TYPE
@@ -43,6 +44,8 @@ import {
   RankingRecalculateJobService,
   RANKING_RECALCULATE_CHUNK_DELAY_MS,
   RANKING_RECALCULATE_CHUNK_SIZE,
+  RANKING_RECALCULATE_MAX_CHUNK_SIZE,
+  RANKING_RECALCULATE_MIN_CHUNK_SIZE,
   RANKING_RECALCULATE_JOB_TYPE
 } from "./ranking-job-service.js";
 import { RecommendationRankingService } from "./ranking-service.js";
@@ -143,6 +146,210 @@ describe("job runner foundation", () => {
         status: "succeeded",
         attempts: 1,
         error: null
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("limits each drain pass when maxJobsPerDrain is configured", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    const calls: string[] = [];
+
+    try {
+      for (const id of ["job_1", "job_2", "job_3"]) {
+        jobs.enqueue({
+          id,
+          type: "feed_refresh",
+          payloadJson: JSON.stringify({ feedId: id }),
+          maxAttempts: 1,
+          runAfter: 1000,
+          now: 1000
+        });
+      }
+
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          feed_refresh: (job) => {
+            calls.push(job.id);
+          }
+        },
+        maxJobsPerDrain: 2,
+        now: () => 2000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(2);
+      expect(calls).toEqual(["job_1", "job_2"]);
+      expect(jobs.findById("job_1")).toMatchObject({ status: "succeeded" });
+      expect(jobs.findById("job_2")).toMatchObject({ status: "succeeded" });
+      expect(jobs.findById("job_3")).toMatchObject({ status: "queued" });
+
+      await expect(runner.drainDue()).resolves.toBe(1);
+      expect(calls).toEqual(["job_1", "job_2", "job_3"]);
+      expect(jobs.findById("job_3")).toMatchObject({ status: "succeeded" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps polling for jobs enqueued after start by another database connection", async () => {
+    const databasePath = tempDatabasePath();
+    const workerDb = openDatabase(databasePath, { migrate: true });
+    const writerDb = openDatabase(databasePath);
+    const workerJobs = new SqliteJobRepository(workerDb);
+    const writerJobs = new SqliteJobRepository(writerDb);
+    const calls: string[] = [];
+    const events: string[] = [];
+    const runner = new JobRunner({
+      jobs: workerJobs,
+      handlers: {
+        feed_refresh: (job) => {
+          calls.push(job.id);
+        }
+      },
+      pollIntervalMs: 20,
+      now: () => Date.now(),
+      onEvent: (event) => {
+        events.push(`${event.event}:${event.job.id}`);
+      }
+    });
+
+    try {
+      runner.start();
+      const now = Date.now();
+      writerJobs.enqueue({
+        id: "job_cross_connection",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_cross_connection" }),
+        maxAttempts: 1,
+        runAfter: now,
+        now
+      });
+
+      await waitUntil(() => writerJobs.findById("job_cross_connection")?.status === "succeeded");
+      expect(calls).toEqual(["job_cross_connection"]);
+      expect(events).toEqual([
+        "claimed:job_cross_connection",
+        "succeeded:job_cross_connection"
+      ]);
+    } finally {
+      runner.stop();
+      writerDb.close();
+      workerDb.close();
+    }
+  });
+
+  it("continues draining immediately when a started runner hits its per-pass job limit", async () => {
+    const databasePath = tempDatabasePath();
+    const workerDb = openDatabase(databasePath, { migrate: true });
+    const writerDb = openDatabase(databasePath);
+    const workerJobs = new SqliteJobRepository(workerDb);
+    const writerJobs = new SqliteJobRepository(writerDb);
+    const calls: string[] = [];
+    const runner = new JobRunner({
+      jobs: workerJobs,
+      handlers: {
+        feed_refresh: (job) => {
+          calls.push(job.id);
+          if (job.id === "job_5" && !writerJobs.findById("job_cross_connection_late")) {
+            const now = Date.now();
+            writerJobs.enqueue({
+              id: "job_cross_connection_late",
+              type: "feed_refresh",
+              payloadJson: JSON.stringify({ feedId: "feed_cross_connection_late" }),
+              maxAttempts: 1,
+              runAfter: now,
+              now
+            });
+          }
+        }
+      },
+      maxJobsPerDrain: 5,
+      pollIntervalMs: 60_000,
+      now: () => Date.now()
+    });
+
+    try {
+      const now = Date.now();
+      for (let index = 1; index <= 10; index += 1) {
+        writerJobs.enqueue({
+          id: `job_${index}`,
+          type: "feed_refresh",
+          payloadJson: JSON.stringify({ feedId: `feed_${index}` }),
+          maxAttempts: 1,
+          runAfter: now,
+          now
+        });
+      }
+
+      runner.start();
+
+      await waitUntil(
+        () => writerJobs.findById("job_cross_connection_late")?.status === "succeeded",
+        1000
+      );
+      expect(calls).toEqual([
+        "job_1",
+        "job_10",
+        "job_2",
+        "job_3",
+        "job_4",
+        "job_5",
+        "job_6",
+        "job_7",
+        "job_8",
+        "job_9",
+        "job_cross_connection_late"
+      ]);
+    } finally {
+      runner.stop();
+      writerDb.close();
+      workerDb.close();
+    }
+  });
+
+  it("defers a job before handler execution when the runner gate asks for quiet time", async () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    let handlerCalled = false;
+
+    try {
+      jobs.enqueue({
+        id: "job_quiet_window",
+        type: "ranking_recalculate",
+        payloadJson: null,
+        maxAttempts: 3,
+        runAfter: 1000,
+        now: 1000
+      });
+
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          ranking_recalculate: () => {
+            handlerCalled = true;
+          }
+        },
+        beforeRun: (job) =>
+          job.type === "ranking_recalculate"
+            ? {
+                run: false,
+                deferUntil: 32_000,
+                reason: "foreground quiet window"
+              }
+            : { run: true },
+        now: () => 2000
+      });
+
+      await expect(runner.runDueOnce()).resolves.toMatchObject({ id: "job_quiet_window" });
+      expect(handlerCalled).toBe(false);
+      expect(jobs.findById("job_quiet_window")).toMatchObject({
+        status: "queued",
+        attempts: 0,
+        runAfter: 32_000,
+        error: "foreground quiet window"
       });
     } finally {
       db.close();
@@ -884,9 +1091,7 @@ describe("job runner foundation", () => {
       expect(seenTexts[0]).toHaveLength(4000);
       expect(seenTexts[1]).toHaveLength(2000);
       expect(jobs.findById(job.id)).toMatchObject({ status: "succeeded" });
-      expect(countRows(db, "article_embeddings", "article_ollama_context_retry")).toBe(
-        1
-      );
+      expect(countRows(db, "article_embeddings", "article_ollama_context_retry")).toBe(1);
     } finally {
       db.close();
     }
@@ -1006,6 +1211,86 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("deletes only old finished job history and keeps open or referenced jobs", () => {
+    const db = createEmptyDatabase();
+    const jobs = new SqliteJobRepository(db);
+    const day = 24 * 60 * 60 * 1000;
+    const cutoff = 30 * day;
+
+    try {
+      enqueueFeedJob(jobs, "job_old_succeeded", 1);
+      jobs.claimById("job_old_succeeded", 2);
+      jobs.markSucceeded("job_old_succeeded", 5 * day);
+
+      enqueueFeedJob(jobs, "job_old_failed", 1);
+      jobs.claimById("job_old_failed", 2);
+      jobs.markFailed("job_old_failed", "failed fixture", 6 * day);
+
+      enqueueFeedJob(jobs, "job_old_cancelled", 1);
+      jobs.cancel("job_old_cancelled", "cancelled fixture", 7 * day);
+
+      enqueueFeedJob(jobs, "job_new_succeeded", 1);
+      jobs.claimById("job_new_succeeded", 2);
+      jobs.markSucceeded("job_new_succeeded", cutoff + 1);
+
+      enqueueFeedJob(jobs, "job_old_queued", 1);
+      enqueueFeedJob(jobs, "job_old_running", 1);
+      jobs.claimById("job_old_running", 2);
+
+      enqueueFeedJob(jobs, "job_referenced_succeeded", 1);
+      jobs.claimById("job_referenced_succeeded", 2);
+      jobs.markSucceeded("job_referenced_succeeded", 8 * day);
+      db.prepare(
+        `
+          insert into recommendation_maintenance_schedule_state (
+            task_key,
+            last_enqueued_at,
+            last_completed_at,
+            last_skipped_reason,
+            last_job_id,
+            updated_at
+          )
+          values (?, ?, ?, ?, ?, ?)
+        `
+      ).run("fixture_task", 8 * day, 8 * day, null, "job_referenced_succeeded", 8 * day);
+
+      expect(jobs.deleteFinishedBefore({ cutoff, limit: 10 })).toBe(3);
+      expect(jobs.findById("job_old_succeeded")).toBeNull();
+      expect(jobs.findById("job_old_failed")).toBeNull();
+      expect(jobs.findById("job_old_cancelled")).toBeNull();
+      expect(jobs.findById("job_new_succeeded")).toMatchObject({ status: "succeeded" });
+      expect(jobs.findById("job_old_queued")).toMatchObject({ status: "queued" });
+      expect(jobs.findById("job_old_running")).toMatchObject({ status: "running" });
+      expect(jobs.findById("job_referenced_succeeded")).toMatchObject({
+        status: "succeeded"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("cleans job history using the configured retention window", () => {
+    const day = 24 * 60 * 60 * 1000;
+    const calls: Array<{ cutoff: number; limit?: number }> = [];
+    const scheduler = new JobHistoryCleanupScheduler({
+      jobs: {
+        deleteFinishedBefore(input) {
+          calls.push(input);
+          return 4;
+        }
+      },
+      retentionDays: 30,
+      batchSize: 7,
+      now: () => 45 * day
+    });
+
+    expect(scheduler.runOnce()).toEqual({
+      cutoff: 15 * day,
+      deleted: 4
+    });
+    expect(calls).toEqual([{ cutoff: 15 * day, limit: 7 }]);
+  });
+
   it("continues active index backfill until remaining embedding candidates are covered", async () => {
     const fixture = createEmbeddingPipelineFixture();
     const { db, articles, embeddingJobs, jobs } = fixture;
@@ -1062,7 +1347,7 @@ describe("job runner foundation", () => {
     } finally {
       db.close();
     }
-  });
+  }, 30_000);
 
   it("retries retryable provider failures and permanently fails malformed provider responses", async () => {
     const retryable = createEmbeddingPipelineFixture();
@@ -1184,11 +1469,35 @@ describe("job runner foundation", () => {
     });
 
     scheduler.start();
+    expect(enqueued).toBe(0);
+    expect(drained).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
     scheduler.stop();
 
     expect(enqueued).toBe(1);
     expect(drained).toBe(1);
+  });
+
+  it("feed refresh scheduler honors an initial startup delay", async () => {
+    let enqueued = 0;
+    const scheduler = new FeedRefreshScheduler({
+      refreshJobs: {
+        enqueueDueFeeds: () => {
+          enqueued += 1;
+          return [minimalJob("job_delayed_startup")];
+        }
+      },
+      intervalMs: 60_000,
+      initialDelayMs: 25
+    });
+
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(enqueued).toBe(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    scheduler.stop();
+    expect(enqueued).toBe(1);
   });
 
   it("feed refresh jobs enqueue only feeds due for refresh", () => {
@@ -1320,8 +1629,9 @@ describe("job runner foundation", () => {
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job),
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          },
           [PROFILE_DECAY_JOB_TYPE]: (job) => profileDecayJobs.handleProfileDecayJob(job)
         },
         now: () => 1000
@@ -1378,14 +1688,16 @@ describe("job runner foundation", () => {
           }
         },
         jobIdFactory: () => `job_rank_${calls.length}_${randomFixtureId()}`,
-        now: () => now
+        now: () => now,
+        targetChunkMs: 0
       });
       rankingJobs.enqueueAll();
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job)
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
         },
         now: () => now
       });
@@ -1406,7 +1718,7 @@ describe("job runner foundation", () => {
     }
   });
 
-  it("clamps legacy full ranking chunks to the current chunk size", async () => {
+  it("clamps oversized legacy full ranking chunks to the maximum chunk size", async () => {
     const db = createEmptyDatabase();
     try {
       const jobs = new SqliteJobRepository(db);
@@ -1448,19 +1760,209 @@ describe("job runner foundation", () => {
       const runner = new JobRunner({
         jobs,
         handlers: {
-          [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-            rankingJobs.handleRankingRecalculateJob(job)
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
         },
         now: () => 1000
       });
 
       await expect(runner.drainDue()).resolves.toBe(1);
       expect(calls).toEqual([
-        { cursor: "cursor_legacy", limit: RANKING_RECALCULATE_CHUNK_SIZE }
+        { cursor: "cursor_legacy", limit: RANKING_RECALCULATE_MAX_CHUNK_SIZE }
       ]);
       expect(JSON.parse(jobs.findById("job_rank_legacy_next")?.payloadJson ?? "{}")).toEqual({
         cursor: "cursor_legacy_next",
+        limit: RANKING_RECALCULATE_MAX_CHUNK_SIZE
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps stale tiny full ranking chunk limits at the minimum chunk size", async () => {
+    const db = createEmptyDatabase();
+    try {
+      const jobs = new SqliteJobRepository(db);
+      const calls: Array<{ cursor: string | null; limit: number }> = [];
+      const rankingJobs = new RankingRecalculateJobService({
+        jobs,
+        ranking: {
+          recalculateArticle() {
+            return 1;
+          },
+          recalculateArticles(articleIds: string[]) {
+            return articleIds.length;
+          },
+          recalculateAll() {
+            return 0;
+          },
+          recalculateChunk(input: { cursor?: string | null; limit: number }) {
+            calls.push({
+              cursor: input.cursor ?? null,
+              limit: input.limit
+            });
+            return {
+              processed: input.limit,
+              nextCursor: null
+            };
+          }
+        },
+        jobIdFactory: () => "job_rank_tiny_next",
+        now: () => 1000
+      });
+      jobs.enqueue({
+        id: "job_rank_tiny",
+        type: RANKING_RECALCULATE_JOB_TYPE,
+        payloadJson: JSON.stringify({ cursor: "cursor_tiny", limit: 1 }),
+        maxAttempts: 2,
+        runAfter: 1000,
+        now: 1000
+      });
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
+        },
+        now: () => 1000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(1);
+      expect(calls).toEqual([
+        { cursor: "cursor_tiny", limit: RANKING_RECALCULATE_MIN_CHUNK_SIZE }
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("reschedules paused full ranking chunks after the foreground quiet window", async () => {
+    const db = createEmptyDatabase();
+    try {
+      const jobs = new SqliteJobRepository(db);
+      const chunks: Array<{ cursor: string | null; limit: number }> = [];
+      const rankingJobs = new RankingRecalculateJobService({
+        jobs,
+        ranking: {
+          recalculateArticle() {
+            return 1;
+          },
+          recalculateArticles(articleIds: string[]) {
+            return articleIds.length;
+          },
+          recalculateAll() {
+            return 0;
+          },
+          recalculateChunk(input: { cursor?: string | null; limit: number }) {
+            chunks.push({
+              cursor: input.cursor ?? null,
+              limit: input.limit
+            });
+            return {
+              processed: 0,
+              nextCursor: input.cursor ?? null,
+              paused: true,
+              resumeAfter: 42_000
+            };
+          }
+        },
+        jobIdFactory: () => "job_rank_resume",
+        now: () => 10_000
+      });
+      jobs.enqueue({
+        id: "job_rank_paused",
+        type: RANKING_RECALCULATE_JOB_TYPE,
+        payloadJson: null,
+        maxAttempts: 2,
+        runAfter: 10_000,
+        now: 10_000
+      });
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
+        },
+        now: () => 10_000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(1);
+      expect(chunks).toEqual([{ cursor: null, limit: RANKING_RECALCULATE_CHUNK_SIZE }]);
+      expect(jobs.findById("job_rank_paused")).toMatchObject({
+        status: "succeeded"
+      });
+      expect(jobs.findById("job_rank_resume")).toMatchObject({
+        status: "queued",
+        runAfter: 42_000
+      });
+      expect(JSON.parse(jobs.findById("job_rank_resume")?.payloadJson ?? "{}")).toEqual({
+        cursor: null,
         limit: RANKING_RECALCULATE_CHUNK_SIZE
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("shrinks time-budget paused full ranking chunks even when no article was written", async () => {
+    const db = createEmptyDatabase();
+    try {
+      const jobs = new SqliteJobRepository(db);
+      const rankingJobs = new RankingRecalculateJobService({
+        jobs,
+        ranking: {
+          recalculateArticle() {
+            return 1;
+          },
+          recalculateArticles(articleIds: string[]) {
+            return articleIds.length;
+          },
+          recalculateAll() {
+            return 0;
+          },
+          recalculateChunk() {
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < 5) {
+              // Keep the fixture deterministic enough for adaptive chunk sizing.
+            }
+            return {
+              processed: 0,
+              nextCursor: "cursor_slow",
+              paused: true,
+              pauseReason: "time_budget",
+              resumeAfter: 42_000
+            };
+          }
+        },
+        jobIdFactory: () => "job_rank_smaller",
+        now: () => 10_000,
+        targetChunkMs: 1
+      });
+      jobs.enqueue({
+        id: "job_rank_slow",
+        type: RANKING_RECALCULATE_JOB_TYPE,
+        payloadJson: JSON.stringify({ cursor: "cursor_slow", limit: 8 }),
+        maxAttempts: 2,
+        runAfter: 10_000,
+        now: 10_000
+      });
+      const runner = new JobRunner({
+        jobs,
+        handlers: {
+          [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+            rankingJobs.handleRankingRecalculateJob(job);
+          }
+        },
+        now: () => 10_000
+      });
+
+      await expect(runner.drainDue()).resolves.toBe(1);
+      expect(JSON.parse(jobs.findById("job_rank_smaller")?.payloadJson ?? "{}")).toEqual({
+        cursor: "cursor_slow",
+        limit: 4
       });
     } finally {
       db.close();
@@ -1604,10 +2106,38 @@ function randomFixtureId(): string {
   return String(fixtureId);
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await sleep(10);
+  }
+  expect(predicate()).toBe(true);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function tempDatabasePath(): string {
   const dir = mkdtempSync(join(tmpdir(), "dibao-server-jobs-"));
   tempDirs.push(dir);
   return join(dir, "dibao.sqlite");
+}
+
+function enqueueFeedJob(jobs: SqliteJobRepository, id: string, now: number): JobRow {
+  return jobs.enqueue({
+    id,
+    type: "feed_refresh",
+    payloadJson: JSON.stringify({ feedId: `feed_${id}` }),
+    maxAttempts: 3,
+    runAfter: now,
+    now
+  });
 }
 
 function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
@@ -1627,6 +2157,7 @@ function minimalJob(id: string): JobRow {
     error: null,
     attempts: 0,
     maxAttempts: 3,
+    priority: 0,
     runAfter: 1000,
     startedAt: null,
     finishedAt: null,

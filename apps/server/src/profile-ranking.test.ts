@@ -20,6 +20,10 @@ import { JobRunner } from "./job-runner.js";
 import { DerivedDataUpgradeService } from "./derived-data-upgrade-service.js";
 import { ProfileDecayJobService } from "./profile-decay-job-service.js";
 import {
+  BEHAVIOR_EVENT_PROJECT_JOB_TYPE,
+  BehaviorProjectionJobService
+} from "./behavior-projection-job-service.js";
+import {
   PROFILE_EVENT_PROCESS_JOB_TYPE,
   ProfileEventProcessJobService
 } from "./profile-event-job-service.js";
@@ -559,9 +563,10 @@ describe("profile algorithm and recommendation ranking", () => {
       });
 
       expect(response.statusCode, response.body).toBe(200);
-      expect(response.json().data.eventId).toBeUndefined();
+      expect(response.json().data.eventId).toEqual(expect.any(String));
       await waitForDeferredPostActionWork();
-      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(1);
+      expect(jobs.countByTypeAndStatus(BEHAVIOR_EVENT_PROJECT_JOB_TYPE, "queued")).toBe(1);
+      expect(jobs.countByTypeAndStatus(RANKING_RECALCULATE_JOB_TYPE, "queued")).toBe(0);
       expect(activeScore(db, "article_similar")).toBeNull();
 
       await drainProfileAndRankingJobs(db, 5000);
@@ -646,6 +651,70 @@ describe("profile algorithm and recommendation ranking", () => {
       });
     } finally {
       db.close();
+    }
+  });
+
+  it("pauses full ranking chunks at a safe cursor when foreground activity resumes", () => {
+    const fixture = createProfileFixture();
+    try {
+      const ranking = new RecommendationRankingService({
+        embeddings: fixture.embeddings,
+        profiles: fixture.profiles,
+        rankings: fixture.rankings,
+        shouldPause: ({ processed }) =>
+          processed >= 1
+            ? { pause: true, resumeAfter: 8_000 }
+            : { pause: false },
+        now: () => 5_000
+      });
+
+      const result = ranking.recalculateChunk({
+        cursor: null,
+        limit: 3
+      });
+
+      expect(result).toMatchObject({
+        processed: 1,
+        nextCursor: "article_liked",
+        paused: true,
+        resumeAfter: 8_000
+      });
+      expect(activeScore(fixture.db, "article_liked")).not.toBeNull();
+      expect(activeScore(fixture.db, "article_other")).toBeNull();
+      expect(activeScore(fixture.db, "article_similar")).toBeNull();
+    } finally {
+      fixture.db.close();
+    }
+  });
+
+  it("does not commit or advance a ranking chunk when foreground activity resumes before writeback", () => {
+    const fixture = createProfileFixture();
+    try {
+      const ranking = new RecommendationRankingService({
+        embeddings: fixture.embeddings,
+        profiles: fixture.profiles,
+        rankings: fixture.rankings,
+        shouldPause: ({ processed }) =>
+          processed >= 1
+            ? { pause: true, resumeAfter: 8_000 }
+            : { pause: false },
+        now: () => 5_000
+      });
+
+      const result = ranking.recalculateChunk({
+        cursor: null,
+        limit: 1
+      });
+
+      expect(result).toMatchObject({
+        processed: 0,
+        nextCursor: null,
+        paused: true,
+        resumeAfter: 8_000
+      });
+      expect(activeScore(fixture.db, "article_liked")).toBeNull();
+    } finally {
+      fixture.db.close();
     }
   });
 
@@ -1617,6 +1686,7 @@ describe("profile algorithm and recommendation ranking", () => {
         error: null,
         attempts: 1,
         maxAttempts: 1,
+        priority: 0,
         runAfter: 0,
         startedAt: null,
         finishedAt: null,
@@ -1634,6 +1704,7 @@ describe("profile algorithm and recommendation ranking", () => {
         error: null,
         attempts: 1,
         maxAttempts: 1,
+        priority: 0,
         runAfter: 0,
         startedAt: null,
         finishedAt: null,
@@ -1866,6 +1937,7 @@ function createProfileFixture() {
     jobs,
     profile,
     profiles,
+    rankings,
     ranking,
     vectorStore
   };
@@ -2236,16 +2308,28 @@ async function drainJobs(
     rankingJobs,
     now: () => now
   });
+  const behaviorProjectionJobs = new BehaviorProjectionJobService({
+    db,
+    jobs,
+    profile,
+    rankingJobs,
+    now: () => now
+  });
   const runner = new JobRunner({
     jobs,
     handlers: {
       ...(includeProfileEvents
         ? {
+            [BEHAVIOR_EVENT_PROJECT_JOB_TYPE]: (job) => {
+              behaviorProjectionJobs.handleBehaviorEventProjectJob(job);
+            },
             [PROFILE_EVENT_PROCESS_JOB_TYPE]: (job) =>
               profileEventJobs.handleProfileEventProcessJob(job)
           }
         : {}),
-      [RANKING_RECALCULATE_JOB_TYPE]: (job) => rankingJobs.handleRankingRecalculateJob(job)
+      [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+        rankingJobs.handleRankingRecalculateJob(job);
+      }
     },
     now: () => now
   });
@@ -2333,6 +2417,7 @@ function maintenanceJob(type: Parameters<RecommendationMaintenanceService["handl
     error: null,
     attempts: 1,
     maxAttempts: 1,
+    priority: 0,
     runAfter: 0,
     startedAt: null,
     finishedAt: null,

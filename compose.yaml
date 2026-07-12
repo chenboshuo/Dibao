@@ -13,5 +13,6 @@ services:
       DIBAO_PORT: "8080"
       DIBAO_DATABASE_PATH: /data/dibao.sqlite
       DIBAO_COOKIE_SECURE: "false"
+      DIBAO_SQLITE_JOURNAL_MODE: DELETE
     volumes:
       - ./data:/data

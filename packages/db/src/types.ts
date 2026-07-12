@@ -49,11 +49,12 @@ export type FeedListInput = {
   enabled?: boolean;
 };
 
-export type JobType =
+export type CoreJobType =
   | "feed_refresh"
   | "content_extract"
   | "embedding_generate"
   | "profile_event_process"
+  | "behavior_event_project"
   | "ranking_recalculate"
   | "profile_decay"
   | "retention_cleanup"
@@ -70,6 +71,10 @@ export type JobType =
   | "interest_cluster_auto_merge"
   | "interest_family_rebuild";
 
+export type PluginJobType = `plugin:${string}:${string}`;
+
+export type JobType = CoreJobType | PluginJobType;
+
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export type JobRow = {
@@ -80,6 +85,7 @@ export type JobRow = {
   error: string | null;
   attempts: number;
   maxAttempts: number;
+  priority: number;
   runAfter: number;
   startedAt: number | null;
   finishedAt: number | null;
@@ -98,7 +104,170 @@ export type EnqueueJobInput = {
   type: JobType;
   payloadJson?: string | null;
   maxAttempts?: number;
+  priority?: number;
   runAfter?: number;
+  now?: number;
+};
+
+export type PluginSourceType = "official" | "local_file" | "url" | "github_release" | "registry";
+export type PluginInstallStatus =
+  | "installed"
+  | "enabled"
+  | "disabled"
+  | "incompatible"
+  | "failed";
+export type PluginTrustLevel = "official" | "trusted" | "untrusted";
+
+export type PluginInstallRow = {
+  id: string;
+  version: string;
+  sourceType: PluginSourceType;
+  sourceUrl: string | null;
+  updateUrl: string | null;
+  packagePath: string | null;
+  dataPath: string | null;
+  manifestJson: string;
+  status: PluginInstallStatus;
+  official: boolean;
+  bundled: boolean;
+  trustLevel: PluginTrustLevel;
+  installedAt: number;
+  updatedAt: number;
+  enabledAt: number | null;
+  disabledAt: number | null;
+  lastError: string | null;
+};
+
+export type UpsertPluginInstallInput = {
+  id: string;
+  version: string;
+  sourceType: PluginSourceType;
+  sourceUrl?: string | null;
+  updateUrl?: string | null;
+  packagePath?: string | null;
+  dataPath?: string | null;
+  manifestJson: string;
+  status: PluginInstallStatus;
+  official?: boolean;
+  bundled?: boolean;
+  trustLevel: PluginTrustLevel;
+  lastError?: string | null;
+  now?: number;
+};
+
+export type PluginUpdateCheckRow = {
+  pluginId: string;
+  latestVersion: string | null;
+  updateUrl: string | null;
+  packageUrl: string | null;
+  checksum: string | null;
+  metadataJson: string | null;
+  checkedAt: number;
+  error: string | null;
+};
+
+export type UpsertPluginUpdateCheckInput = {
+  pluginId: string;
+  latestVersion?: string | null;
+  updateUrl?: string | null;
+  packageUrl?: string | null;
+  checksum?: string | null;
+  metadataJson?: string | null;
+  error?: string | null;
+  now?: number;
+};
+
+export type PluginSecretRow = {
+  pluginId: string;
+  key: string;
+  ciphertext: string;
+  hint: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type PluginSecretMetadata = {
+  pluginId: string;
+  key: string;
+  hasValue: boolean;
+  hint: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type UpsertPluginSecretInput = {
+  pluginId: string;
+  key: string;
+  ciphertext: string;
+  hint?: string | null;
+  now?: number;
+};
+
+export type PluginDeliveryStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type PluginDeliveryMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export type PluginDeliveryRow = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryStatus;
+  method: PluginDeliveryMethod;
+  url: string;
+  requestJson: string;
+  responseJson: string | null;
+  error: string | null;
+  idempotencyKey: string | null;
+  jobId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+};
+
+export type UpsertPluginDeliveryInput = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryStatus;
+  method: PluginDeliveryMethod;
+  url: string;
+  requestJson: string;
+  responseJson?: string | null;
+  error?: string | null;
+  idempotencyKey?: string | null;
+  jobId?: string | null;
+  finishedAt?: number | null;
+  now?: number;
+};
+
+export type PluginDeliveryListInput = {
+  pluginId: string;
+  status?: PluginDeliveryStatus;
+  limit?: number;
+};
+
+export type PluginDeliveryAttemptStatus = "running" | "succeeded" | "failed";
+
+export type PluginDeliveryAttemptRow = {
+  id: string;
+  deliveryId: string;
+  attempt: number;
+  status: PluginDeliveryAttemptStatus;
+  statusCode: number | null;
+  durationMs: number | null;
+  requestJson: string;
+  responseJson: string | null;
+  error: string | null;
+  createdAt: number;
+};
+
+export type InsertPluginDeliveryAttemptInput = {
+  id: string;
+  deliveryId: string;
+  attempt: number;
+  status: PluginDeliveryAttemptStatus;
+  statusCode?: number | null;
+  durationMs?: number | null;
+  requestJson: string;
+  responseJson?: string | null;
+  error?: string | null;
   now?: number;
 };
 
@@ -246,8 +415,10 @@ export type ArticleListInput = {
   todayEndAt?: number;
   limit?: number;
   offset?: number;
+  cursor?: ArticleListCursor;
   rankContext?: string;
   sort?: ArticleListSort;
+  includeUnreadCount?: boolean;
 };
 
 export type ArticleSearchState = "all" | "unread" | "read" | "favorites" | "read_later";
@@ -256,6 +427,7 @@ export type ArticleSearchSort = "relevance" | "recommended" | "latest";
 
 export type ArticleSearchInput = {
   query: string;
+  scope?: "default" | "full_text";
   feedId?: string;
   folderId?: string;
   from?: number;
@@ -265,7 +437,46 @@ export type ArticleSearchInput = {
   limit?: number;
   offset?: number;
   rankContext?: string;
+  includeUnreadCount?: boolean;
 };
+
+export type ArticleListCursor =
+  | {
+      type: "offset";
+      offset: number;
+    }
+  | {
+      type: "recommended";
+      rankMissing?: number;
+      rerankMissing?: number;
+      rerankPosition?: number | null;
+      score?: number | null;
+      publishedAt: number;
+      id: string;
+    }
+  | {
+      type: "latest";
+      publishedAt: number;
+      id: string;
+    }
+  | {
+      type: "favorites";
+      sort: ArticleFavoriteSort;
+      favoritedAt?: number;
+      publishedAt: number;
+      id: string;
+    }
+  | {
+      type: "read_later";
+      sort: ArticleReadLaterSort;
+      rankMissing?: number;
+      rerankMissing?: number;
+      rerankPosition?: number | null;
+      score?: number | null;
+      readLaterAt?: number;
+      publishedAt: number;
+      id: string;
+    };
 
 export type ReaderCommandType = "mark_scope_read";
 
@@ -567,6 +778,7 @@ export type InterestFamilyRow = {
   embeddingIndexId: string;
   polarity: InterestClusterPolarity;
   displayLabel: string;
+  manualLabel: string | null;
   centroidVectorBlob: Buffer;
   weight: number;
   clusterCount: number;
@@ -769,7 +981,19 @@ export type ArticleDetailRow = ArticleListItemRow & {
 export type ArticleListResult = {
   items: ArticleListItemRow[];
   nextOffset: number | null;
-  unreadCount: number;
+  nextCursor?: ArticleListCursor | null;
+  unreadCount: number | null;
+  timing?: ArticleListTiming;
+};
+
+export type ArticleListTiming = {
+  unreadCountMs: number;
+  rankCandidateMs: number;
+  unrankedCandidateMs: number;
+  hydrateMs: number;
+  pageQueryMs: number;
+  mapMs: number;
+  totalMs: number;
 };
 
 export type UpsertArticleInput = {
@@ -942,4 +1166,32 @@ export type ArticleEmbeddingCandidateRow = {
   summary: string | null;
   contentText: string | null;
   contentHash: string;
+};
+
+export type PluginScheduleRow = {
+  pluginId: string;
+  taskId: string;
+  enabled: boolean;
+  schedule: "manual" | "interval" | "daily" | "weekly";
+  intervalMs: number | null;
+  localTime: string | null;
+  timezone: string | null;
+  nextRunAt: number | null;
+  lastRunAt: number | null;
+  lastJobId: string | null;
+  updatedAt: number;
+};
+
+export type UpsertPluginScheduleInput = {
+  pluginId: string;
+  taskId: string;
+  enabled: boolean;
+  schedule: PluginScheduleRow["schedule"];
+  intervalMs?: number | null;
+  localTime?: string | null;
+  timezone?: string | null;
+  nextRunAt?: number | null;
+  lastRunAt?: number | null;
+  lastJobId?: string | null;
+  now?: number;
 };

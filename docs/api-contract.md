@@ -2463,6 +2463,155 @@ POST /api/recommendation/ftrl/promote
 
 ## System
 
+## Plugins
+
+插件 API 用于管理官方和第三方插件。第三方插件安装后默认不启用；启用时执行兼容性、权限、manifest migrations 和 server entry 预激活检查。服务端插件运行在独立 Node host 子进程中，通过 JSON-RPC Host API 调用核心能力；Web 插件运行在 sandboxed iframe 中。
+
+插件开发文档：
+
+- [插件开发指南](./plugin-development.zh-CN.md)
+- [Plugin development guide](./plugin-development.en-US.md)
+- [プラグイン開発ガイド](./plugin-development.ja-JP.md)
+
+0.2 API 稳定层级：
+
+- Stable：manifest v1、安装/启停/更新、settings、storage、secrets、deliveries、tasks、基础 hooks、iframe bridge、manifest migrations。
+- Beta：`database.defineTable`、ranking、article snapshot/content、diagnostics/recommendation transparency 类能力。
+
+插件状态：
+
+```text
+installed
+enabled
+disabled
+incompatible
+failed
+```
+
+### GET /api/plugins
+
+返回已发现和已安装插件。
+
+响应：
+
+```json
+{
+  "data": [
+    {
+      "id": "dev.example.reader-tools",
+      "name": "Reader Tools",
+      "version": "0.1.0",
+      "publisher": "Example",
+      "status": "installed",
+      "sourceType": "local_file",
+      "sourceUrl": null,
+      "updateUrl": "https://example.com/latest.json",
+      "official": false,
+      "bundled": false,
+      "trustLevel": "untrusted",
+      "capabilities": ["articles:read"],
+      "grantedCapabilities": [],
+      "apiStability": {
+        "stable": ["iframe.bridge", "lifecycle.installEnableDisableUpdate", "manifest.v1"],
+        "beta": ["articles.snapshot"]
+      },
+      "contributes": {
+        "settingsTabs": [],
+        "tabs": [],
+        "actions": [],
+        "hooks": ["settings.afterUpdated"],
+        "tasks": []
+      },
+      "installedAt": "2026-05-31T00:00:00.000Z",
+      "updatedAt": "2026-05-31T00:00:00.000Z",
+      "enabledAt": null,
+      "disabledAt": null,
+      "lastError": null
+    }
+  ]
+}
+```
+
+### GET /api/plugins/catalog
+
+返回随 Release 分发的官方插件。
+
+### POST /api/plugins/install
+
+从 URL 或插件包 JSON 安装。
+
+请求：
+
+```json
+{
+  "url": "https://example.com/plugin.dibao-plugin",
+  "sha256": "optional"
+}
+```
+
+或：
+
+```json
+{
+  "package": "{\"manifest\":{\"manifestVersion\":1}}",
+  "sha256": "optional"
+}
+```
+
+### POST /api/plugins/install/upload
+
+上传 `.dibao-plugin` 文件安装，使用 `multipart/form-data` 或原始 JSON body。
+
+### POST /api/plugins/:id/enable
+
+启用插件。启用时会校验 Dibao 版本兼容性、应用 manifest migrations、写入 capability grants，并预激活 server entry。预激活失败时插件状态变为 `failed`，返回错误。
+
+### POST /api/plugins/:id/disable
+
+停用插件。停用插件不会删除插件数据；会停止运行时贡献点并取消 queued/running 插件任务。
+
+### POST /api/plugins/:id/update
+
+读取插件 `updateUrl`，执行 metadata 检查、checksum 校验和 staged update。失败时保留旧包。
+
+### DELETE /api/plugins/:id
+
+卸载第三方插件。官方插件不能卸载。
+
+查询参数：
+
+- `deleteData=true`: 同时删除 `/data/plugins/data/<plugin-id>`。
+
+### GET/PATCH /api/plugins/:id/settings
+
+读取或更新插件命名空间 settings。PATCH body 必须是 JSON object。
+
+### GET /api/plugins/:id/health
+
+返回插件兼容性、状态、错误、capability 和 task 摘要。
+
+### GET /api/plugins/:id/assets/*
+
+读取插件包内静态资源。第三方 rich UI 通过 sandboxed iframe 加载这里的 asset。HTML asset 会带插件 CSP，禁止直接网络连接和表单提交；插件 UI 必须通过 bridge 访问宿主。
+
+### POST /api/plugins/:id/tasks/:taskId
+
+启动插件任务，返回 core job row。插件任务类型格式：
+
+```text
+plugin:<pluginId>:<taskId>
+```
+
+如果插件缺失对应 handler，任务会被延后重试，表现为可恢复的 plugin-paused 语义，不作为普通永久失败。
+
+### GET /api/plugins/:id/tasks/:runId
+
+读取插件任务运行状态。
+
+### POST /api/plugins/:id/tasks/:runId/cancel
+
+取消 queued/running 插件任务，状态变为 `cancelled`。
+
 ### GET /api/system/health
 
 健康检查。

@@ -26,6 +26,7 @@ export default defineConfig({
     env: {
       DIBAO_BACKGROUND_JOBS: "false",
       DIBAO_COOKIE_SECURE: "false",
+      DIBAO_FETCH_ALLOW_PRIVATE: "true",
       DIBAO_DATABASE_PATH: resolve(".tmp/e2e/dibao.sqlite"),
       DIBAO_HOST: "127.0.0.1",
       DIBAO_PORT: String(port),

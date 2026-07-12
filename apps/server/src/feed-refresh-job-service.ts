@@ -113,23 +113,31 @@ export type FeedRefreshSchedulerOptions = {
   refreshJobs: Pick<FeedRefreshJobService, "enqueueDueFeeds">;
   runner?: Pick<JobRunner, "drainDue">;
   intervalMs?: number;
+  initialDelayMs?: number;
   onError?: (error: unknown) => void;
 };
 
 export class FeedRefreshScheduler {
   private readonly intervalMs: number;
+  private readonly initialDelayMs: number;
   private interval: ReturnType<typeof setInterval> | null = null;
+  private initialTick: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: FeedRefreshSchedulerOptions) {
     this.intervalMs = options.intervalMs ?? DEFAULT_FEED_REFRESH_INTERVAL_MS;
+    this.initialDelayMs = Math.max(0, Math.floor(options.initialDelayMs ?? 0));
   }
 
   start(): void {
-    if (this.interval || this.intervalMs <= 0) {
+    if (this.interval || this.initialTick || this.intervalMs <= 0) {
       return;
     }
 
-    void this.tick().catch((error) => this.options.onError?.(error));
+    this.initialTick = setTimeout(() => {
+      this.initialTick = null;
+      void this.tick().catch((error) => this.options.onError?.(error));
+    }, this.initialDelayMs);
+    this.initialTick.unref?.();
     this.interval = setInterval(() => {
       void this.tick().catch((error) => this.options.onError?.(error));
     }, this.intervalMs);
@@ -137,6 +145,10 @@ export class FeedRefreshScheduler {
   }
 
   stop(): void {
+    if (this.initialTick) {
+      clearTimeout(this.initialTick);
+      this.initialTick = null;
+    }
     if (!this.interval) {
       return;
     }

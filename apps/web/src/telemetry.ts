@@ -1,14 +1,22 @@
-import { dibaoSentryConfig, dibaoVersion, hasDibaoSentryDsn } from "@dibao/shared";
+import {
+  dibaoVersion,
+  hasDibaoSentryDsn,
+  normalizeDibaoSentryConfig,
+  type DibaoSentryConfig
+} from "@dibao/shared";
 
 const telemetryPreferenceKey = "dibao.telemetry.enabled";
 
 type SentryReact = typeof import("@sentry/react");
+
+declare const __DIBAO_SENTRY_CONFIG__: Partial<DibaoSentryConfig> | undefined;
 
 let telemetryEnabled = true;
 let sentrySdk: SentryReact | null = null;
 let sentryLoadPromise: Promise<SentryReact> | null = null;
 let sentryInitialized = false;
 let sentryInitializing = false;
+const clientSentryConfig = normalizeDibaoSentryConfig(readInjectedClientSentryConfig());
 
 export function readStoredTelemetryPreference(): boolean {
   try {
@@ -37,10 +45,10 @@ export function configureClientTelemetry(enabled: boolean): void {
     sentrySdk?.getReplay()?.start();
   }
 
-  if (!sentryInitialized && !sentryInitializing && telemetryEnabled && hasDibaoSentryDsn()) {
+  if (!sentryInitialized && !sentryInitializing && telemetryEnabled && hasDibaoSentryDsn(clientSentryConfig)) {
     const tracesSampleRate = import.meta.env.DEV
-      ? dibaoSentryConfig.devTracesSampleRate
-      : dibaoSentryConfig.tracesSampleRate;
+      ? clientSentryConfig.devTracesSampleRate
+      : clientSentryConfig.tracesSampleRate;
 
     sentryInitializing = true;
     void loadSentry().then((Sentry) => {
@@ -50,7 +58,7 @@ export function configureClientTelemetry(enabled: boolean): void {
       }
 
       Sentry.init({
-        dsn: dibaoSentryConfig.dsn,
+        dsn: clientSentryConfig.dsn,
         enabled: true,
         environment: import.meta.env.MODE,
         release: `dibao@${dibaoVersion}`,
@@ -63,8 +71,8 @@ export function configureClientTelemetry(enabled: boolean): void {
           })
         ],
         tracesSampler: () => (telemetryEnabled ? tracesSampleRate : 0),
-        replaysSessionSampleRate: dibaoSentryConfig.replaysSessionSampleRate,
-        replaysOnErrorSampleRate: dibaoSentryConfig.replaysOnErrorSampleRate,
+        replaysSessionSampleRate: clientSentryConfig.replaysSessionSampleRate,
+        replaysOnErrorSampleRate: clientSentryConfig.replaysOnErrorSampleRate,
         tracePropagationTargets: [/^\/api\//, window.location.origin],
         beforeSend: (event) => (telemetryEnabled ? event : null),
         beforeSendTransaction: (event) => (telemetryEnabled ? event : null)
@@ -86,4 +94,8 @@ function loadSentry(): Promise<SentryReact> {
   }
 
   return sentryLoadPromise;
+}
+
+function readInjectedClientSentryConfig(): Partial<DibaoSentryConfig> | undefined {
+  return typeof __DIBAO_SENTRY_CONFIG__ === "undefined" ? undefined : __DIBAO_SENTRY_CONFIG__;
 }

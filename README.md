@@ -13,10 +13,6 @@
 </p>
 
 <p align="center">
-  产品、设计、编码、营销：All by Codex。感谢 OpenAI。
-</p>
-
-<p align="center">
   <a href="./README.md">中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
   <a href="./README.en.md">English</a>
@@ -25,7 +21,7 @@
 <p align="center">
   <a href="https://github.com/Pls-1q43/Dibao"><img alt="GitHub repository" src="https://img.shields.io/badge/GitHub-Pls--1q43%2FDibao-111827?logo=github" /></a>
   <a href="./compose.yaml"><img alt="Docker Compose" src="https://img.shields.io/badge/Docker_Compose-ready-2563eb?logo=docker&logoColor=white" /></a>
-  <a href="./docs/release-notes-v0.1.3.md"><img alt="Release notes" src="https://img.shields.io/badge/release_notes-v0.1.3-2f6f5e" /></a>
+  <a href="./docs/release-notes-v0.2.1.md"><img alt="Release notes" src="https://img.shields.io/badge/release_notes-v0.2.1-2f6f5e" /></a>
 </p>
 
 ---
@@ -46,8 +42,8 @@
 - [备份与升级](#备份与升级)
 - [许可证](#许可证)
 - [常见问题](#常见问题)
-- [发布说明](./docs/release-notes-v0.1.3.md)
-- [Roadmap](./docs/roadmap.md)
+- [发布说明](./docs/release-notes-v0.2.1.md)
+- [Roadmap](https://github.com/users/Pls-1q43/projects/1)
 
 ### 它解决什么问题
 
@@ -248,7 +244,12 @@ Dibao 采用 [Business Source License 1.1](./LICENSE.md)（`BUSL-1.1`）实现 s
 | `DIBAO_PORT` | `8080` | Server 监听端口。 |
 | `DIBAO_DATABASE_PATH` | `/data/dibao.sqlite` | SQLite 数据库路径。 |
 | `DIBAO_COOKIE_SECURE` | `false` | HTTP/LAN 自托管可保持 `false`；HTTPS 反向代理后建议设为 `true`。 |
-| `DIBAO_BACKGROUND_JOBS` | `true` | 可设为 `false` 关闭后台 job runner，主要用于测试。 |
+| `DIBAO_BACKGROUND_JOBS` | `true` | Docker 默认启动独立 worker 进程执行后台任务；设为 `false` 可关闭 worker。直接运行 server 进程时，只有设为 `true` 才会在该进程内执行后台任务。 |
+| `DIBAO_JOB_RUNNER_MAX_JOBS_PER_DRAIN` | `5` | worker 每轮最多处理的 due jobs 数量，避免后台任务被单轮无限 drain，也避免吞吐退化到一次只跑一个 job。 |
+| `DIBAO_FOREGROUND_QUIET_WINDOW_MS` | `30000` | worker 检测到前台使用后的低优先级任务暂停窗口。 |
+| `DIBAO_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS` | `2000` | HTTP 进程写入前台活动时间的节流间隔。 |
+| `DIBAO_RANKING_TARGET_CHUNK_MS` | `2000` | 排序重算 chunk 的目标耗时，worker 会据此调整后续 chunk 大小。 |
+| `DIBAO_WORKER_CORE_MIGRATION_WAIT_MS` | `900000` | worker 等待 HTTP 进程完成 core schema migration 的最长时间；超时后容器失败并输出可提交 Issue 的诊断信息。 |
 | `DIBAO_FETCH_TIMEOUT_MS` | `15000` | RSS、发现、全文抓取的单次请求超时。 |
 | `DIBAO_FETCH_FEED_MAX_BYTES` | `5242880` | RSS/发现响应最大读取字节数。 |
 | `DIBAO_FETCH_FULL_CONTENT_MAX_BYTES` | `3145728` | 全文抓取响应最大读取字节数。 |
@@ -289,11 +290,10 @@ npm run smoke:docker-recommendation
 
 参考文档：
 
+- [公开文档索引](./docs/README.md)
 - [工程蓝图](./docs/engineering-blueprint.md)
 - [数据库 Schema](./docs/database-schema.md)
 - [API Contract](./docs/api-contract.md)
 - [Profile Algorithm v0 参数表](./docs/profile-algorithm-v0.md)
-- [sqlite-vec Node.js 集成验证](./docs/spikes/sqlite-vec-node.md)
-- [Ollama 测试指南](./docs/user-testing-ollama.md)
 
 </details>

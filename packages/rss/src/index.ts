@@ -174,10 +174,10 @@ function parseRssItem(item: XmlNode, feedUrl: string, index: number): ParsedFeed
   const title = childText(item, "title") ?? guid ?? `Untitled item ${index + 1}`;
   const url =
     normalizeMaybeUrl(childText(item, "link"), feedUrl) ??
-    normalizeMaybeUrl(guid, feedUrl) ??
+    normalizeMaybeUrl(guid, feedUrl, false) ??
     fallbackItemUrl(feedUrl, title, guid, index);
   const summary = childText(item, "description");
-  const contentHtml = childText(item, "content:encoded", "encoded", "content") ?? summary;
+  const contentHtml = childRawText(item, "content:encoded", "encoded", "content") ?? summary;
 
   return {
     title,
@@ -209,10 +209,10 @@ function parseAtomEntry(entry: XmlNode, feedUrl: string, index: number): ParsedF
   const title = childText(entry, "title") ?? guid ?? `Untitled entry ${index + 1}`;
   const url =
     atomLink(entry, feedUrl) ??
-    normalizeMaybeUrl(guid, feedUrl) ??
+    normalizeMaybeUrl(guid, feedUrl, false) ??
     fallbackItemUrl(feedUrl, title, guid, index);
   const summary = childText(entry, "summary");
-  const contentHtml = childText(entry, "content") ?? summary;
+  const contentHtml = childRawText(entry, "content") ?? summary;
   const author = findChild(entry, "author");
 
   return {
@@ -421,6 +421,18 @@ function childText(node: XmlNode, ...names: string[]): string | null {
   return null;
 }
 
+function childRawText(node: XmlNode, ...names: string[]): string | null {
+  for (const name of names) {
+    const child = findChild(node, name);
+    const text = child ? rawNodeText(child).trim() : null;
+    if (text) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
 function atomLink(node: XmlNode, feedUrl: string): string | null {
   const links = findChildren(node, "link");
   const preferred =
@@ -448,6 +460,13 @@ function nodeText(node: XmlNode): string {
   return text;
 }
 
+function rawNodeText(node: XmlNode): string {
+  return [
+    ...node.textParts,
+    ...node.children.map((child) => nodeText(child))
+  ].join("");
+}
+
 function sameXmlName(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase() || localName(left) === right.toLowerCase();
 }
@@ -456,13 +475,24 @@ function localName(name: string): string {
   return name.toLowerCase().split(":").pop() ?? name.toLowerCase();
 }
 
-function normalizeMaybeUrl(value: string | null | undefined, baseUrl: string): string | null {
+function normalizeMaybeUrl(
+  value: string | null | undefined,
+  baseUrl: string,
+  allowRelative = true
+): string | null {
   if (!value) {
     return null;
   }
 
   try {
-    const url = new URL(value.trim(), baseUrl);
+    const trimmed = value.trim();
+    if (!allowRelative && !/^[a-z][a-z0-9+.-]*:/iu.test(trimmed)) {
+      return null;
+    }
+    const url = new URL(trimmed, baseUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
     url.hash = "";
     url.username = "";
     url.password = "";
@@ -496,14 +526,53 @@ function htmlToText(value: string | null): string | null {
     return null;
   }
 
-  const text = decodeXmlEntities(value)
+  const preBlocks: string[] = [];
+  const preToken = (index: number) => `DIBAO_PRE_BLOCK_${index}`;
+  const html = value
     .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_match, inner: string) => {
+      const text = cleanPreText(inner);
+      if (!text) {
+        return " ";
+      }
+      const token = preToken(preBlocks.length);
+      preBlocks.push(text);
+      return ` ${token} `;
+    });
+
+  let text = decodeXmlEntities(html)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|section|article|li|ul|ol|blockquote|h[1-6])>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
+  for (const [index, block] of preBlocks.entries()) {
+    text = text.replace(preToken(index), `\n${block}\n`);
+  }
+  text = text
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
   return text || null;
+}
+
+function cleanPreText(value: string): string | null {
+  const text = decodeXmlEntities(
+    value
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|li|ul|ol|blockquote|h[1-6])>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+  )
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+
+  return text ? text : null;
 }
 
 function decodeXmlEntities(value: string): string {

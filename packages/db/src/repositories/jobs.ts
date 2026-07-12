@@ -15,6 +15,7 @@ type JobDbRow = {
   error: string | null;
   attempts: number;
   maxAttempts: number;
+  priority: number;
   runAfter: number;
   startedAt: number | null;
   finishedAt: number | null;
@@ -23,12 +24,17 @@ type JobDbRow = {
 };
 
 export interface JobRepository {
+  claimById(id: string, now: number): JobRow | null;
   claimNextDue(now: number): JobRow | null;
   countByTypeAndStatus(type: JobType, status: JobStatus): number;
+  deleteFinishedBefore(input: { cutoff: number; limit?: number }): number;
   enqueue(input: EnqueueJobInput): JobRow;
   findById(id: string): JobRow | null;
   list(input?: JobListInput): JobRow[];
   listOpenByType(type: JobType): JobRow[];
+  listOpenByTypePrefix(typePrefix: string): JobRow[];
+  cancelOpenByTypePrefix(typePrefix: string, error: string, now: number): number;
+  cancel(id: string, error: string, now: number): JobRow | null;
   defer(id: string, error: string, runAfter: number, now: number): JobRow | null;
   markFailed(id: string, error: string, now: number): JobRow | null;
   markFailedOrRetry(id: string, error: string, now: number, retryDelayMs: number): JobRow | null;
@@ -38,6 +44,30 @@ export interface JobRepository {
 
 export class SqliteJobRepository implements JobRepository {
   constructor(private readonly db: DibaoDatabase) {}
+
+  claimById(id: string, now: number): JobRow | null {
+    return this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `
+            update jobs
+            set
+              status = 'running',
+              attempts = attempts + 1,
+              started_at = ?,
+              finished_at = null,
+              updated_at = ?
+            where id = ?
+              and status = 'queued'
+              and run_after <= ?
+              and attempts < max_attempts
+          `
+        )
+        .run(now, now, id, now);
+
+      return result.changes > 0 ? this.findById(id) : null;
+    })();
+  }
 
   countByTypeAndStatus(type: JobType, status: JobStatus): number {
     const row = this.db
@@ -54,7 +84,34 @@ export class SqliteJobRepository implements JobRepository {
     return row?.count ?? 0;
   }
 
+  deleteFinishedBefore(input: { cutoff: number; limit?: number }): number {
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 5000), 1), 50_000);
+    const result = this.db
+      .prepare(
+        `
+          delete from jobs
+          where id in (
+            select j.id
+            from jobs j
+            where j.status in ('succeeded', 'failed', 'cancelled')
+              and coalesce(j.finished_at, j.updated_at) < ?
+              and not exists (
+                select 1
+                from recommendation_maintenance_schedule_state rms
+                where rms.last_job_id = j.id
+              )
+            order by coalesce(j.finished_at, j.updated_at), j.id
+            limit ?
+          )
+        `
+      )
+      .run(input.cutoff, limit);
+
+    return result.changes;
+  }
+
   claimNextDue(now: number): JobRow | null {
+    refreshWalVisibility(this.db);
     return this.db.transaction(() => {
       const candidate = this.db
         .prepare(
@@ -64,7 +121,7 @@ export class SqliteJobRepository implements JobRepository {
             where status = 'queued'
               and run_after <= ?
               and attempts < max_attempts
-            order by run_after, created_at, id
+            order by priority desc, run_after, created_at, id
             limit 1
           `
         )
@@ -99,6 +156,7 @@ export class SqliteJobRepository implements JobRepository {
     const now = input.now ?? Date.now();
     const runAfter = input.runAfter ?? now;
     const maxAttempts = input.maxAttempts ?? 3;
+    const priority = input.priority ?? 0;
 
     this.db
       .prepare(
@@ -111,16 +169,26 @@ export class SqliteJobRepository implements JobRepository {
             error,
             attempts,
             max_attempts,
+            priority,
             run_after,
             started_at,
             finished_at,
             created_at,
             updated_at
           )
-          values (?, ?, 'queued', ?, null, 0, ?, ?, null, null, ?, ?)
+          values (?, ?, 'queued', ?, null, 0, ?, ?, ?, null, null, ?, ?)
         `
       )
-      .run(input.id, input.type, input.payloadJson ?? null, maxAttempts, runAfter, now, now);
+      .run(
+        input.id,
+        input.type,
+        input.payloadJson ?? null,
+        maxAttempts,
+        priority,
+        runAfter,
+        now,
+        now
+      );
 
     const job = this.findById(input.id);
     if (!job) {
@@ -186,6 +254,59 @@ export class SqliteJobRepository implements JobRepository {
         )
         .all(type) as JobDbRow[]
     ).map(mapJob);
+  }
+
+  listOpenByTypePrefix(typePrefix: string): JobRow[] {
+    return (
+      this.db
+        .prepare(
+          `
+            ${baseJobSelect()}
+            where type like ? escape '\\'
+              and status in ('queued', 'running')
+            order by created_at, id
+          `
+        )
+        .all(`${escapeLikePattern(typePrefix)}%`) as JobDbRow[]
+    ).map(mapJob);
+  }
+
+  cancelOpenByTypePrefix(typePrefix: string, error: string, now: number): number {
+    const result = this.db
+      .prepare(
+        `
+          update jobs
+          set
+            status = 'cancelled',
+            error = ?,
+            finished_at = ?,
+            updated_at = ?
+          where type like ? escape '\\'
+            and status in ('queued', 'running')
+        `
+      )
+      .run(error, now, now, `${escapeLikePattern(typePrefix)}%`);
+
+    return result.changes;
+  }
+
+  cancel(id: string, error: string, now: number): JobRow | null {
+    this.db
+      .prepare(
+        `
+          update jobs
+          set
+            status = 'cancelled',
+            error = ?,
+            finished_at = ?,
+            updated_at = ?
+          where id = ?
+            and status in ('queued', 'running')
+        `
+      )
+      .run(error, now, now, id);
+
+    return this.findById(id);
   }
 
   defer(id: string, error: string, runAfter: number, now: number): JobRow | null {
@@ -324,6 +445,14 @@ export class SqliteJobRepository implements JobRepository {
   }
 }
 
+function refreshWalVisibility(db: DibaoDatabase): void {
+  try {
+    db.pragma("wal_checkpoint(PASSIVE)");
+  } catch {
+    // A busy checkpoint should not block ordinary job claiming; the next poll can retry.
+  }
+}
+
 function baseJobSelect(): string {
   return `
     select
@@ -334,6 +463,7 @@ function baseJobSelect(): string {
       error,
       attempts,
       max_attempts as maxAttempts,
+      priority,
       run_after as runAfter,
       started_at as startedAt,
       finished_at as finishedAt,
@@ -345,4 +475,8 @@ function baseJobSelect(): string {
 
 function mapJob(row: JobDbRow): JobRow {
   return row;
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
 }

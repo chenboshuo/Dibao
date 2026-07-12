@@ -7,5 +7,7 @@ export * from "./feed-folders.js";
 export * from "./feeds.js";
 export * from "./jobs.js";
 export * from "./profile.js";
+export * from "./plugins.js";
 export * from "./ranking.js";
 export * from "./reader-commands.js";
+export * from "./plugins.js";

@@ -1,9 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  loadDefaultMigrations,
   openDatabase,
+  runMigrations,
   SqliteAppSettingsRepository,
   SqliteArticleActionRepository,
   SqliteArticleRepository,
@@ -11,20 +14,27 @@ import {
   SqliteFeedFolderRepository,
   SqliteJobRepository,
   SqliteFeedRepository,
+  SqlitePluginRepository,
   SqliteProfileRepository,
   SqliteRankingRepository,
   SqliteVecVectorStore,
   toVectorBlob,
   type DibaoDatabase
 } from "@dibao/db";
+import { signPluginPackage } from "@dibao/plugin-sdk";
 import { parseOpml } from "@dibao/rss";
-import { buildServer as buildRealServer } from "./app.js";
+import { buildServer as buildRealServer, getHealth } from "./app.js";
 import type { FeedFetcher } from "./feed-refresh-service.js";
 import { JobRunner } from "./job-runner.js";
+import {
+  BEHAVIOR_EVENT_PROJECT_JOB_TYPE,
+  BehaviorProjectionJobService
+} from "./behavior-projection-job-service.js";
 import {
   RankingRecalculateJobService,
   RANKING_RECALCULATE_JOB_TYPE
 } from "./ranking-job-service.js";
+import { ProfileService } from "./profile-service.js";
 import { RecommendationRankingService } from "./ranking-service.js";
 
 const tempDirs: string[] = [];
@@ -60,13 +70,113 @@ describe("server API vertical slice", () => {
           database: "ok",
           fts: "ok",
           vectorStore: "ok",
-          version: "0.1.3"
+          version: "0.2.1"
         }
       });
     } finally {
       await app.close();
       db.close();
     }
+  });
+
+  it("records foreground activity for static app asset requests", async () => {
+    const databasePath = tempDatabasePath();
+    const webDistDir = createTempDir();
+    mkdirSync(join(webDistDir, "assets"), { recursive: true });
+    writeFileSync(join(webDistDir, "index.html"), "<!doctype html><div id=\"root\"></div>");
+    writeFileSync(join(webDistDir, "assets", "app.js"), "console.log('dibao');");
+    const app = buildServer({
+      databasePath,
+      logger: false,
+      now: () => 12_345,
+      recordForegroundActivity: true,
+      foregroundActivityWriteThrottleMs: 0,
+      webDistDir
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/assets/app.js"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      const signalPath = join(dirname(databasePath), "foreground-activity.json");
+      await waitForCondition(async () => {
+        try {
+          return readFileSync(signalPath, "utf8").length > 0;
+        } catch {
+          return false;
+        }
+      });
+      expect(JSON.parse(readFileSync(signalPath, "utf8"))).toEqual({
+        lastAt: 12_345,
+        route: "/*",
+        method: "GET"
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("records foreground activity for login requests", async () => {
+    const databasePath = tempDatabasePath();
+    const app = buildServer({
+      databasePath,
+      logger: false,
+      now: () => 23_456,
+      recordForegroundActivity: true,
+      foregroundActivityWriteThrottleMs: 0,
+      webDistDir: false
+    });
+
+    try {
+      const response = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+
+      expect(response.statusCode, response.body).toBe(409);
+      const signalPath = join(dirname(databasePath), "foreground-activity.json");
+      await waitForCondition(async () => {
+        try {
+          return readFileSync(signalPath, "utf8").length > 0;
+        } catch {
+          return false;
+        }
+      });
+      expect(JSON.parse(readFileSync(signalPath, "utf8"))).toEqual({
+        lastAt: 23_456,
+        route: "/api/auth/login",
+        method: "POST"
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports database errors when the lightweight connection check fails", () => {
+    const db = {
+      prepare: (sql: string) => ({
+        get: () => {
+          if (sql === "select 1 as ok") {
+            throw new Error("database unavailable");
+          }
+          if (sql.includes("vec_version")) {
+            return { version: "0.1.1" };
+          }
+          return { ok: 1 };
+        }
+      })
+    } as unknown as DibaoDatabase;
+
+    expect(getHealth(db)).toEqual({
+      ok: false,
+      database: "error",
+      fts: "ok",
+      vectorStore: "ok",
+      version: expect.any(String)
+    });
   });
 
   it("serves configured web static files and falls back to index for SPA routes", async () => {
@@ -100,14 +210,1107 @@ describe("server API vertical slice", () => {
 
       expect(root.statusCode, root.body).toBe(200);
       expect(root.headers["content-type"]).toContain("text/html");
+      expect(root.headers["cache-control"]).toBe("no-store");
       expect(root.body).toContain("Dibao shell");
       expect(asset.statusCode, asset.body).toBe(200);
       expect(asset.headers["content-type"]).toContain("text/javascript");
+      expect(asset.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
       expect(asset.body).toContain("dibao");
       expect(spaRoute.statusCode, spaRoute.body).toBe(200);
+      expect(spaRoute.headers["cache-control"]).toBe("no-store");
       expect(spaRoute.body).toContain("Dibao shell");
       expect(head.statusCode, head.body).toBe(200);
       expect(head.body).toBe("");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("serves the Core-owned plugin UI stylesheet", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/plugins/ui.css"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/css");
+      expect(response.body).toContain("body.dibao-plugin");
+      expect(response.body).toContain(".dibao-plugin .button");
+      expect(response.body).toContain(".dibao-plugin .template-chip");
+      expect(response.body).toContain(".dibao-plugin .data-table");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("serves the Core-owned plugin UI stylesheet without an auth cookie", async () => {
+    const db = createEmptyDatabase();
+    const app = buildServer({ db, logger: false, authRequired: true });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/plugins/ui.css"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/css");
+      expect(response.body).toContain("body.dibao-plugin");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("installs and manages plugin packages through the plugin API", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const signedPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.plugin",
+        name: "Example Plugin",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        capabilities: ["articles:read", "settings:plugin", "jobs:write"],
+        contributes: {
+          hooks: ["settings.afterUpdated"],
+          tasks: [{ id: "refresh", kind: "background", schedule: "manual" }]
+        }
+      },
+      files: {
+        "web/index.html": "<p>Example plugin asset</p>"
+      },
+      updateUrl: "https://example.com/plugin-update.json"
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      now: () => 10_000,
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: signedPackage.trustedPublicKeys
+    });
+
+    try {
+      const installed = await injectJson(app, "POST", "/api/plugins/install", {
+        package: signedPackage.packageContent
+      });
+      expect(installed.statusCode, installed.body).toBe(200);
+      expect(installed.json().data).toMatchObject({
+        id: "com.example.plugin",
+        status: "installed",
+        sourceType: "local_file"
+      });
+
+      const enabled = await app.inject({
+        method: "POST",
+        url: "/api/plugins/com.example.plugin/enable"
+      });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+      expect(enabled.json().data.status).toBe("enabled");
+
+      const settings = await injectJson(
+        app,
+        "PATCH",
+        "/api/plugins/com.example.plugin/settings",
+        { threshold: 3 }
+      );
+      expect(settings.statusCode, settings.body).toBe(200);
+      expect(settings.json().data).toEqual({ threshold: 3 });
+
+      const asset = await app.inject({
+        method: "GET",
+        url: "/api/plugins/com.example.plugin/assets/web/index.html"
+      });
+      expect(asset.statusCode, asset.body).toBe(200);
+      expect(asset.body).toContain("Example plugin asset");
+
+      const task = await app.inject({
+        method: "POST",
+        url: "/api/plugins/com.example.plugin/tasks/refresh"
+      });
+      expect(task.statusCode, task.body).toBe(200);
+      expect(task.json().data).toMatchObject({
+        type: "plugin:com.example.plugin:refresh",
+        status: "queued"
+      });
+
+      const cancelled = await app.inject({
+        method: "POST",
+        url: `/api/plugins/com.example.plugin/tasks/${task.json().data.id}/cancel`
+      });
+      expect(cancelled.statusCode, cancelled.body).toBe(200);
+      expect(cancelled.json().data.status).toBe("cancelled");
+
+      const listed = await app.inject({ method: "GET", url: "/api/plugins" });
+      expect(listed.statusCode, listed.body).toBe(200);
+      expect(listed.json().data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+          id: "com.example.plugin",
+          status: "enabled",
+          capabilities: ["articles:read", "settings:plugin", "jobs:write"]
+          })
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("supports outbound webhook plugin primitives without exposing secrets", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const receivedAuthorizations: Array<string | null> = [];
+    const packageContent = JSON.stringify({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.webhook",
+        name: "Webhook Primitives",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [
+          "network:outbound",
+          "secrets:plugin",
+          "deliveries:read",
+          "deliveries:write"
+        ],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": `
+          export async function activate(ctx) {
+            ctx.api.post("/network", async ({ body }) => {
+              return await ctx.network.fetch({
+                method: "POST",
+                url: body.url,
+                body: { ok: true },
+                headers: { "x-test": "yes" }
+              });
+            });
+            ctx.api.post("/delivery", ({ body }) => ctx.deliveries.enqueue({
+              method: "POST",
+              url: body.url,
+              body: { event: "article.created" },
+              secretHeaders: {
+                authorization: { key: "webhook.token", prefix: "Bearer " }
+              },
+              idempotencyKey: body.idempotencyKey,
+              maxAttempts: 1
+            }));
+            ctx.api.get("/deliveries", () => ctx.deliveries.list());
+          }
+        `
+      }
+    });
+    const signedPackage = signedPluginPackageFixture(JSON.parse(packageContent));
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      pluginSecretKey: "test-plugin-secret-key",
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: signedPackage.trustedPublicKeys,
+      pluginFetcher: async (_input, init) => {
+        receivedAuthorizations.push(new Headers(init?.headers).get("authorization"));
+        return new Response("delivered", {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        });
+      },
+      backgroundJobs: true,
+      jobRunnerIntervalMs: 1,
+      jobRetryDelayMs: 1,
+      now: Date.now
+    });
+
+    try {
+      expect((await injectJson(app, "POST", "/api/plugins/install", { package: signedPackage.packageContent })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/api/plugins/com.example.webhook/enable" })).statusCode).toBe(200);
+
+      const secret = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/secrets/webhook.token",
+        { value: "secret-token", hint: "sec..." }
+      );
+      expect(secret.statusCode, secret.body).toBe(200);
+      expect(secret.json().data).toMatchObject({
+        key: "webhook.token",
+        hasValue: true,
+        hint: "sec..."
+      });
+      expect(secret.body).not.toContain("secret-token");
+      expect(
+        db.prepare("select ciphertext from plugin_secrets where plugin_id = ? and key = ?")
+          .get("com.example.webhook", "webhook.token")
+      ).not.toEqual({ ciphertext: "secret-token" });
+
+      const blockedPrivateNetwork = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/network",
+        { url: "http://127.0.0.1:8080/private" }
+      );
+      expect(blockedPrivateNetwork.statusCode, blockedPrivateNetwork.body).toBe(502);
+      expect(blockedPrivateNetwork.body).toContain("private-network policy");
+
+      const network = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/network",
+        { url: "https://hooks.example.test/network" }
+      );
+      expect(network.statusCode, network.body).toBe(200);
+      expect(network.json().data).toMatchObject({ status: 200, bodyText: "delivered" });
+
+      const delivery = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/delivery",
+        { url: "https://hooks.example.test/delivery", idempotencyKey: "event-1" }
+      );
+      expect(delivery.statusCode, delivery.body).toBe(200);
+      expect(delivery.json().data).toMatchObject({
+        status: "queued",
+        idempotencyKey: "event-1"
+      });
+      const duplicateDelivery = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.webhook/api/delivery",
+        { url: "https://hooks.example.test/delivery", idempotencyKey: "event-1" }
+      );
+      expect(duplicateDelivery.statusCode, duplicateDelivery.body).toBe(200);
+      expect(duplicateDelivery.json().data.id).toBe(delivery.json().data.id);
+
+      await waitForCondition(async () => {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/plugins/com.example.webhook/deliveries/${delivery.json().data.id}`
+        });
+        return response.json().data.status === "succeeded";
+      });
+      expect(receivedAuthorizations).toContain("Bearer secret-token");
+
+      const listed = await app.inject({
+        method: "GET",
+        url: "/api/plugins/com.example.webhook/deliveries"
+      });
+      expect(listed.statusCode, listed.body).toBe(200);
+      expect(listed.body).not.toContain("secret-token");
+      expect(listed.json().data[0]).toMatchObject({
+        status: "succeeded",
+        response: expect.objectContaining({
+          status: 200
+        })
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("runs the official Webhook plugin through settings, events, secrets, and deliveries", async () => {
+    const db = createFixtureDatabase();
+    const received: Array<{ url: string; method: string; authorization: string | null; body: string | null }> = [];
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginSecretKey: "test-plugin-secret-key",
+      pluginFetcher: async (input, init) => {
+        received.push({
+          url: String(input),
+          method: String(init?.method ?? "GET"),
+          authorization: new Headers(init?.headers).get("authorization"),
+          body: init?.body ? String(init.body) : null
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      },
+      backgroundJobs: true,
+      jobRunnerIntervalMs: 1,
+      jobRetryDelayMs: 1,
+      now: Date.now
+    });
+
+    try {
+      const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(catalog.statusCode, catalog.body).toBe(200);
+      expect(catalog.json().data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "app.dibao.webhook",
+            status: "installed",
+            contributes: expect.objectContaining({
+              settingsTabs: [
+                expect.objectContaining({
+                  id: "webhook-settings",
+                  route: "settings"
+                })
+              ]
+            })
+          })
+        ])
+      );
+
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/app.dibao.webhook/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+
+      const webhookAsset = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.webhook/assets/web/index.html"
+      });
+      expect(webhookAsset.statusCode, webhookAsset.body).toBe(200);
+      expect(webhookAsset.body).toContain('/api/plugins/ui.css');
+      expect(webhookAsset.body).toContain("可用变量");
+      expect(webhookAsset.body).toContain("鉴权（高级）");
+      expect(webhookAsset.body).toContain("取值方式");
+      expect(webhookAsset.body).toContain("收藏文章时发送");
+      expect(webhookAsset.body).not.toContain("值类型");
+      expect(webhookAsset.body).not.toContain("对象快照");
+      expect(webhookAsset.body).not.toContain("<style");
+
+      const contributions = await app.inject({ method: "GET", url: "/api/plugins/contributions" });
+      const webhook = contributions.json().data.find((plugin: { id: string }) => plugin.id === "app.dibao.webhook");
+      expect(webhook.contributions).toMatchObject({
+        primaryNav: [],
+        primaryMobile: [],
+        routes: [],
+        actions: [],
+        setupSteps: [],
+        settingsTabs: [
+          expect.objectContaining({
+            id: "webhook-settings",
+            route: "settings"
+          })
+        ]
+      });
+
+      const secret = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/app.dibao.webhook/api/secrets/webhook.token",
+        { value: "top-secret-token", hint: "top..." }
+      );
+      expect(secret.statusCode, secret.body).toBe(200);
+      expect(secret.body).not.toContain("top-secret-token");
+      expect(secret.json().data.secret).toMatchObject({
+        key: "webhook.token",
+        hasValue: true,
+        hint: "top..."
+      });
+
+      const draftRule = await injectJson(app, "POST", "/api/plugins/app.dibao.webhook/api/rules", {
+        id: "draft_local_1",
+        name: "Draft safety",
+        enabled: true,
+        eventName: "article.actionRecorded",
+        method: "POST",
+        urlTemplate: "https://hooks.example.test/draft",
+        conditions: [{ path: "event.action", operator: "equals", value: "favorite" }],
+        bodyTemplate: {
+          title: "{{article.title}}"
+        }
+      });
+      expect(draftRule.statusCode, draftRule.body).toBe(200);
+      expect(draftRule.json().data.rules[0].id).toMatch(/^rule_/);
+      expect(draftRule.json().data.rules[0].id).not.toBe("draft_local_1");
+
+      const getRule = await injectJson(app, "POST", "/api/plugins/app.dibao.webhook/api/rules", {
+        name: "GET article test",
+        enabled: true,
+        eventName: "article.created",
+        method: "GET",
+        urlTemplate: "https://hooks.example.test/get",
+        queryTemplate: {
+          event: "{{eventName}}",
+          title: "{{article.title}}"
+        },
+        headers: {},
+        secretHeaders: {},
+        includeContent: false
+      });
+      expect(getRule.statusCode, getRule.body).toBe(200);
+      const getRuleId = getRule.json().data.rules[0].id;
+      const testSend = await injectJson(
+        app,
+        "POST",
+        `/api/plugins/app.dibao.webhook/api/rules/${getRuleId}/test`,
+        {
+          event: { articleId: "article_recent", feedId: "feed_design" }
+        }
+      );
+      expect(testSend.statusCode, testSend.body).toBe(200);
+      const testDeliveryId = testSend.json().data.delivery.id;
+      await waitForCondition(async () => {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/plugins/app.dibao.webhook/deliveries/${testDeliveryId}`
+        });
+        return response.json().data.status === "succeeded";
+      }, 5000);
+      expect(received.some((request) =>
+        request.method === "GET" &&
+        request.url.includes("event=article.created") &&
+        request.url.includes("title=Dense+reader+interfaces") &&
+        request.body === null
+      )).toBe(true);
+
+      const postRule = await injectJson(app, "POST", "/api/plugins/app.dibao.webhook/api/rules", {
+        name: "POST article action",
+        enabled: true,
+        eventName: "article.actionRecorded",
+        method: "POST",
+        urlTemplate: "https://hooks.example.test/post/{{event.action}}",
+        conditions: [{ path: "event.action", operator: "equals", value: "favorite" }],
+        bodyTemplate: {
+          eventName: "{{eventName}}",
+          title: "{{article.title}}",
+          contentText: "{{article.contentText}}",
+          action: "{{event.action}}"
+        },
+        headers: { "x-rule": "{{ruleId}}" },
+        secretHeaders: {
+          authorization: { key: "webhook.token", prefix: "Bearer " }
+        },
+        includeContent: true
+      });
+      expect(postRule.statusCode, postRule.body).toBe(200);
+
+      const action = await postJson(app, "/api/articles/article_recent/actions", { type: "favorite" });
+      expect(action.statusCode, action.body).toBe(200);
+      await waitForDeferredPostActionWork();
+      await waitForCondition(
+        async () =>
+          Boolean(
+            db.prepare(
+              "select id from plugin_deliveries where plugin_id = ? and method = 'POST' and url = ?"
+            ).get("app.dibao.webhook", "https://hooks.example.test/post/favorite")
+          ),
+        5000
+      );
+      const postDelivery = db.prepare(
+        "select request_json as requestJson from plugin_deliveries where plugin_id = ? and method = 'POST' and url = ?"
+      ).get("app.dibao.webhook", "https://hooks.example.test/post/favorite") as { requestJson: string };
+      expect(JSON.parse(postDelivery.requestJson)).toMatchObject({
+        method: "POST",
+        url: "https://hooks.example.test/post/favorite",
+        body: {
+          eventName: "article.actionRecorded",
+          title: "Dense reader interfaces",
+          contentText: "Reader density without visual clutter.",
+          action: "favorite"
+        },
+        secretHeaders: {
+          authorization: { key: "webhook.token", prefix: "Bearer " }
+        }
+      });
+
+      const state = await app.inject({ method: "GET", url: "/api/plugins/app.dibao.webhook/api/state" });
+      expect(state.statusCode, state.body).toBe(200);
+      expect(state.body).not.toContain("top-secret-token");
+      expect(state.json().data.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "dailyBrief.generated",
+            title: "每日简报生成"
+          }),
+          expect.objectContaining({
+            name: "article.actionRecorded",
+            fields: expect.arrayContaining([
+              expect.objectContaining({
+                path: "event.action",
+                options: expect.arrayContaining(["favorite", "read_progress"])
+              })
+            ]),
+            variables: expect.arrayContaining([
+              expect.objectContaining({
+                path: "event.action"
+              })
+            ])
+          })
+        ])
+      );
+      expect(state.json().data.deliveries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: "POST",
+            url: "https://hooks.example.test/post/favorite"
+          })
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("flushes official Webhook test deliveries immediately", async () => {
+    const db = createFixtureDatabase();
+    const received: Array<{ url: string; method: string; body: string | null }> = [];
+    const app = buildServer({
+      db,
+      logger: false,
+      backgroundJobs: false,
+      pluginFetcher: async (input, init) => {
+        received.push({
+          url: String(input),
+          method: String(init?.method ?? "GET"),
+          body: init?.body ? String(init.body) : null
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    });
+
+    try {
+      expect((await app.inject({ method: "POST", url: "/api/plugins/app.dibao.webhook/enable" })).statusCode).toBe(200);
+      const rule = await injectJson(app, "POST", "/api/plugins/app.dibao.webhook/api/rules", {
+        name: "Immediate test",
+        enabled: true,
+        eventName: "article.actionRecorded",
+        method: "POST",
+        urlTemplate: "https://n8n.example.test/webhook/{{event.action}}",
+        conditions: [{ path: "event.action", operator: "equals", value: "favorite" }],
+        bodyTemplate: {
+          title: "{{article.title}}",
+          action: "{{event.action}}"
+        }
+      });
+      expect(rule.statusCode, rule.body).toBe(200);
+      const ruleId = rule.json().data.rules[0].id;
+
+      const testSend = await injectJson(
+        app,
+        "POST",
+        `/api/plugins/app.dibao.webhook/api/rules/${ruleId}/test`,
+        {
+          event: { articleId: "article_recent", feedId: "feed_design" }
+        }
+      );
+
+      expect(testSend.statusCode, testSend.body).toBe(200);
+      expect(testSend.json().data.delivery).toMatchObject({
+        status: "succeeded",
+        method: "POST",
+        url: "https://n8n.example.test/webhook/favorite"
+      });
+      expect(received).toEqual([
+        expect.objectContaining({
+          method: "POST",
+          url: "https://n8n.example.test/webhook/favorite"
+        })
+      ]);
+      expect(JSON.parse(received[0]?.body ?? "{}")).toMatchObject({
+        title: "Dense reader interfaces",
+        action: "favorite"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("exposes article snapshots to plugins only with the articles read capability", async () => {
+    const db = createFixtureDatabase();
+    const pluginDataDir = createTempDir();
+    const noPermissionPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.no-article-snapshot",
+        name: "No Snapshot Permission",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": `
+          export function activate(ctx) {
+            ctx.api.post("/snapshot/:id", ({ params }) => ctx.articles.snapshot(params.id));
+          }
+        `
+      }
+    });
+    const allowedPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.article-snapshot",
+        name: "Snapshot Permission",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: ["articles:read"],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": `
+          export function activate(ctx) {
+            ctx.api.post("/snapshot/:id", ({ params, body }) =>
+              ctx.articles.snapshot(params.id, { includeContent: body?.includeContent === true })
+            );
+          }
+        `
+      }
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: {
+        ...noPermissionPackage.trustedPublicKeys,
+        ...allowedPackage.trustedPublicKeys
+      }
+    });
+
+    try {
+      expect((await injectJson(app, "POST", "/api/plugins/install", { package: noPermissionPackage.packageContent })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/api/plugins/com.example.no-article-snapshot/enable" })).statusCode).toBe(200);
+      const denied = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.no-article-snapshot/api/snapshot/article_recent",
+        {}
+      );
+      expect(denied.statusCode, denied.body).toBe(403);
+      expect(denied.body).toContain("articles:read");
+
+      expect((await injectJson(app, "POST", "/api/plugins/install", { package: allowedPackage.packageContent })).statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: "/api/plugins/com.example.article-snapshot/enable" })).statusCode).toBe(200);
+
+      const basic = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.article-snapshot/api/snapshot/article_recent",
+        { includeContent: false }
+      );
+      expect(basic.statusCode, basic.body).toBe(200);
+      expect(basic.json().data).toMatchObject({
+        articleId: "article_recent",
+        title: "Dense reader interfaces",
+        feed: { id: "feed_design", title: "Design Notes" }
+      });
+      expect(basic.json().data).not.toHaveProperty("contentText");
+
+      const withContent = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.article-snapshot/api/snapshot/article_recent",
+        { includeContent: true }
+      );
+      expect(withContent.statusCode, withContent.body).toBe(200);
+      expect(withContent.json().data).toMatchObject({
+        contentText: "Reader density without visual clutter.",
+        extractionStatus: "success"
+      });
+
+      db.prepare("update articles set status = 'deleted', deleted_at = ? where id = ?").run(10_000, "article_recent");
+      const deleted = await injectJson(
+        app,
+        "POST",
+        "/api/plugins/com.example.article-snapshot/api/snapshot/article_recent",
+        { includeContent: true }
+      );
+      expect(deleted.statusCode, deleted.body).toBe(200);
+      expect(deleted.json().data).toBeNull();
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("rejects plugin packages that subscribe to unknown events", async () => {
+    const db = createEmptyDatabase();
+    const signedPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.bad-hooks",
+        name: "Bad Hooks",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        capabilities: [],
+        contributes: { hooks: ["unknown.event"] }
+      }
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir: createTempDir(),
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: signedPackage.trustedPublicKeys
+    });
+    try {
+      const response = await injectJson(app, "POST", "/api/plugins/install", {
+        package: signedPackage.packageContent
+      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.body).toContain("Unsupported plugin hook");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("keeps a plugin failed when server activation throws", async () => {
+    const db = createEmptyDatabase();
+    const signedPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.activation-fail",
+        name: "Activation Fail",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": "export function activate() { throw new Error('activation boom'); }\n"
+      }
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir: createTempDir(),
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: signedPackage.trustedPublicKeys
+    });
+    try {
+      const installed = await injectJson(app, "POST", "/api/plugins/install", {
+        package: signedPackage.packageContent
+      });
+      expect(installed.statusCode, installed.body).toBe(200);
+
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/com.example.activation-fail/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(500);
+      expect(enabled.body).toContain("activation boom");
+
+      const listed = await app.inject({ method: "GET", url: "/api/plugins" });
+      expect(listed.json().data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "com.example.activation-fail",
+            status: "failed",
+            lastError: expect.stringContaining("activation boom")
+          })
+        ])
+      );
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("applies manifest migrations and rejects same-version checksum drift", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const keyId = "migration-test-key";
+    const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    const packageForSql = (sql: string) => JSON.stringify(signPluginPackage({
+      pluginPackage: {
+        manifest: {
+          manifestVersion: 1,
+          id: "com.example.migrations",
+          name: "Migrations",
+          version: "1.0.0",
+          publisher: "Example",
+          dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+          capabilities: ["database:plugin"],
+          migrations: [
+            {
+              version: "001",
+              name: "create_notes",
+              path: "migrations/001_create_notes.sql"
+            }
+          ],
+          contributes: {}
+        },
+        files: {
+          "migrations/001_create_notes.sql": sql
+        }
+      },
+      privateKeyPem,
+      publicKeyPem,
+      keyId
+    }));
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: { [keyId]: publicKeyPem }
+    });
+    try {
+      const install = await injectJson(app, "POST", "/api/plugins/install", {
+        package: packageForSql("create table if not exists plugin_migration_notes (id integer primary key, body text);\n")
+      });
+      expect(install.statusCode, install.body).toBe(200);
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/com.example.migrations/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+      expect(
+        db.prepare("select name from sqlite_master where type = 'table' and name = ?")
+          .get("plugin_migration_notes")
+      ).toEqual({ name: "plugin_migration_notes" });
+      expect(
+        db.prepare("select name from plugin_migrations where plugin_id = ? and version = ?")
+          .get("com.example.migrations", "001")
+      ).toEqual({ name: "create_notes" });
+
+      const changed = await injectJson(app, "POST", "/api/plugins/install", {
+        package: packageForSql("create table if not exists plugin_migration_notes (id integer primary key, body integer);\n")
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      const rejected = await app.inject({ method: "POST", url: "/api/plugins/com.example.migrations/enable" });
+      expect(rejected.statusCode, rejected.body).toBe(409);
+      expect(rejected.body).toContain("changed after apply");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("enforces outbound network capability at runtime", async () => {
+    const db = createEmptyDatabase();
+    const signedPackage = signedPluginPackageFixture({
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.no-network",
+        name: "No Network",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [],
+        contributes: {}
+      },
+      files: {
+        "server/index.mjs": `
+          export async function activate(ctx) {
+            ctx.api.post("/network", () => ctx.network.fetch({ url: "https://example.com" }));
+          }
+        `
+      }
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir: createTempDir(),
+      pluginFetcher: async () => new Response("ok"),
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: signedPackage.trustedPublicKeys
+    });
+    try {
+      const response = await injectJson(app, "POST", "/api/plugins/install", {
+        package: signedPackage.packageContent
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      await app.inject({ method: "POST", url: "/api/plugins/com.example.no-network/enable" });
+      const denied = await injectJson(app, "POST", "/api/plugins/com.example.no-network/api/network", {});
+      expect(denied.statusCode, denied.body).toBe(403);
+      expect(denied.body).toContain("network:outbound");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("installs plugin packages from update metadata URLs", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const pluginPackage = {
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.remote",
+        name: "Remote Plugin",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        capabilities: ["articles:read"],
+        contributes: {}
+      }
+    };
+    const packageContent = JSON.stringify(signPluginPackage({
+      pluginPackage,
+      privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+      publicKeyPem,
+      keyId: "remote"
+    }));
+    const disabledApp = buildServer({ db, logger: false, pluginDataDir });
+    try {
+      const disabled = await injectJson(disabledApp, "POST", "/api/plugins/install", {
+        package: packageContent
+      });
+      expect(disabled.statusCode, disabled.body).toBe(403);
+    } finally {
+      await disabledApp.close();
+    }
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: { remote: publicKeyPem },
+      pluginFetcher: async (input) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const body = url.endsWith("latest.json")
+          ? JSON.stringify({
+              pluginId: "com.example.remote",
+              latestVersion: "1.0.0",
+              packageUrl: "https://github.com/example/remote/releases/download/v1/remote.dibao-plugin"
+            })
+          : packageContent;
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    });
+
+    try {
+      const response = await injectJson(app, "POST", "/api/plugins/install", {
+        url: "https://github.com/example/remote/releases/latest/download/latest.json"
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toMatchObject({
+        id: "com.example.remote",
+        sourceType: "github_release",
+        sourceUrl: "https://github.com/example/remote/releases/download/v1/remote.dibao-plugin",
+        updateUrl: "https://github.com/example/remote/releases/latest/download/latest.json",
+        status: "installed"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("verifies signed plugin packages and rejects tampered content", async () => {
+    const db = createEmptyDatabase();
+    const pluginDataDir = createTempDir();
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const pluginPackage = {
+      manifest: {
+        manifestVersion: 1,
+        id: "com.example.signed",
+        name: "Signed Plugin",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        capabilities: ["settings:plugin"],
+        contributes: {
+          actions: [
+            {
+              id: "open",
+              title: "Open",
+              slot: "article.list.toolbar.end",
+              icon: "sparkles",
+              command: "route:signed"
+            }
+          ]
+        }
+      },
+      files: {
+        "web/index.html": "<p>Signed plugin</p>"
+      }
+    };
+    const signed = signPluginPackage({
+      pluginPackage,
+      privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+      publicKeyPem,
+      keyId: "signed"
+    });
+    const app = buildServer({
+      db,
+      logger: false,
+      pluginDataDir,
+      now: () => 10_000,
+      enableUserPluginInstall: true,
+      pluginTrustedPublicKeys: { signed: publicKeyPem }
+    });
+
+    try {
+      const unsigned = await injectJson(app, "POST", "/api/plugins/install", {
+        package: JSON.stringify(pluginPackage)
+      });
+      expect(unsigned.statusCode, unsigned.body).toBe(400);
+      expect(unsigned.body).toContain("Plugin signature is required");
+
+      const selfSigned = signPluginPackage({
+        pluginPackage,
+        privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+        publicKeyPem,
+        keyId: "self-signed"
+      });
+      const rejectedSelfSigned = await injectJson(app, "POST", "/api/plugins/install", {
+        package: JSON.stringify(selfSigned)
+      });
+      expect(rejectedSelfSigned.statusCode, rejectedSelfSigned.body).toBe(400);
+      expect(rejectedSelfSigned.body).toContain("Plugin signature key is not trusted");
+
+      const installed = await injectJson(app, "POST", "/api/plugins/install", {
+        package: JSON.stringify(signed)
+      });
+      expect(installed.statusCode, installed.body).toBe(200);
+      expect(installed.json().data.trustLevel).toBe("trusted");
+
+      const tampered = {
+        ...signed,
+        manifest: {
+          ...(signed.manifest as Record<string, unknown>),
+          name: "Tampered Plugin"
+        }
+      };
+      const rejected = await injectJson(app, "POST", "/api/plugins/install", {
+        package: JSON.stringify(tampered)
+      });
+      expect(rejected.statusCode, rejected.body).toBe(400);
+      expect(rejected.body).toContain("signature verification failed");
+
+      await app.inject({ method: "POST", url: "/api/plugins/com.example.signed/enable" });
+      const contributions = await app.inject({ method: "GET", url: "/api/plugins/contributions" });
+      expect(contributions.json().data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "com.example.signed",
+            contributions: expect.objectContaining({
+              actions: [
+                expect.objectContaining({
+                  id: "open",
+                  slot: "article.list.toolbar.end",
+                  command: "route:signed"
+                })
+              ]
+            })
+          })
+        ])
+      );
     } finally {
       await app.close();
       db.close();
@@ -162,6 +1365,7 @@ describe("server API vertical slice", () => {
 
       expect(manifest.statusCode, manifest.body).toBe(200);
       expect(manifest.headers["content-type"]).toContain("application/manifest+json");
+      expect(manifest.headers["cache-control"]).toBe("no-cache, no-store, must-revalidate");
       const manifestJson = manifest.json() as {
         icons: Array<{ sizes: string }>;
         scope: string;
@@ -174,6 +1378,7 @@ describe("server API vertical slice", () => {
 
       expect(serviceWorker.statusCode, serviceWorker.body).toBe(200);
       expect(serviceWorker.headers["content-type"]).toMatch(/javascript/);
+      expect(serviceWorker.headers["cache-control"]).toBe("no-cache, no-store, must-revalidate");
       expect(serviceWorker.body).toContain("fetch");
 
       expect(searchRoute.statusCode, searchRoute.body).toBe(200);
@@ -195,6 +1400,7 @@ describe("server API vertical slice", () => {
       join(webDistDir, "index.html"),
       "<!doctype html><html><body><div id=\"root\">Dibao public shell</div></body></html>"
     );
+    writeFileSync(join(webDistDir, "logo-64.png"), "png");
     const app = buildRealServer({ db, logger: false, webDistDir, cookieSecure: false });
 
     try {
@@ -206,9 +1412,15 @@ describe("server API vertical slice", () => {
         method: "GET",
         url: "/api/feeds"
       });
+      const publicLogo = await app.inject({
+        method: "GET",
+        url: "/logo-64.png"
+      });
 
       expect(root.statusCode, root.body).toBe(200);
       expect(root.body).toContain("Dibao public shell");
+      expect(publicLogo.statusCode, publicLogo.body).toBe(200);
+      expect(publicLogo.headers["content-type"]).toContain("image/png");
       expect(protectedApi.statusCode, protectedApi.body).toBe(401);
       expect(protectedApi.json()).toMatchObject({
         error: {
@@ -267,7 +1479,8 @@ describe("server API vertical slice", () => {
       expect(response.json()).toEqual({
         data: {
           setupCompleted: false,
-          authenticated: false
+          authenticated: false,
+          username: null
         }
       });
     } finally {
@@ -341,7 +1554,8 @@ describe("server API vertical slice", () => {
       expect(session.json()).toEqual({
         data: {
           setupCompleted: true,
-          authenticated: true
+          authenticated: true,
+          username: "Pls"
         }
       });
 
@@ -518,6 +1732,11 @@ describe("server API vertical slice", () => {
         password: "correct horse battery"
       });
       const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+      const secondLogin = await postJson(app, "/api/auth/login", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      const secondCookie = cookieHeaderFromSetCookie(secondLogin.headers["set-cookie"]);
 
       const unauthenticated = await postJson(app, "/api/auth/password", {
         currentPassword: "correct horse battery",
@@ -530,6 +1749,14 @@ describe("server API vertical slice", () => {
         newPassword: "new correct horse battery"
       });
       expect(wrongCurrent.statusCode, wrongCurrent.body).toBe(401);
+      const secondAfterWrongCurrent = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        headers: {
+          cookie: secondCookie
+        }
+      });
+      expect(secondAfterWrongCurrent.json().data.authenticated).toBe(true);
 
       const changed = await injectJsonWithCookie(app, "POST", "/api/auth/password", cookie, {
         currentPassword: "correct horse battery",
@@ -537,6 +1764,38 @@ describe("server API vertical slice", () => {
       });
       expect(changed.statusCode, changed.body).toBe(200);
       expect(changed.json()).toEqual({ data: { ok: true } });
+      expectSessionCookieAttributes(changed.headers["set-cookie"], false);
+      const newCookie = cookieHeaderFromSetCookie(changed.headers["set-cookie"]);
+
+      const firstOldSession = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        headers: {
+          cookie
+        }
+      });
+      expect(firstOldSession.json().data.authenticated).toBe(false);
+
+      const secondOldSession = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        headers: {
+          cookie: secondCookie
+        }
+      });
+      expect(secondOldSession.json().data.authenticated).toBe(false);
+
+      const currentSession = await app.inject({
+        method: "GET",
+        url: "/api/auth/session",
+        headers: {
+          cookie: newCookie
+        }
+      });
+      expect(currentSession.json().data).toMatchObject({
+        authenticated: true,
+        username: "Pls"
+      });
 
       const oldLogin = await postJson(app, "/api/auth/login", {
         username: "Pls",
@@ -592,7 +1851,8 @@ describe("server API vertical slice", () => {
       expect(session.json()).toEqual({
         data: {
           setupCompleted: true,
-          authenticated: false
+          authenticated: false,
+          username: null
         }
       });
     } finally {
@@ -777,8 +2037,605 @@ describe("server API vertical slice", () => {
           setupCompleted: true,
           hasFeeds: true,
           hasEmbeddingProvider: false,
-          firstRefreshStatus: "idle"
+          firstRefreshStatus: "idle",
+          optionalPluginSteps: [
+            expect.objectContaining({
+              id: "app.dibao.daily-brief",
+              status: "installed",
+              contributions: expect.objectContaining({
+                setupSteps: [
+                  expect.objectContaining({
+                    id: "enable-daily-brief",
+                    title: "每日简报"
+                  })
+                ]
+              })
+            })
+          ]
         }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("enables the official Daily Brief plugin from the optional setup prompt", async () => {
+    const db = createEmptyDatabase();
+    const feedRepository = new SqliteFeedRepository(db);
+    feedRepository.upsert({
+      id: "feed_fixture",
+      title: "Fixture Feed",
+      feedUrl: "https://example.com/feed.xml",
+      now: 1000
+    });
+    const app = buildRealServer({ db, logger: false, cookieSecure: false });
+
+    try {
+      const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+
+      const enabled = await injectJsonWithCookie(
+        app,
+        "POST",
+        "/api/setup/optional-plugins/app.dibao.daily-brief",
+        cookie,
+        {
+          enabled: true,
+          timezone: "Asia/Shanghai"
+        }
+      );
+      expect(enabled.statusCode, enabled.body).toBe(200);
+      expect(enabled.json()).toMatchObject({
+        data: {
+          id: "app.dibao.daily-brief",
+          status: "enabled"
+        }
+      });
+
+      const contributions = await app.inject({
+        method: "GET",
+        url: "/api/plugins/contributions",
+        headers: { cookie }
+      });
+      expect(contributions.statusCode, contributions.body).toBe(200);
+      const contributionBody = contributions.json();
+      expect(contributionBody).toMatchObject({
+        data: [
+          expect.objectContaining({
+            id: "app.dibao.daily-brief",
+            contributions: expect.objectContaining({
+              primaryNav: [
+                expect.objectContaining({
+                  label: "每日简报",
+                  route: "daily-brief"
+                })
+              ]
+            })
+          })
+        ]
+      });
+      const dailyBrief = contributionBody.data.find(
+        (plugin: { id: string }) => plugin.id === "app.dibao.daily-brief"
+      );
+      expect(dailyBrief.contributions.actions).toEqual([]);
+
+      const health = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/health",
+        headers: { cookie }
+      });
+      expect(health.statusCode, health.body).toBe(200);
+      expect(health.json()).toMatchObject({
+        data: {
+          status: "enabled",
+          schedules: [
+            expect.objectContaining({
+              taskId: "dailyBrief.generate",
+              enabled: true,
+              schedule: "daily"
+            })
+          ]
+        }
+      });
+
+      const reenabled = await app.inject({
+        method: "POST",
+        url: "/api/plugins/app.dibao.daily-brief/enable",
+        headers: { cookie }
+      });
+      expect(reenabled.statusCode, reenabled.body).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const afterReenable = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/health",
+        headers: { cookie }
+      });
+      expect(afterReenable.statusCode, afterReenable.body).toBe(200);
+      expect(afterReenable.json().data).toMatchObject({
+        status: "enabled",
+        lastError: null
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("recovers a transient failed official Daily Brief plugin across catalog reconciliation", async () => {
+    const db = createEmptyDatabase();
+    const plugins = new SqlitePluginRepository(db);
+    const jobs = new SqliteJobRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 1000 });
+
+    try {
+      const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(catalog.statusCode, catalog.body).toBe(200);
+
+      plugins.setStatus("app.dibao.daily-brief", "failed", "Plugin host exited", 1000);
+      const deliveryJob = jobs.enqueue({
+        id: "job_daily_brief_delivery",
+        type: "plugin:app.dibao.daily-brief:__delivery",
+        runAfter: 60 * 60 * 1000,
+        now: 1000
+      });
+      const taskJob = jobs.enqueue({
+        id: "job_daily_brief_refresh",
+        type: "plugin:app.dibao.daily-brief:refresh",
+        runAfter: 60 * 60 * 1000,
+        now: 1000
+      });
+      jobs.defer(deliveryJob.id, "Plugin paused: app.dibao.daily-brief is failed", deliveryJob.runAfter, 1000);
+      jobs.defer(taskJob.id, "Plugin paused: app.dibao.daily-brief is failed", taskJob.runAfter, 1000);
+
+      const reconciled = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(reconciled.statusCode, reconciled.body).toBe(200);
+      const dailyBrief = reconciled
+        .json()
+        .data.find((plugin: { id: string }) => plugin.id === "app.dibao.daily-brief");
+      expect(dailyBrief).toMatchObject({
+        id: "app.dibao.daily-brief",
+        status: "enabled",
+        lastError: null
+      });
+      expect(plugins.findInstall("app.dibao.daily-brief")).toMatchObject({
+        status: "enabled",
+        lastError: null,
+        disabledAt: null
+      });
+      expect(plugins.getKv("app.dibao.daily-brief", "runtime:lastError")).toMatchObject({
+        scope: "catalog:reconcile",
+        error: "Plugin host exited"
+      });
+      expect(jobs.findById(deliveryJob.id)).toMatchObject({
+        status: "queued",
+        runAfter: 1000,
+        error: "Official plugin recovered from transient runtime failure"
+      });
+      expect(jobs.findById(taskJob.id)).toMatchObject({
+        status: "queued",
+        runAfter: 1000,
+        error: "Official plugin recovered from transient runtime failure"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("requeues stale paused official plugin jobs when the plugin is already enabled", async () => {
+    const db = createEmptyDatabase();
+    const plugins = new SqlitePluginRepository(db);
+    const jobs = new SqliteJobRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 2000 });
+
+    try {
+      const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(catalog.statusCode, catalog.body).toBe(200);
+
+      plugins.setStatus("app.dibao.webhook", "enabled", null, 1000);
+      const deliveryJob = jobs.enqueue({
+        id: "job_webhook_delivery",
+        type: "plugin:app.dibao.webhook:__delivery",
+        runAfter: 60 * 60 * 1000,
+        now: 1000
+      });
+      jobs.defer(deliveryJob.id, "Plugin paused: app.dibao.webhook is failed", deliveryJob.runAfter, 1000);
+
+      const reconciled = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(reconciled.statusCode, reconciled.body).toBe(200);
+      expect(plugins.findInstall("app.dibao.webhook")).toMatchObject({
+        status: "enabled",
+        disabledAt: null
+      });
+      expect(jobs.findById(deliveryJob.id)).toMatchObject({
+        status: "queued",
+        runAfter: 2000,
+        error: "Official plugin recovered from transient runtime failure"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("keeps official plugins enabled after transient hook timeouts", async () => {
+    const db = createEmptyDatabase();
+    const plugins = new SqlitePluginRepository(db);
+    const officialPluginsDir = createTempDir();
+    const pluginDataDir = createTempDir();
+    const pluginDir = join(officialPluginsDir, "app.dibao.timeout-test");
+    mkdirSync(join(pluginDir, "server"), { recursive: true });
+    writeFileSync(
+      join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        manifestVersion: 1,
+        id: "app.dibao.timeout-test",
+        name: "Timeout Test",
+        version: "1.0.0",
+        publisher: "Dibao",
+        dibao: { minVersion: "0.1.0", maxVersion: "<0.3.0" },
+        entry: { server: "server/index.mjs" },
+        capabilities: [],
+        contributes: { hooks: ["settings.afterUpdated"] }
+      })
+    );
+    writeFileSync(
+      join(pluginDir, "server/index.mjs"),
+      [
+        "export default {",
+        "  activate(ctx) {",
+        "    ctx.hooks.on('settings.afterUpdated', async () => new Promise(() => {}));",
+        "  }",
+        "};"
+      ].join("\n")
+    );
+    const app = buildServer({
+      db,
+      logger: false,
+      officialPluginsDir,
+      pluginDataDir
+    });
+
+    try {
+      const enabled = await app.inject({ method: "POST", url: "/api/plugins/app.dibao.timeout-test/enable" });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+
+      const [changed, changedAgain] = await Promise.all([
+        injectJson(app, "PATCH", "/api/settings", {
+          reader: { fontSize: 20 }
+        }),
+        injectJson(app, "PATCH", "/api/settings", {
+          reader: { fontSize: 21 }
+        })
+      ]);
+      expect(changed.statusCode, changed.body).toBe(200);
+      expect(changedAgain.statusCode, changedAgain.body).toBe(200);
+
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+
+      expect(plugins.findInstall("app.dibao.timeout-test")).toMatchObject({
+        status: "enabled",
+        lastError: null
+      });
+      expect(plugins.getKv("app.dibao.timeout-test", "hook:settings.afterUpdated:lastError")).toMatchObject({
+        hook: "settings.afterUpdated",
+        error: expect.stringMatching(/^Plugin (?:hook timed out: settings\.afterUpdated|host stopped)$/u)
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("updates Daily Brief settings, schedules, topic filters, and readable summaries", async () => {
+    const db = createFixtureDatabase();
+    const embeddings = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    insertDailyBriefTopicFixture(db, embeddings.index.id);
+    new SqliteRankingRepository(db).upsertExplanation({
+      articleId: "article_recommended",
+      rankContext: "base",
+      embeddingIndexId: embeddings.index.id,
+      payloadJson: JSON.stringify({
+        components: {
+          primaryFamilyId: "family_ai",
+          primaryFamilyLabel: "AI Systems",
+          primaryClusterId: "cluster_ai",
+          primaryClusterLabel: "AI Agents"
+        }
+      }),
+      createdAt: 7000
+    });
+    new SqliteRankingRepository(db).upsertExplanation({
+      articleId: "article_recent",
+      rankContext: "base",
+      embeddingIndexId: embeddings.index.id,
+      payloadJson: JSON.stringify({
+        components: {
+          primaryFamilyId: "family_design",
+          primaryFamilyLabel: "Reader Design"
+        }
+      }),
+      createdAt: 7000
+    });
+    db.prepare("update articles set summary = ? where id = ?").run(
+      `<article><h1>Ignored</h1><p>Readable &amp; useful summary.</p><script>bad()</script>${"More text. ".repeat(60)}</article>`,
+      "article_recommended"
+    );
+    const app = buildServer({ db, logger: false, now: () => 10_000 });
+
+    try {
+      const enabled = await app.inject({
+        method: "POST",
+        url: "/api/plugins/app.dibao.daily-brief/enable"
+      });
+      expect(enabled.statusCode, enabled.body).toBe(200);
+
+      const saved = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/settings", {
+        enabled: true,
+        scheduledLocalTime: "07:30",
+        timezone: "Asia/Shanghai",
+        articleCount: 500,
+        excludedFamilyIds: ["family_unused", "family_unused"],
+        excludedClusterIds: ["cluster_unused"]
+      });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(saved.json()).toMatchObject({
+        data: {
+          settings: {
+            enabled: true,
+            scheduledLocalTime: "07:30",
+            timezone: "Asia/Shanghai",
+            articleCount: 50,
+            excludedFamilyIds: ["family_unused"],
+            excludedClusterIds: ["cluster_unused"]
+          },
+          targets: {
+            families: expect.arrayContaining([
+              expect.objectContaining({ id: "family_ai", label: "AI Systems" }),
+              expect.objectContaining({ id: "family_design", label: "Reader Design" })
+            ]),
+            clusters: expect.arrayContaining([
+              expect.objectContaining({
+                id: "cluster_ai",
+                label: "AI Agents",
+                familyId: "family_ai"
+              })
+            ])
+          }
+        }
+      });
+
+      db.prepare("update plugin_schedules set updated_at = ? where plugin_id = ? and task_id = ?").run(
+        4242,
+        "app.dibao.daily-brief",
+        "dailyBrief.generate"
+      );
+      const briefsOnly = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/api/briefs"
+      });
+      expect(briefsOnly.statusCode, briefsOnly.body).toBe(200);
+      expect(briefsOnly.json().data).toMatchObject({
+        latest: null,
+        briefs: []
+      });
+      expect(briefsOnly.json().data.settings).toBeUndefined();
+      expect(briefsOnly.json().data.targets).toBeUndefined();
+      expect(
+        db.prepare("select updated_at from plugin_schedules where plugin_id = ? and task_id = ?").get(
+          "app.dibao.daily-brief",
+          "dailyBrief.generate"
+        )
+      ).toMatchObject({ updated_at: 4242 });
+
+      const health = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/health"
+      });
+      expect(health.statusCode, health.body).toBe(200);
+      expect(health.json()).toMatchObject({
+        data: {
+          schedules: [
+            expect.objectContaining({
+              taskId: "dailyBrief.generate",
+              enabled: true,
+              localTime: "07:30",
+              timezone: "Asia/Shanghai"
+            })
+          ]
+        }
+      });
+
+      const renamedFamily = await injectJson(app, "PATCH", "/api/recommendation/families/family_ai/label", {
+        manualLabel: "AI 产品与开发"
+      });
+      expect(renamedFamily.statusCode, renamedFamily.body).toBe(200);
+      expect(renamedFamily.json()).toMatchObject({
+        data: {
+          ok: true,
+          familyId: "family_ai",
+          displayLabel: "AI 产品与开发",
+          manualLabel: "AI 产品与开发"
+        }
+      });
+
+      const renamedState = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/api/state"
+      });
+      expect(renamedState.statusCode, renamedState.body).toBe(200);
+      expect(
+        db.prepare("select updated_at from plugin_schedules where plugin_id = ? and task_id = ?").get(
+          "app.dibao.daily-brief",
+          "dailyBrief.generate"
+        )
+      ).toMatchObject({ updated_at: 4242 });
+      expect(renamedState.json().data.targets.families).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "family_ai", label: "AI 产品与开发" })
+        ])
+      );
+
+      const emptyState = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/api/state"
+      });
+      expect(emptyState.statusCode, emptyState.body).toBe(200);
+      expect(emptyState.json().data).toMatchObject({
+        latest: null,
+        briefs: []
+      });
+
+      const generated = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/generate", {
+        force: false
+      });
+      expect(generated.statusCode, generated.body).toBe(200);
+      expect(generated.json().data.generated).toBe(true);
+      const generatedBrief = generated.json().data.brief;
+      expect(generatedBrief.groups).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "family_ai", label: "AI 产品与开发" })
+        ])
+      );
+      expect(generatedBrief.groups.map((group: { id: string }) => group.id)).not.toContain("cluster_ai");
+      expect(generatedBrief).toMatchObject({
+        receivedArticleCount: expect.any(Number),
+        topicCount: expect.any(Number)
+      });
+      const htmlArticle = generatedBrief.groups
+        .flatMap(
+          (group: {
+            articles: Array<{
+              articleId: string;
+              displaySummary: string | null;
+              summary: string | null;
+              state: unknown;
+              url: string;
+              snapshotAt: number;
+            }>;
+          }) => group.articles
+        )
+        .find((article: { articleId: string }) => article.articleId === "article_recommended");
+      expect(htmlArticle?.displaySummary).toContain("Readable & useful summary.");
+      expect(htmlArticle?.displaySummary).not.toContain("<article>");
+      expect(htmlArticle?.displaySummary).not.toContain("bad()");
+      expect(htmlArticle?.displaySummary.length).toBeLessThanOrEqual(280);
+      expect(htmlArticle).toMatchObject({
+        state: expect.objectContaining({
+          favorited: false,
+          liked: false,
+          readLater: false
+        }),
+        url: "https://example.com/recommended",
+        snapshotAt: 10_000
+      });
+
+      const renamedCluster = await injectJson(app, "PATCH", "/api/recommendation/clusters/cluster_ai/label", {
+        manualLabel: "AI 编程代理"
+      });
+      expect(renamedCluster.statusCode, renamedCluster.body).toBe(200);
+      expect(renamedCluster.json()).toMatchObject({
+        data: {
+          ok: true,
+          clusterId: "cluster_ai",
+          displayLabel: "AI 编程代理",
+          labelSource: "manual"
+        }
+      });
+      const relabeledBriefs = await app.inject({
+        method: "GET",
+        url: "/api/plugins/app.dibao.daily-brief/api/briefs"
+      });
+      expect(relabeledBriefs.statusCode, relabeledBriefs.body).toBe(200);
+      expect(relabeledBriefs.json().data.latest.groups).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "family_ai",
+            label: "AI 产品与开发",
+            articles: expect.arrayContaining([
+              expect.objectContaining({
+                articleId: "article_recommended",
+                familyLabel: "AI 产品与开发",
+                clusterLabel: "AI 编程代理"
+              })
+            ])
+          })
+        ])
+      );
+      expect(relabeledBriefs.json().data.latest.groups.map((group: { id: string }) => group.id)).not.toContain("cluster_ai");
+
+      db.prepare("update articles set title = ?, summary = ?, status = 'deleted', deleted_at = ? where id = ?").run(
+        "Deleted source article",
+        null,
+        10_500,
+        "article_recommended"
+      );
+      const cachedGenerate = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/generate", {
+        force: false
+      });
+      expect(cachedGenerate.statusCode, cachedGenerate.body).toBe(200);
+      expect(cachedGenerate.json().data.generated).toBe(false);
+      const cachedArticle = cachedGenerate
+        .json()
+        .data.brief.groups.flatMap((group: { articles: Array<{ articleId: string; title: string; displaySummary: string | null }> }) =>
+          group.articles
+        )
+        .find((article: { articleId: string }) => article.articleId === "article_recommended");
+      expect(cachedArticle).toMatchObject({
+        title: "Quiet ranking systems",
+        clusterLabel: "AI 编程代理",
+        displaySummary: expect.stringContaining("Readable & useful summary.")
+      });
+      expect(cachedGenerate.json().data.brief.groups).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "family_ai", label: "AI 产品与开发" })
+        ])
+      );
+      expect(cachedGenerate.json().data.brief.groups.map((group: { id: string }) => group.id)).not.toContain("cluster_ai");
+
+      const excludedCluster = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/settings", {
+        enabled: true,
+        scheduledLocalTime: "07:30",
+        timezone: "Asia/Shanghai",
+        articleCount: 5,
+        excludedFamilyIds: [],
+        excludedClusterIds: ["cluster_ai"]
+      });
+      expect(excludedCluster.statusCode, excludedCluster.body).toBe(200);
+      const clusterFiltered = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/generate", {
+        force: true
+      });
+      const clusterArticleIds = clusterFiltered
+        .json()
+        .data.brief.groups.flatMap((group: { articles: Array<{ articleId: string }> }) =>
+          group.articles.map((article) => article.articleId)
+        );
+      expect(clusterArticleIds).not.toContain("article_recommended");
+      expect(clusterArticleIds).toContain("article_recent");
+
+      const excludedFamilies = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/settings", {
+        enabled: true,
+        scheduledLocalTime: "07:30",
+        timezone: "Asia/Shanghai",
+        articleCount: 5,
+        excludedFamilyIds: ["family_ai", "family_design"],
+        excludedClusterIds: []
+      });
+      expect(excludedFamilies.statusCode, excludedFamilies.body).toBe(200);
+      const empty = await postJson(app, "/api/plugins/app.dibao.daily-brief/api/generate", {
+        force: true
+      });
+      expect(empty.statusCode, empty.body).toBe(200);
+      expect(empty.json().data.brief).toMatchObject({
+        articleCount: 0,
+        emptyReason: "no_articles_for_settings",
+        groups: []
       });
     } finally {
       await app.close();
@@ -891,6 +2748,62 @@ describe("server API vertical slice", () => {
       expect(upgradeStatus.json()).toMatchObject({
         data: {
           blocking: true
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("shows a visible blocking upgrade while core database migrations are pending", async () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: false });
+    runMigrations(
+      db,
+      loadDefaultMigrations().filter((migration) => migration.version !== "021")
+    );
+    const app = buildRealServer({
+      db,
+      logger: false,
+      cookieSecure: false,
+      upgradeAutoStart: false,
+      coreMigrationDeferMs: 60_000
+    });
+
+    try {
+      const setup = await postJson(app, "/api/auth/setup", {
+        username: "Pls",
+        password: "correct horse battery"
+      });
+      const cookie = cookieHeaderFromSetCookie(setup.headers["set-cookie"]);
+
+      const setupStatus = await app.inject({
+        method: "GET",
+        url: "/api/setup/status",
+        headers: { cookie }
+      });
+      expect(setupStatus.statusCode, setupStatus.body).toBe(200);
+      expect(setupStatus.json()).toMatchObject({
+        data: {
+          coreDatabaseMigration: {
+            id: "core-database-schema-migrations",
+            state: "pending",
+            blocking: true,
+            step: "detecting",
+            reason: "pending_core_migrations:021"
+          }
+        }
+      });
+
+      const blocked = await app.inject({
+        method: "GET",
+        url: "/api/feeds",
+        headers: { cookie }
+      });
+      expect(blocked.statusCode, blocked.body).toBe(423);
+      expect(blocked.json()).toMatchObject({
+        error: {
+          code: "CORE_DATABASE_MIGRATION_IN_PROGRESS"
         }
       });
     } finally {
@@ -1192,8 +3105,12 @@ describe("server API vertical slice", () => {
 
   it("creates, tests, and lists OpenAI-compatible embedding providers", async () => {
     const db = createEmptyDatabase();
-    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
-      [];
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
     const app = buildServer({
       db,
       logger: false,
@@ -1289,7 +3206,8 @@ describe("server API vertical slice", () => {
         {
           url: "https://api.example.com/v1/embeddings",
           authorization: "Bearer secret",
-          inputCount: 1
+          inputCount: 1,
+          dimensions: null
         }
       ]);
     } finally {
@@ -1565,8 +3483,12 @@ describe("server API vertical slice", () => {
 
   it("records provider test failures without storing errors on indexes", async () => {
     const db = createEmptyDatabase();
-    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
-      [];
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
     const app = buildServer({
       db,
       logger: false,
@@ -2194,8 +4116,12 @@ describe("server API vertical slice", () => {
 
   it("queues embedding jobs for newly refreshed articles without calling the provider inline", async () => {
     const db = createEmptyDatabase();
-    const embeddingCalls: Array<{ url: string; authorization: string | null; inputCount: number }> =
-      [];
+    const embeddingCalls: Array<{
+      url: string;
+      authorization: string | null;
+      inputCount: number;
+      dimensions: number | null;
+    }> = [];
     const app = buildServer({
       db,
       logger: false,
@@ -2406,6 +4332,21 @@ describe("server API vertical slice", () => {
       expect(lightStatus.json()).toMatchObject({
         data: {
           mode: "embedding",
+          coverage: {
+            candidateCount: 2,
+            eligibleArticleCount: 2,
+            missingEmbeddingCount: 1,
+            staleEmbeddingCount: 0,
+            embeddingCount: 1,
+            coverageRatio: 0.5,
+            pendingJobs: 1,
+            failedJobs: 0,
+            lastFailedAt: null,
+            lastError: null
+          },
+          behaviorCounts: {
+            favorite: 1
+          },
           clusters: {
             positive: 1,
             negative: 0,
@@ -2415,7 +4356,13 @@ describe("server API vertical slice", () => {
               topFamilies: []
             },
             items: []
-          }
+          },
+          rankedArticles: {
+            base: 2,
+            active: 0
+          },
+          lastProfileUpdate: "1970-01-01T00:00:06.150Z",
+          lastRankingUpdate: "1970-01-01T00:00:04.000Z"
         }
       });
       expect(lightStatus.body).not.toContain("cluster_overfit_probe");
@@ -2442,6 +4389,14 @@ describe("server API vertical slice", () => {
       expect(transparency.statusCode, transparency.body).toBe(200);
       expect(transparency.json()).toMatchObject({
         data: {
+          clusters: {
+            items: [
+              expect.objectContaining({
+                id: "cluster_overfit_probe",
+                displayLabel: expect.any(String)
+              })
+            ]
+          },
           transparency: {
             algorithmModules: expect.arrayContaining([
               expect.objectContaining({
@@ -2456,6 +4411,193 @@ describe("server API vertical slice", () => {
           }
         }
       });
+      expect(transparency.body).not.toContain("vectorBlob");
+      expect(transparency.json().data.clusters.items[0].diagnostics).toBeUndefined();
+
+      const emptyTransparency = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency?includeClusterItems=false"
+      });
+      expect(emptyTransparency.statusCode, emptyTransparency.body).toBe(200);
+      expect(emptyTransparency.json().data.clusters.items).toEqual([]);
+
+      const transparencyWithItems = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency?includeClusterItems=true&clusterDetailLevel=diagnostic"
+      });
+      expect(transparencyWithItems.statusCode, transparencyWithItems.body).toBe(200);
+      expect(transparencyWithItems.json()).toMatchObject({
+        data: {
+          clusters: {
+            items: [
+              expect.objectContaining({
+                id: "cluster_overfit_probe"
+              })
+            ]
+          }
+        }
+      });
+      expect(transparencyWithItems.json().data.clusters.items[0].diagnostics).toBeDefined();
+
+      const invalidDetailLevel = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency?clusterDetailLevel=full"
+      });
+      expect(invalidDetailLevel.statusCode, invalidDetailLevel.body).toBe(400);
+      expect(invalidDetailLevel.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "clusterDetailLevel"
+          }
+        }
+      });
+
+      const invalidClusterLimit = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency?clusterItemLimit=0"
+      });
+      expect(invalidClusterLimit.statusCode, invalidClusterLimit.body).toBe(400);
+      expect(invalidClusterLimit.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "clusterItemLimit"
+          }
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("reports cached ranking as personalized while embedding backfill continues", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    const jobs = new SqliteJobRepository(db);
+    jobs.enqueue({
+      id: "job_embedding_followup",
+      type: "embedding_generate",
+      payloadJson: JSON.stringify({
+        embeddingIndexId: index.id,
+        articleIds: ["article_recent"]
+      }),
+      now: 6000
+    });
+    const vectors = new SqliteVecVectorStore(db);
+    vectors.upsertArticleVector({
+      articleId: "article_recommended",
+      embeddingIndexId: index.id,
+      vector: [1, 0, 0],
+      contentHash: "article_recommended:2000",
+      now: 6100
+    });
+    vectors.upsertArticleVector({
+      articleId: "article_recent",
+      embeddingIndexId: index.id,
+      vector: [0, 1, 0],
+      contentHash: "article_recent:3000",
+      now: 6100
+    });
+    const activeRankContext = "rec_v3:embedding:cocoon_5:schema_3";
+    insertRankForContext(db, {
+      articleId: "article_recommended",
+      rankContext: activeRankContext,
+      embeddingIndexId: index.id,
+      score: 0.9,
+      calculatedAt: 6200
+    });
+    insertRankForContext(db, {
+      articleId: "article_recent",
+      rankContext: activeRankContext,
+      embeddingIndexId: index.id,
+      score: 0.7,
+      calculatedAt: 6200
+    });
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/status?includeClusterItems=false"
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        data: {
+          mode: "personalized",
+          coverage: {
+            candidateCount: 2,
+            coveredArticleCount: 2,
+            coverageRatio: 1,
+            pendingJobs: 1
+          },
+          rankedArticles: {
+            active: 2
+          },
+          lastRankingUpdate: "1970-01-01T00:00:06.200Z",
+          warnings: expect.arrayContaining([
+            {
+              code: "EMBEDDING_PENDING",
+              message: "Embedding generation is still running or incomplete for the active index."
+            }
+          ])
+        }
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("limits default transparency cluster summaries to ten items", async () => {
+    const db = createFixtureDatabase();
+    const { index } = createActiveEmbeddingDiagnosticsFixture(db, {
+      providerTestStatus: "success"
+    });
+    const profiles = new SqliteProfileRepository(db);
+    for (let offset = 0; offset < 12; offset += 1) {
+      const id = `cluster_summary_${offset}`;
+      profiles.upsertCluster({
+        id,
+        embeddingIndexId: index.id,
+        polarity: offset % 2 === 0 ? "positive" : "negative",
+        label: `Summary ${offset}`,
+        centroidVectorBlob: toVectorBlob([1, offset / 100, 0]),
+        weight: 20 - offset,
+        sampleCount: 2,
+        now: 7000 + offset
+      });
+      db.prepare(
+        `
+          insert into interest_cluster_labels (
+            cluster_id,
+            auto_label,
+            label_source,
+            updated_at
+          )
+          values (?, ?, 'keywords', ?)
+        `
+      ).run(id, `Summary ${offset}`, 7000 + offset);
+    }
+    const app = buildServer({ db, logger: false, backgroundJobs: false });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/transparency"
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.clusters.items).toHaveLength(10);
+      expect(response.json().data.clusters.items[0]).toMatchObject({
+        id: "cluster_summary_0",
+        displayLabel: "Summary 0"
+      });
+      expect(response.json().data.clusters.items[0].diagnostics).toBeUndefined();
+      expect(response.body).not.toContain("vectorBlob");
     } finally {
       await app.close();
       db.close();
@@ -3037,11 +5179,11 @@ describe("server API vertical slice", () => {
       expect(first.statusCode, first.body).toBe(200);
       expect(first.json()).toMatchObject({
         data: {
-          currentVersion: "0.1.3",
+          currentVersion: "0.2.1",
           latestVersion: "v0.2.0",
           releaseUrl: "https://github.com/Pls-1q43/Dibao/releases/tag/v0.2.0",
-          updateAvailable: true,
-          status: "update_available",
+          updateAvailable: false,
+          status: "current",
           checkedAt: "2026-05-28T09:30:00.000Z",
           nextAutoCheckAt: "2026-05-29T09:30:00.000Z"
         }
@@ -3694,7 +5836,7 @@ describe("server API vertical slice", () => {
       providerTestStatus: "success"
     });
     insertApiClusterLabelFixture(db, index.id);
-    const app = buildServer({ db, logger: false, now: () => 20_000 });
+    const app = buildServer({ db, logger: false, backgroundJobs: false, now: () => 20_000 });
 
     try {
       const missing = await app.inject({
@@ -3734,7 +5876,7 @@ describe("server API vertical slice", () => {
 
       const transparency = await app.inject({
         method: "GET",
-        url: "/api/recommendation/transparency"
+        url: "/api/recommendation/transparency?includeClusterItems=true"
       });
       expect(transparency.statusCode, transparency.body).toBe(200);
       expect(transparency.json()).toMatchObject({
@@ -3751,6 +5893,48 @@ describe("server API vertical slice", () => {
                 topTerms: expect.arrayContaining([expect.stringMatching(/AI|Agent|CLI/i)])
               }
             ]
+          }
+        }
+      });
+
+      const summaryClusters = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/clusters?limit=all&clusterDetailLevel=summary"
+      });
+      expect(summaryClusters.statusCode, summaryClusters.body).toBe(200);
+      expect(summaryClusters.json()).toMatchObject({
+        data: {
+          total: 1,
+          items: [
+            expect.objectContaining({
+              id: "cluster_label_api",
+              displayLabel: "AI 编程代理",
+              family: null
+            })
+          ]
+        }
+      });
+      expect(summaryClusters.json().data.items[0].diagnostics).toBeUndefined();
+      expect(summaryClusters.json().data.items[0].mergeDiagnostics).toBeUndefined();
+
+      const diagnosticClusters = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/clusters?limit=all&clusterDetailLevel=diagnostic"
+      });
+      expect(diagnosticClusters.statusCode, diagnosticClusters.body).toBe(200);
+      expect(diagnosticClusters.json().data.items[0].diagnostics).toBeDefined();
+      expect(diagnosticClusters.json().data.items[0].mergeDiagnostics).toBeDefined();
+
+      const invalidClusterDetailLevel = await app.inject({
+        method: "GET",
+        url: "/api/recommendation/clusters?limit=all&clusterDetailLevel=full"
+      });
+      expect(invalidClusterDetailLevel.statusCode, invalidClusterDetailLevel.body).toBe(400);
+      expect(invalidClusterDetailLevel.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          details: {
+            field: "clusterDetailLevel"
           }
         }
       });
@@ -5591,6 +7775,36 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("paginates recommended articles with keyset cursors", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false });
+
+    try {
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/articles?view=recommended&limit=1&includeUnreadCount=false"
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recommended"
+      ]);
+      expect(first.json().meta).toEqual({ unreadCount: null });
+      expect(first.json().page.nextCursor).toEqual(expect.any(String));
+
+      const second = await app.inject({
+        method: "GET",
+        url: `/api/articles?view=recommended&limit=1&cursor=${encodeURIComponent(first.json().page.nextCursor)}`
+      });
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json().data.map((article: { id: string }) => article.id)).toEqual([
+        "article_recent"
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("orders read later by active rank, base fallback, then saved time", async () => {
     const db = createArticleSortDatabase();
     const embeddings = new SqliteEmbeddingRepository(db);
@@ -6301,6 +8515,48 @@ describe("server API vertical slice", () => {
     }
   });
 
+  it("caches rank explanations and invalidates them after article actions", async () => {
+    const db = createFixtureDatabase();
+    insertRank(db, "article_recommended", 1.2, 7000, {
+      stateScore: 0.5
+    });
+    const app = buildServer({ db, logger: false, now: () => 8000 });
+
+    try {
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json().data.generatedAt).toBe("1970-01-01T00:00:07.000Z");
+
+      insertRank(db, "article_recommended", 1.2, 9000, {
+        stateScore: 0.8
+      });
+      const cached = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+      expect(cached.statusCode, cached.body).toBe(200);
+      expect(cached.json().data.generatedAt).toBe("1970-01-01T00:00:07.000Z");
+
+      const action = await postJson(app, "/api/articles/article_recommended/actions", {
+        type: "favorite"
+      });
+      expect(action.statusCode, action.body).toBe(200);
+
+      const refreshed = await app.inject({
+        method: "GET",
+        url: "/api/articles/article_recommended/explanation"
+      });
+      expect(refreshed.statusCode, refreshed.body).toBe(200);
+      expect(refreshed.json().data.generatedAt).toBe("1970-01-01T00:00:09.000Z");
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it("returns an interest family explanation when semantic rank has no cluster match", async () => {
     const db = createFixtureDatabase();
     insertRank(db, "article_recommended", 1.2, 7000, {
@@ -6527,7 +8783,7 @@ describe("server API vertical slice", () => {
     }
   });
 
-  it("records like and unlike article actions without exposing event ids", async () => {
+  it("records like and unlike article actions and returns event ids", async () => {
     const db = createFixtureDatabase();
     const app = buildServer({ db, logger: false, now: () => 5050 });
 
@@ -6540,12 +8796,12 @@ describe("server API vertical slice", () => {
       });
 
       expect(like.statusCode, like.body).toBe(200);
-      expect(like.json().data).not.toHaveProperty("eventId");
+      expect(like.json().data.eventId).toEqual(expect.any(String));
       expect(like.json().data.state).toMatchObject({
         liked: true
       });
       expect(unlike.statusCode, unlike.body).toBe(200);
-      expect(unlike.json().data).not.toHaveProperty("eventId");
+      expect(unlike.json().data.eventId).toEqual(expect.any(String));
       expect(unlike.json().data.state).toMatchObject({
         liked: false
       });
@@ -6690,6 +8946,47 @@ describe("server API vertical slice", () => {
         "impression",
         "open"
       ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("records passive impressions in bulk", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 5400 });
+
+    try {
+      const response = await postJson(app, "/api/articles/actions/bulk", {
+        actions: [
+          {
+            articleId: "article_recommended",
+            type: "impression",
+            metadata: {
+              reason: "scrolled_past_unopened",
+              view: "recommended"
+            }
+          },
+          {
+            articleId: "article_recent",
+            type: "impression",
+            metadata: {
+              reason: "scrolled_past_unopened",
+              view: "latest"
+            }
+          }
+        ]
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toHaveLength(2);
+      expect(response.json().data.map((item: { articleId: string }) => item.articleId)).toEqual([
+        "article_recommended",
+        "article_recent"
+      ]);
+      expect(response.json().meta.skipped).toEqual([]);
+      expect(listBehaviorEventTypes(db, "article_recommended")).toEqual(["impression"]);
+      expect(listBehaviorEventTypes(db, "article_recent")).toEqual(["impression"]);
     } finally {
       await app.close();
       db.close();
@@ -7283,6 +9580,128 @@ function createActiveEmbeddingDiagnosticsFixture(
   };
 }
 
+function insertDailyBriefTopicFixture(db: DibaoDatabase, embeddingIndexId: string): void {
+  const profiles = new SqliteProfileRepository(db);
+  profiles.upsertCluster({
+    id: "cluster_ai",
+    embeddingIndexId,
+    polarity: "positive",
+    label: "AI Agents",
+    centroidVectorBlob: toVectorBlob([1, 0, 0]),
+    weight: 8,
+    sampleCount: 4,
+    now: 6500
+  });
+  profiles.upsertCluster({
+    id: "cluster_design",
+    embeddingIndexId,
+    polarity: "positive",
+    label: "Reader Design",
+    centroidVectorBlob: toVectorBlob([0, 1, 0]),
+    weight: 6,
+    sampleCount: 3,
+    now: 6500
+  });
+  db.prepare(
+    `
+      insert into interest_cluster_labels (
+        cluster_id,
+        auto_label,
+        label_source,
+        updated_at
+      )
+      values (?, ?, 'keywords', ?)
+    `
+  ).run("cluster_ai", "AI Agents", 6500);
+  db.prepare(
+    `
+      insert into interest_cluster_labels (
+        cluster_id,
+        auto_label,
+        label_source,
+        updated_at
+      )
+      values (?, ?, 'keywords', ?)
+    `
+  ).run("cluster_design", "Reader Design", 6500);
+  db.prepare(
+    `
+      insert into interest_families (
+        id,
+        embedding_index_id,
+        polarity,
+        display_label,
+        centroid_vector_blob,
+        weight,
+        cluster_count,
+        support_article_count,
+        support_event_count,
+        source_count,
+        strong_signal_count,
+        top_source_share,
+        maturity,
+        dominance_ratio,
+        created_at,
+        updated_at
+      )
+      values (?, ?, 'positive', ?, ?, ?, ?, ?, 4, 2, 3, 0.5, 0.8, 0.25, 6500, 6500)
+    `
+  ).run("family_ai", embeddingIndexId, "AI Systems", toVectorBlob([1, 0, 0]), 8, 1, 4);
+  db.prepare(
+    `
+      insert into interest_families (
+        id,
+        embedding_index_id,
+        polarity,
+        display_label,
+        centroid_vector_blob,
+        weight,
+        cluster_count,
+        support_article_count,
+        support_event_count,
+        source_count,
+        strong_signal_count,
+        top_source_share,
+        maturity,
+        dominance_ratio,
+        created_at,
+        updated_at
+      )
+      values (?, ?, 'positive', ?, ?, ?, ?, ?, 3, 2, 2, 0.45, 0.75, 0.2, 6500, 6500)
+    `
+  ).run("family_design", embeddingIndexId, "Reader Design", toVectorBlob([0, 1, 0]), 6, 1, 3);
+  db.prepare(
+    `
+      insert into interest_cluster_family_members (
+        cluster_id,
+        family_id,
+        embedding_index_id,
+        polarity,
+        membership_confidence,
+        centroid_similarity,
+        created_at,
+        updated_at
+      )
+      values (?, ?, ?, 'positive', 0.95, 0.98, 6500, 6500)
+    `
+  ).run("cluster_ai", "family_ai", embeddingIndexId);
+  db.prepare(
+    `
+      insert into interest_cluster_family_members (
+        cluster_id,
+        family_id,
+        embedding_index_id,
+        polarity,
+        membership_confidence,
+        centroid_similarity,
+        created_at,
+        updated_at
+      )
+      values (?, ?, ?, 'positive', 0.91, 0.93, 6500, 6500)
+    `
+  ).run("cluster_design", "family_design", embeddingIndexId);
+}
+
 function insertApiClusterLabelFixture(db: DibaoDatabase, embeddingIndexId: string): void {
   const feeds = new SqliteFeedRepository(db);
   const articles = new SqliteArticleRepository(db);
@@ -7662,15 +10081,32 @@ async function drainRankingJobs(db: DibaoDatabase, now: number): Promise<void> {
     rankings,
     now: () => now
   });
+  const profile = new ProfileService({
+    embeddings,
+    profiles,
+    now: () => now
+  });
   const rankingJobs = new RankingRecalculateJobService({
     jobs,
     ranking,
     now: () => now
   });
+  const behaviorProjectionJobs = new BehaviorProjectionJobService({
+    db,
+    jobs,
+    profile,
+    rankingJobs,
+    now: () => now
+  });
   const runner = new JobRunner({
     jobs,
     handlers: {
-      [RANKING_RECALCULATE_JOB_TYPE]: (job) => rankingJobs.handleRankingRecalculateJob(job)
+      [BEHAVIOR_EVENT_PROJECT_JOB_TYPE]: (job) => {
+        behaviorProjectionJobs.handleBehaviorEventProjectJob(job);
+      },
+      [RANKING_RECALCULATE_JOB_TYPE]: (job) => {
+        rankingJobs.handleRankingRecalculateJob(job);
+      }
     },
     now: () => now
   });
@@ -7698,24 +10134,38 @@ function fixtureFetcher(fixtures: Record<string, string>): FeedFetcher {
 }
 
 function embeddingFetcherFixture(
-  calls: Array<{ url: string; authorization: string | null; inputCount: number }>,
+  calls: Array<{
+    url: string;
+    authorization: string | null;
+    inputCount: number;
+    dimensions: number | null;
+  }>,
   dimension: number
 ): typeof fetch {
   return async (input, init) => {
-    const body = JSON.parse(String(init?.body ?? "{}")) as { input?: unknown };
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      input?: unknown;
+      dimensions?: unknown;
+    };
     const values = Array.isArray(body.input) ? body.input : [body.input];
+    const outputDimensions =
+      typeof body.dimensions === "number" ? body.dimensions : dimension;
     const headers = new Headers(init?.headers);
     calls.push({
       url: String(input),
       authorization: headers.get("authorization"),
-      inputCount: values.length
+      inputCount: values.length,
+      dimensions: typeof body.dimensions === "number" ? body.dimensions : null
     });
 
     return new Response(
       JSON.stringify({
         data: values.map((_, index) => ({
           index,
-          embedding: Array.from({ length: dimension }, (_value, vectorIndex) => vectorIndex + 1)
+          embedding: Array.from(
+            { length: outputDimensions },
+            (_value, vectorIndex) => vectorIndex + 1
+          )
         }))
       }),
       {
@@ -7956,6 +10406,27 @@ function expectClearSessionCookie(value: string | string[] | undefined): void {
   expect(cookie).toContain("HttpOnly");
   expect(cookie).toContain("SameSite=Lax");
   expect(cookie).toContain("Path=/");
+}
+
+function signedPluginPackageFixture(pluginPackage: {
+  manifest: unknown;
+  files?: Record<string, string>;
+  updateUrl?: string;
+}): { packageContent: string; trustedPublicKeys: Record<string, string> } {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keyId = `test-${Math.random().toString(36).slice(2)}`;
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  return {
+    packageContent: JSON.stringify(signPluginPackage({
+      pluginPackage,
+      privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+      publicKeyPem,
+      keyId
+    })),
+    trustedPublicKeys: {
+      [keyId]: publicKeyPem
+    }
+  };
 }
 
 async function postMultipartOpml(app: ReturnType<typeof buildServer>, xml: string) {
@@ -8201,4 +10672,15 @@ function waitForDeferredPostActionWork(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
 }

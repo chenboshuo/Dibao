@@ -1,0 +1,47 @@
+{
+  "manifestVersion": 1,
+  "id": "app.dibao.webhook",
+  "name": "Webhook",
+  "version": "0.1.0",
+  "publisher": "Dibao",
+  "dibao": {
+    "minVersion": "0.2.0",
+    "maxVersion": "<0.3.0"
+  },
+  "entry": {
+    "server": "server/index.mjs",
+    "web": "web/index.html"
+  },
+  "capabilities": [
+    "settings:plugin",
+    "files:plugin-data",
+    "secrets:plugin",
+    "deliveries:read",
+    "deliveries:write",
+    "network:outbound",
+    "articles:read"
+  ],
+  "contributes": {
+    "settingsTabs": [
+      {
+        "id": "webhook-settings",
+        "title": "Webhook",
+        "slot": "settings.tabs",
+        "route": "settings",
+        "order": 70,
+        "icon": "send"
+      }
+    ],
+    "hooks": [
+      "article.created",
+      "article.updated",
+      "article.actionRecorded",
+      "feed.refreshCompleted",
+      "ranking.afterRanked",
+      "settings.afterUpdated",
+      "plugin.taskSucceeded",
+      "plugin.taskFailed",
+      "dailyBrief.generated"
+    ]
+  }
+}

@@ -23,7 +23,8 @@ describe("web API client", () => {
           data: String(input).endsWith("/session")
             ? {
                 setupCompleted: true,
-                authenticated: false
+                authenticated: false,
+                username: null
               }
             : {
                 ok: true
@@ -40,11 +41,13 @@ describe("web API client", () => {
 
     await expect(api.getAuthSession()).resolves.toEqual({
       setupCompleted: true,
-      authenticated: false
+      authenticated: false,
+      username: null
     });
     await api.setupAuth("Pls", "correct horse battery");
     await api.login("Pls", "correct horse battery");
     await api.changePassword("correct horse battery", "new correct horse battery");
+    await api.logoutAll();
     await api.logout();
 
     expect(calls).toEqual([
@@ -80,6 +83,12 @@ describe("web API client", () => {
           currentPassword: "correct horse battery",
           newPassword: "new correct horse battery"
         }
+      },
+      {
+        path: "/api/auth/logout-all",
+        method: "POST",
+        credentials: "same-origin",
+        body: null
       },
       {
         path: "/api/auth/logout",
@@ -911,7 +920,7 @@ describe("web API client", () => {
       "/api/search?q=local+ai&limit=25&feedId=feed%2Fdesign&folderId=folder%2Fdesign&from=2026-05-01&to=2026-05-22&state=favorites&sort=recommended&cursor=cursor%2F1"
     ]);
     expect(first.page.nextCursor).toBe("next_cursor");
-    expect(first.meta.unreadCount).toBe(0);
+    expect(first.meta.unreadCount).toBeNull();
   });
 
   it("posts reader mark-scope-read commands", async () => {
@@ -1229,6 +1238,168 @@ describe("web API client", () => {
     ]);
   });
 
+  it("loads recommendation transparency with optional cluster items", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          data: {
+            mode: "personalized",
+            activeProvider: null,
+            activeIndex: null,
+            activeRankContext: "base",
+            algorithm: {
+              version: "rec_v3",
+              featureSchemaVersion: 3,
+              cocoonLevel: 1,
+              localLearning: { enabled: true, shadowMode: false },
+              exploration: { enabled: true },
+              evaluation: { enabled: false },
+              cocoonParameters: {}
+            },
+            coverage: {
+              candidateCount: 0,
+              embeddingCount: 0,
+              coverageRatio: 1,
+              pendingJobs: 0,
+              failedJobs: 0,
+              lastFailedAt: null,
+              lastError: null
+            },
+            behaviorCounts: {},
+            clusters: {
+              positive: 0,
+              negative: 0,
+              items: []
+            },
+            rankedArticles: {
+              base: 0,
+              active: 0
+            },
+            lastProfileUpdate: null,
+            lastRankingUpdate: null,
+            warnings: [],
+            transparency: {
+              currentFormula: "test",
+              fallbackReason: null,
+              rankingCore: {
+                usesRemoteLlm: false,
+                usesRemoteReranker: false,
+                usesExternalSearchService: false,
+                allowedRemoteDependency: "one embedding provider"
+              },
+              moduleStatus: {},
+              algorithmModules: [],
+              maintenance: {
+                schemaMigration: "017_interest_families",
+                backfillState: "tracked",
+                explanationAuthority: "article_rank_explanations",
+                scoreAuthority: "article_rank_scores",
+                automaticMaintenanceEnabled: true,
+                settings: null,
+                schedule: []
+              },
+              failureStates: {}
+            }
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await api.getRecommendationTransparency();
+    await api.getRecommendationTransparency({
+      includeClusterItems: true,
+      clusterItemLimit: 10,
+      clusterDetailLevel: "summary"
+    });
+
+    expect(calls).toEqual([
+      "/api/recommendation/transparency",
+      "/api/recommendation/transparency?includeClusterItems=true&clusterItemLimit=10&clusterDetailLevel=summary"
+    ]);
+  });
+
+  it("loads recommendation clusters with optional detail level", async () => {
+    const calls: string[] = [];
+    const api = createDibaoApi(async (input) => {
+      calls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          data: {
+            activeIndex: null,
+            total: 0,
+            items: []
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await api.listRecommendationClusters("all", { clusterDetailLevel: "summary" });
+
+    expect(calls).toEqual([
+      "/api/recommendation/clusters?limit=all&clusterDetailLevel=summary"
+    ]);
+  });
+
+  it("updates manual recommendation family labels", async () => {
+    const calls: Array<{ path: string; body: unknown; method: string | undefined }> = [];
+    const api = createDibaoApi(async (input, init) => {
+      calls.push({
+        path: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+        method: init?.method
+      });
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            ok: true,
+            familyId: "family/one",
+            displayLabel: "AI 新闻",
+            manualLabel: "AI 新闻"
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    await expect(
+      api.updateRecommendationFamilyLabel("family/one", "AI 新闻")
+    ).resolves.toMatchObject({
+      ok: true,
+      familyId: "family/one",
+      displayLabel: "AI 新闻",
+      manualLabel: "AI 新闻"
+    });
+    expect(calls).toEqual([
+      {
+        path: "/api/recommendation/families/family%2Fone/label",
+        method: "PATCH",
+        body: {
+          manualLabel: "AI 新闻"
+        }
+      }
+    ]);
+  });
+
   it("posts article actions using the contract-shaped body", async () => {
     const calls: Array<{ path: string; body: unknown; method: string | undefined }> = [];
     const api = createDibaoApi(async (input, init) => {
@@ -1241,6 +1412,7 @@ describe("web API client", () => {
       return new Response(
         JSON.stringify({
           data: {
+            eventId: "event_1",
             state: {
               read: false,
               favorited: false,
@@ -1371,9 +1543,21 @@ describe("web API client", () => {
     );
     expect(
       userMessageForError(
+        Object.assign(new Error("aborted"), { name: "AbortError" }),
+        dictionaries["zh-CN"].errors.api
+      )
+    ).toBe(dictionaries["zh-CN"].errors.api.requestTimeout);
+    expect(
+      userMessageForError(
         new ApiRequestError(500, "INTERNAL_ERROR", "", undefined, false),
         dictionaries["en-US"].errors.api
       )
     ).toBe("Request failed (HTTP 500).");
+    expect(
+      userMessageForError(
+        new ApiRequestError(503, "DATABASE_BUSY", "Internal server error"),
+        dictionaries["zh-CN"].errors.api
+      )
+    ).toBe(dictionaries["zh-CN"].errors.api.databaseBusy);
   });
 });

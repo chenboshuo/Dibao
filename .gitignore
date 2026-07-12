@@ -2,6 +2,7 @@
 node_modules/
 .tmp/
 .codegraph/
+local-docs/
 dist/
 build/
 .env

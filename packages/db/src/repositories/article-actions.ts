@@ -56,7 +56,9 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
       }
 
       this.ensureStateRow(input.articleId, input.now);
-      this.insertBehaviorEvent(input, this.eventWeightFor(input));
+      const eventWeight = this.eventWeightFor(input);
+      this.insertBehaviorEvent(input, eventWeight);
+      this.updateInteractionProjection(input, eventWeight);
       this.applyStateChange(input);
 
       return {
@@ -174,6 +176,29 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
       : 0;
   }
 
+  private updateInteractionProjection(
+    input: Required<Omit<RecordArticleActionInput, "progress" | "metadata">> &
+      Pick<RecordArticleActionInput, "progress" | "metadata">,
+    eventWeight: number
+  ): void {
+    this.db
+      .prepare(
+        `
+          update article_states
+          set
+            last_action_at = max(coalesce(last_action_at, 0), ?),
+            last_ignored_at = case
+              when ? = 'impression' and ? < 0
+                then max(coalesce(last_ignored_at, 0), ?)
+              else last_ignored_at
+            end,
+            updated_at = max(updated_at, ?)
+          where article_id = ?
+        `
+      )
+      .run(input.now, input.type, eventWeight, input.now, input.now, input.articleId);
+  }
+
   private canRecordIgnoredImpression(articleId: string): boolean {
     const row = this.db
       .prepare(
@@ -187,11 +212,7 @@ export class SqliteArticleActionRepository implements ArticleActionRepository {
             case when s.not_interested_at is not null then 1 else 0 end as notInterested,
             coalesce(s.reading_progress, 0) as readingProgress,
             s.last_opened_at as lastOpenedAt,
-            exists (
-              select 1
-              from behavior_events be
-              where be.article_id = s.article_id
-            ) as hasBehavior
+            case when s.last_action_at is not null then 1 else 0 end as hasBehavior
           from article_states s
           where s.article_id = ?
         `

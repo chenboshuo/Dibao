@@ -5,6 +5,7 @@ import {
   freshnessScore,
   profileAlgorithmDefaults
 } from "@dibao/ranking";
+import { performance } from "node:perf_hooks";
 import {
   BASE_RANK_CONTEXT,
   fromVectorBlob,
@@ -16,7 +17,10 @@ import {
   type InterestClusterPolarity,
   type InterestClusterRow,
   type ProfileRepository,
-  type RankingRepository
+  type RankingRepository,
+  type UpsertArticleRankExplanationInput,
+  type UpsertRankContextInput,
+  type UpsertArticleRankScoreInput
 } from "@dibao/db";
 import { FTRL_ACTIVE_ALPHA_CAP } from "./recommendation-maintenance-service.js";
 
@@ -27,8 +31,20 @@ export interface ArticleRankingRecalculator {
   recalculateChunk?(input: {
     cursor?: string | null;
     limit: number;
-  }): { processed: number; nextCursor: string | null };
+  }): RankingRecalculateChunkResult;
 }
+
+export type RankingPauseDecision =
+  | { pause: true; resumeAfter: number }
+  | { pause: false };
+
+export type RankingRecalculateChunkResult = {
+  processed: number;
+  nextCursor: string | null;
+  paused?: boolean;
+  resumeAfter?: number;
+  pauseReason?: "foreground" | "time_budget";
+};
 
 export type RankExplanationReasonType =
   | "interest"
@@ -96,6 +112,11 @@ export type RecommendationRankingServiceOptions = {
   profiles?: Pick<ProfileRepository, "listClusters">;
   rankings: RankingRepository;
   getRankingSettings?: () => RankingSettingsSnapshot;
+  shouldPause?: (checkpoint: {
+    processed: number;
+    lastArticleId: string | null;
+  }) => RankingPauseDecision;
+  maxChunkDurationMs?: number;
   now?: () => number;
 };
 
@@ -183,6 +204,8 @@ type V2Score = {
   preRerankScore: number;
   primaryFamilyId: string | null;
   primaryFamilyLabel: string | null;
+  primaryClusterId: string | null;
+  primaryClusterLabel: string | null;
   primaryFamilyMaturity: number;
   primaryFamilyDominanceRatio: number;
   matchedFamilyCount: number;
@@ -191,6 +214,8 @@ type V2Score = {
 const RECOMMENDATION_ALGORITHM_VERSION = "rec_v3";
 const RECOMMENDATION_FEATURE_SCHEMA_VERSION = 3;
 const MMR_WINDOW_LIMIT = 500;
+const DEFAULT_RANKING_CHUNK_TIME_BUDGET_MS = 2_000;
+const RANKING_TIME_BUDGET_RESUME_DELAY_MS = 5_000;
 
 export class RecommendationRankingService implements ArticleRankingRecalculator {
   private readonly now: () => number;
@@ -228,15 +253,12 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
   recalculateChunk(input: {
     cursor?: string | null;
     limit: number;
-  }): { processed: number; nextCursor: string | null } {
+  }): RankingRecalculateChunkResult {
     const result = this.writeScores(undefined, {
       afterArticleId: input.cursor ?? null,
       limit: input.limit
     });
-    return {
-      processed: result.processed,
-      nextCursor: result.nextCursor
-    };
+    return result;
   }
 
   explainArticle(articleId: string): RankExplanationResult | null {
@@ -305,7 +327,36 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
   private writeScores(
     articleIds?: string[],
     page?: { afterArticleId?: string | null; limit?: number }
-  ): { processed: number; nextCursor: string | null } {
+  ): RankingRecalculateChunkResult {
+    const paged = page?.limit !== undefined;
+    const startingCursor = page?.afterArticleId ?? null;
+    const chunkStartedAt = performance.now();
+    const maxChunkDurationMs = Math.max(
+      0,
+      this.options.maxChunkDurationMs ?? DEFAULT_RANKING_CHUNK_TIME_BUDGET_MS
+    );
+    const timeBudgetExceeded = () =>
+      paged &&
+      maxChunkDurationMs > 0 &&
+      performance.now() - chunkStartedAt >= maxChunkDurationMs;
+    const timeBudgetPauseResult = (): RankingRecalculateChunkResult => ({
+      processed: 0,
+      nextCursor: startingCursor,
+      paused: true,
+      resumeAfter: this.now() + RANKING_TIME_BUDGET_RESUME_DELAY_MS,
+      pauseReason: "time_budget"
+    });
+    const initialPause = paged ? this.pauseDecision(0, startingCursor) : null;
+    if (initialPause?.pause) {
+      return {
+        processed: 0,
+        nextCursor: startingCursor,
+        paused: true,
+        resumeAfter: initialPause.resumeAfter,
+        pauseReason: "foreground"
+      };
+    }
+
     const activeIndexId = this.activeEmbeddingIndexId();
     const settings = this.rankingSettings();
     const activeRankContext = activeIndexId
@@ -320,20 +371,42 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       limit: page?.limit,
       embeddingIndexId: activeIndexId
     });
+    if (timeBudgetExceeded()) {
+      return timeBudgetPauseResult();
+    }
     const candidates = candidateSet.candidates;
     const now = this.now();
     const clusters = activeIndexId ? this.clusterVectorsFor(activeIndexId) : [];
+    if (timeBudgetExceeded()) {
+      return timeBudgetPauseResult();
+    }
     const recentIntent = activeIndexId ? this.recentIntentVectorsFor(activeIndexId) : [];
+    if (timeBudgetExceeded()) {
+      return timeBudgetPauseResult();
+    }
     const lexicalFeatures = this.lexicalFeaturesFor(candidates);
+    if (timeBudgetExceeded()) {
+      return timeBudgetPauseResult();
+    }
     const duplicateFeatures = this.duplicateFeaturesFor(candidates);
+    if (timeBudgetExceeded()) {
+      return timeBudgetPauseResult();
+    }
     const sourceFeatures = this.sourceFeaturesFor(candidates);
+    if (timeBudgetExceeded()) {
+      return timeBudgetPauseResult();
+    }
     const ftrlModel = this.ftrlModel();
     const duplicateStats = duplicateStatsFor(candidates, duplicateFeatures);
     const rerankWindowId = `${activeRankContext}:${now}`;
     const scored: Array<{ candidate: ArticleRankingCandidateRow; score: V2Score }> = [];
-
-    if (activeIndexId) {
-      this.options.rankings.upsertRankContext({
+    const baseScores: UpsertArticleRankScoreInput[] = [];
+    let processed = 0;
+    let lastProcessedArticleId: string | null = startingCursor;
+    let pauseDecision: RankingPauseDecision | null = null;
+    let pauseReason: RankingRecalculateChunkResult["pauseReason"] | null = null;
+    const activeRankContextInput: UpsertRankContextInput | null = activeIndexId
+      ? {
         id: activeRankContext,
         algorithmVersion: RECOMMENDATION_ALGORITHM_VERSION,
         featureSchemaVersion: RECOMMENDATION_FEATURE_SCHEMA_VERSION,
@@ -349,10 +422,49 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
           }
         }),
         now
-      });
-    }
+      }
+      : null;
+
+    const pauseBeforeWriting = (): boolean => {
+      if (!paged || processed <= 0 || pauseDecision !== null) {
+        return false;
+      }
+
+      const decision = this.pauseDecision(processed, lastProcessedArticleId);
+      if (decision.pause) {
+        pauseDecision = decision;
+        pauseReason = "foreground";
+        return true;
+      }
+      if (timeBudgetExceeded()) {
+        pauseDecision = {
+          pause: true,
+          resumeAfter: this.now() + RANKING_TIME_BUDGET_RESUME_DELAY_MS
+        };
+        pauseReason = "time_budget";
+        return true;
+      }
+      return false;
+    };
 
     for (const candidate of candidates) {
+      if (paged && processed > 0) {
+        const decision = this.pauseDecision(processed, lastProcessedArticleId);
+        if (decision.pause) {
+          pauseDecision = decision;
+          pauseReason = "foreground";
+          break;
+        }
+        if (timeBudgetExceeded()) {
+          pauseDecision = {
+            pause: true,
+            resumeAfter: this.now() + RANKING_TIME_BUDGET_RESUME_DELAY_MS
+          };
+          pauseReason = "time_budget";
+          break;
+        }
+      }
+
       const isRead = candidate.state.read || candidate.state.interactionStatus === "read";
       const baseScore = calculateBaselineRankScore({
         now,
@@ -377,10 +489,12 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         behaviorEventCount: candidate.behaviorEventCount
       });
 
-      this.options.rankings.upsertBaseScore({
+      baseScores.push({
         articleId: candidate.articleId,
         ...baseScore
       });
+      processed += 1;
+      lastProcessedArticleId = candidate.articleId;
 
       if (!activeIndexId) {
         continue;
@@ -403,8 +517,10 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
     }
 
     const reranked = rerankCanonicalWindow(scored, settings, MMR_WINDOW_LIMIT);
+    const rankScores: UpsertArticleRankScoreInput[] = [];
+    const explanations: UpsertArticleRankExplanationInput[] = [];
     for (const item of reranked) {
-      this.options.rankings.upsertScore({
+      rankScores.push({
         articleId: item.candidate.articleId,
         rankContext: activeRankContext,
         embeddingIndexId: activeIndexId,
@@ -434,7 +550,7 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         cocoonLevel: settings.cocoonLevel,
         calculatedAt: now
       });
-      this.options.rankings.upsertExplanation({
+      explanations.push({
         articleId: item.candidate.articleId,
         rankContext: activeRankContext,
         embeddingIndexId: activeIndexId,
@@ -449,14 +565,87 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
         createdAt: now
       });
     }
+    if (pauseBeforeWriting()) {
+      return {
+        processed: 0,
+        nextCursor: startingCursor,
+        paused: true,
+        resumeAfter: pauseDecision?.pause ? pauseDecision.resumeAfter : this.now()
+      };
+    }
+    this.writeRankingOutputs({
+      rankContext: activeRankContextInput,
+      baseScores,
+      rankScores,
+      explanations
+    });
+
+    const hasMoreAfterChunk = page?.limit !== undefined && candidates.length >= page.limit;
+    if (paged && processed > 0 && pauseDecision === null && hasMoreAfterChunk) {
+      const decision = this.pauseDecision(processed, lastProcessedArticleId);
+      if (decision.pause) {
+        pauseDecision = decision;
+        pauseReason = "foreground";
+      } else if (timeBudgetExceeded()) {
+        pauseDecision = {
+          pause: true,
+          resumeAfter: this.now() + RANKING_TIME_BUDGET_RESUME_DELAY_MS
+        };
+        pauseReason = "time_budget";
+      }
+    }
 
     return {
-      processed: candidates.length,
-      nextCursor:
-        page?.limit !== undefined && candidates.length >= page.limit
+      processed,
+      nextCursor: pauseDecision?.pause
+        ? lastProcessedArticleId
+        : hasMoreAfterChunk
           ? candidates[candidates.length - 1]?.articleId ?? null
-          : null
+          : null,
+      ...(pauseDecision?.pause
+        ? {
+            paused: true,
+            resumeAfter: pauseDecision.resumeAfter,
+            pauseReason: pauseReason ?? "foreground"
+          }
+        : {})
     };
+  }
+
+  private writeRankingOutputs(input: {
+    rankContext?: UpsertRankContextInput | null;
+    baseScores: UpsertArticleRankScoreInput[];
+    rankScores: UpsertArticleRankScoreInput[];
+    explanations: UpsertArticleRankExplanationInput[];
+  }): void {
+    const write = () => {
+      if (input.rankContext) {
+        this.options.rankings.upsertRankContext(input.rankContext);
+      }
+      for (const score of input.baseScores) {
+        this.options.rankings.upsertBaseScore(score);
+      }
+      for (const score of input.rankScores) {
+        this.options.rankings.upsertScore(score);
+      }
+      for (const explanation of input.explanations) {
+        this.options.rankings.upsertExplanation(explanation);
+      }
+    };
+
+    if (this.options.db) {
+      this.options.db.transaction(write)();
+      return;
+    }
+
+    write();
+  }
+
+  private pauseDecision(
+    processed: number,
+    lastArticleId: string | null
+  ): RankingPauseDecision {
+    return this.options.shouldPause?.({ processed, lastArticleId }) ?? { pause: false };
   }
 
   private activeEmbeddingIndexId(): string | null {
@@ -723,6 +912,7 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
       return result;
     }
 
+    const ids = candidates.map((candidate) => candidate.articleId);
     const positiveLong = this.profileTerms({ polarity: "positive", scopes: ["long"], limit: 24 });
     const positiveRecent = this.profileTerms({ polarity: "positive", scopes: ["recent"], limit: 24 });
     const negativeTerms = this.profileTerms({
@@ -744,11 +934,11 @@ export class RecommendationRankingService implements ArticleRankingRecalculator 
             select article_id as articleId, bm25(article_fts, 5.0, 2.0, 0.6) as rank
             from article_fts
             where article_fts match ?
+              and article_id in (${ids.map(() => "?").join(", ")})
             order by rank
-            limit 1000
           `
         )
-        .all(query) as Array<{ articleId: string; rank: number }>;
+        .all(query, ...ids) as Array<{ articleId: string; rank: number }>;
       for (const row of rows) {
         const feature = result.get(row.articleId);
         if (!feature) {
@@ -1100,6 +1290,8 @@ function interestMatchesFor(
   negativeSimilarity: number;
   primaryFamilyId: string | null;
   primaryFamilyLabel: string | null;
+  primaryClusterId: string | null;
+  primaryClusterLabel: string | null;
   primaryFamilyMaturity: number;
   primaryFamilyDominanceRatio: number;
   matchedFamilyCount: number;
@@ -1111,6 +1303,8 @@ function interestMatchesFor(
       negativeSimilarity: 0,
       primaryFamilyId: null,
       primaryFamilyLabel: null,
+      primaryClusterId: null,
+      primaryClusterLabel: null,
       primaryFamilyMaturity: 0,
       primaryFamilyDominanceRatio: 0,
       matchedFamilyCount: 0
@@ -1121,6 +1315,8 @@ function interestMatchesFor(
   const positiveByFamily = new Map<string, {
     value: number;
     similarity: number;
+    clusterId: string;
+    clusterLabel: string | null;
     familyLabel: string | null;
     familyMaturity: number;
     familyDominanceRatio: number;
@@ -1139,6 +1335,8 @@ function interestMatchesFor(
           positiveByFamily.set(cluster.familyId, {
             value: weightedMatch,
             similarity,
+            clusterId: cluster.cluster.id,
+            clusterLabel: cluster.cluster.label ?? cluster.familyLabel,
             familyLabel: cluster.familyLabel,
             familyMaturity: cluster.familyMaturity,
             familyDominanceRatio: cluster.familyDominanceRatio
@@ -1172,6 +1370,8 @@ function interestMatchesFor(
     negativeSimilarity,
     primaryFamilyId: primary?.familyId ?? null,
     primaryFamilyLabel: primary?.familyLabel ?? null,
+    primaryClusterId: primary?.clusterId ?? null,
+    primaryClusterLabel: primary?.clusterLabel ?? null,
     primaryFamilyMaturity: primary?.familyMaturity ?? 0,
     primaryFamilyDominanceRatio: primary?.familyDominanceRatio ?? 0,
     matchedFamilyCount: positive.length
@@ -1472,6 +1672,8 @@ function calculateV2Score(input: {
     preRerankScore: roundScore(preRerankScore),
     primaryFamilyId: matches.primaryFamilyId,
     primaryFamilyLabel: matches.primaryFamilyLabel,
+    primaryClusterId: matches.primaryClusterId,
+    primaryClusterLabel: matches.primaryClusterLabel,
     primaryFamilyMaturity: roundScore(matches.primaryFamilyMaturity),
     primaryFamilyDominanceRatio: roundScore(matches.primaryFamilyDominanceRatio),
     matchedFamilyCount: matches.matchedFamilyCount
@@ -1818,6 +2020,8 @@ function explanationPayloadFor(
       ftrl: score.ftrlScore,
       primaryFamilyId: score.primaryFamilyId,
       primaryFamilyLabel: score.primaryFamilyLabel,
+      primaryClusterId: score.primaryClusterId,
+      primaryClusterLabel: score.primaryClusterLabel,
       primaryFamilyMaturity: score.primaryFamilyMaturity,
       primaryFamilyDominanceRatio: score.primaryFamilyDominanceRatio,
       matchedFamilyCount: score.matchedFamilyCount

@@ -28,6 +28,7 @@ export const zhCN = {
     }
   },
   shell: {
+    kicker: "RSS Ingestion",
     pageTitle: "最新文章",
     pageTitles: {
       latest: "最新文章",
@@ -54,9 +55,10 @@ export const zhCN = {
     kicker: "Search",
     pageTitle: "搜索",
     title: "搜索文章",
-    body: "在本地文章库中搜索标题、摘要和正文。",
+    body: "默认搜索标题和摘要；需要时可以启用全文搜索。",
     inputLabel: "关键词",
-    inputPlaceholder: "搜索标题、摘要和正文",
+    inputPlaceholder: "搜索标题和摘要",
+    fullTextLabel: "搜索全文",
     submit: "搜索",
     submitting: "搜索中",
     sortLabel: "排序",
@@ -128,6 +130,7 @@ export const zhCN = {
     retrying: "重试中",
     steps: {
       detecting: "检查需要修复的数据",
+      schemaMigration: "更新数据库结构",
       reset: "清理旧的兴趣簇与家族",
       replay: "回放历史阅读信号",
       labels: "重建兴趣簇标签",
@@ -633,6 +636,7 @@ export const zhCN = {
     },
     loadMore: "加载更多",
     loadingMore: "加载中",
+    loadingSlow: "加载似乎比预期时间更长，邸报仍在继续读取。",
     emptyNoFeedsTitle: "还没有订阅源",
     emptyNoFeedsBody: "添加一个 RSS / Atom 源后，文章会出现在这里。",
     emptyNoArticlesTitle: "暂时没有文章",
@@ -755,6 +759,8 @@ export const zhCN = {
         "兴趣簇不是系统预设的，而是根据你的行为自动生成和更新。标签来自本地关键词、代表文章和来源标题，也可以手动重命名。",
       positive: "正向",
       negative: "负向",
+      positiveGroupTitle: "正向兴趣簇",
+      negativeGroupTitle: "负向兴趣簇",
       fallbackName: (index: number) => `兴趣簇 #${index}`,
       sourceLabel: "来源",
       source: {
@@ -825,6 +831,13 @@ export const zhCN = {
       clusterCount: (count: number) => `${count} 个簇`,
       positiveFallback: "正向主题",
       negativeFallback: "负向主题",
+      ungroupedFallback: "未归入主题组",
+      rename: "重命名",
+      renameLabel: "主题组显示名称",
+      renamePlaceholder: "例如：AI 产品与开发",
+      saveLabel: "保存名称",
+      cancelRename: "取消",
+      clearManualLabel: "恢复自动名称",
       risk: {
         low: "低",
         medium: "中",
@@ -1173,7 +1186,7 @@ export const zhCN = {
     feedOnlyNotice: "当前仅有订阅源摘要。",
     contentSource: {
       success: "正文来自网页全文抓取。",
-      feed_only: "正文来自 RSS / Atom Feed。大多数 Feed 已经提供全文。",
+      feed_only: "正文来自 RSS / Atom Feed。",
       failed: "网页全文抓取失败，当前显示 Feed 内容。",
       failedWithError: (error: string) => `网页全文抓取失败，当前显示 Feed 内容。${error}`,
       skipped: "未使用网页全文抓取，当前显示 Feed 内容。",
@@ -1298,6 +1311,8 @@ export const zhCN = {
   errors: {
     api: {
       requestFailed: "请求失败，请稍后重试。",
+      requestTimeout: "请求超时。系统可能正在处理后台维护，请稍后重试。",
+      databaseBusy: "系统正在处理后台维护，请稍后重试。",
       httpError: (status: number) => `请求失败（HTTP ${status}）。`
     }
   }
@@ -1336,6 +1351,7 @@ export const enUS = {
     }
   },
   shell: {
+    kicker: "RSS feeds",
     pageTitle: "Latest",
     pageTitles: {
       latest: "Latest",
@@ -1362,9 +1378,10 @@ export const enUS = {
     kicker: "Search",
     pageTitle: "Search",
     title: "Search Articles",
-    body: "Search titles, summaries, and full text in your local article library.",
+    body: "Search titles and summaries by default. Enable full-text search when needed.",
     inputLabel: "Keyword",
-    inputPlaceholder: "Search titles, summaries, and full text",
+    inputPlaceholder: "Search titles and summaries",
+    fullTextLabel: "Search full text",
     submit: "Search",
     submitting: "Searching",
     sortLabel: "Sort",
@@ -1436,6 +1453,7 @@ export const enUS = {
     retrying: "Retrying",
     steps: {
       detecting: "Checking profile data",
+      schemaMigration: "Updating database schema",
       reset: "Clearing old clusters and families",
       replay: "Replaying reading signals",
       labels: "Rebuilding cluster labels",
@@ -1947,6 +1965,7 @@ export const enUS = {
     },
     loadMore: "Load more",
     loadingMore: "Loading",
+    loadingSlow: "Loading is taking longer than expected. Dibao is still reading.",
     emptyNoFeedsTitle: "No feeds yet",
     emptyNoFeedsBody: "Add an RSS / Atom feed and articles will appear here.",
     emptyNoArticlesTitle: "No articles yet",
@@ -2058,6 +2077,8 @@ export const enUS = {
         "Interest clusters are not preset by the system. Labels come from local keywords, representative articles, and feed titles, and can be renamed manually.",
       positive: "Positive",
       negative: "Negative",
+      positiveGroupTitle: "Positive interest clusters",
+      negativeGroupTitle: "Negative interest clusters",
       fallbackName: (index: number) => `Interest cluster #${index}`,
       sourceLabel: "Source",
       source: {
@@ -2128,6 +2149,13 @@ export const enUS = {
       clusterCount: (count: number) => `${count} clusters`,
       positiveFallback: "Positive topic",
       negativeFallback: "Negative topic",
+      ungroupedFallback: "No topic group",
+      rename: "Rename",
+      renameLabel: "Topic group display name",
+      renamePlaceholder: "Example: AI products and development",
+      saveLabel: "Save name",
+      cancelRename: "Cancel",
+      clearManualLabel: "Restore automatic name",
       risk: {
         low: "Low",
         medium: "Medium",
@@ -2476,7 +2504,7 @@ export const enUS = {
     feedOnlyNotice: "Only the feed summary is available.",
     contentSource: {
       success: "Body content comes from full web article fetching.",
-      feed_only: "Body content comes from the RSS / Atom feed. Most feeds already provide full text.",
+      feed_only: "Body content comes from the RSS / Atom feed.",
       failed: "Full web article fetching failed; current content is from the feed.",
       failedWithError: (error: string) =>
         `Full web article fetching failed; current content is from the feed. ${error}`,
@@ -2608,6 +2636,8 @@ export const enUS = {
   errors: {
     api: {
       requestFailed: "Request failed. Please try again.",
+      requestTimeout: "Request timed out. Dibao may be busy with background maintenance.",
+      databaseBusy: "Dibao is busy with background maintenance. Please try again shortly.",
       httpError: (status: number) => `Request failed (HTTP ${status}).`
     }
   }
@@ -2635,6 +2665,7 @@ export const jaJP = {
     }
   },
   shell: {
+    kicker: "RSS Ingestion",
     pageTitle: "最新記事",
     pageTitles: {
       latest: "最新記事",
@@ -2661,9 +2692,10 @@ export const jaJP = {
     kicker: "Search",
     pageTitle: "検索",
     title: "記事を検索",
-    body: "ローカルの記事ライブラリから、タイトル、要約、本文を検索します。",
+    body: "既定ではタイトルと要約を検索します。必要な場合は全文検索を有効にできます。",
     inputLabel: "キーワード",
-    inputPlaceholder: "タイトル、要約、本文を検索",
+    inputPlaceholder: "タイトルと要約を検索",
+    fullTextLabel: "全文検索",
     submit: "検索",
     submitting: "検索中",
     sortLabel: "並び順",
@@ -2735,6 +2767,7 @@ export const jaJP = {
     retrying: "再試行中",
     steps: {
       detecting: "修復対象のデータを確認",
+      schemaMigration: "データベース構造を更新",
       reset: "古いクラスターとファミリーを削除",
       replay: "読書シグナルを再生",
       labels: "クラスターラベルを再構築",
@@ -3246,6 +3279,7 @@ export const jaJP = {
     },
     loadMore: "さらに読み込む",
     loadingMore: "読み込み中",
+    loadingSlow: "読み込みに予想より時間がかかっています。邸報はまだ読み取りを続けています。",
     emptyNoFeedsTitle: "フィードはまだありません",
     emptyNoFeedsBody: "RSS / Atom フィードを追加すると、ここに記事が表示されます。",
     emptyNoArticlesTitle: "記事はまだありません",
@@ -3357,6 +3391,8 @@ export const jaJP = {
         "興味クラスターはシステムが事前に用意したものではありません。ラベルはローカルのキーワード、代表記事、フィード名から生成され、手動で名前を変更できます。",
       positive: "ポジティブ",
       negative: "ネガティブ",
+      positiveGroupTitle: "ポジティブ興味クラスター",
+      negativeGroupTitle: "ネガティブ興味クラスター",
       fallbackName: (index: number) => `興味クラスター #${index}`,
       sourceLabel: "ソース",
       source: {
@@ -3427,6 +3463,13 @@ export const jaJP = {
       clusterCount: (count: number) => `${count} クラスター`,
       positiveFallback: "ポジティブテーマ",
       negativeFallback: "ネガティブテーマ",
+      ungroupedFallback: "テーマグループなし",
+      rename: "名前を変更",
+      renameLabel: "テーマグループ表示名",
+      renamePlaceholder: "例: AI プロダクトと開発",
+      saveLabel: "名前を保存",
+      cancelRename: "キャンセル",
+      clearManualLabel: "自動名に戻す",
       risk: {
         low: "低",
         medium: "中",
@@ -3775,7 +3818,7 @@ export const jaJP = {
     feedOnlyNotice: "現在はフィードの要約のみ利用できます。",
     contentSource: {
       success: "本文は Web 記事全文の取得結果です。",
-      feed_only: "本文は RSS / Atom Feed の内容です。多くの Feed はすでに全文を含んでいます。",
+      feed_only: "本文は RSS / Atom Feed の内容です。",
       failed: "Web 記事全文の取得に失敗しました。現在の内容は Feed 由来です。",
       failedWithError: (error: string) =>
         `Web 記事全文の取得に失敗しました。現在の内容は Feed 由来です。${error}`,
@@ -3907,6 +3950,8 @@ export const jaJP = {
   errors: {
     api: {
       requestFailed: "リクエストに失敗しました。もう一度お試しください。",
+      requestTimeout: "リクエストがタイムアウトしました。バックグラウンドメンテナンス中の可能性があります。",
+      databaseBusy: "邸報はバックグラウンドメンテナンス中です。少し待ってから再試行してください。",
       httpError: (status: number) => `リクエストに失敗しました（HTTP ${status}）。`
     }
   }

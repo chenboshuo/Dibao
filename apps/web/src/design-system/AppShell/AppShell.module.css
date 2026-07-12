@@ -190,6 +190,12 @@
   gap: var(--space-2);
 }
 
+.setupActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .setupSourceActions .secondaryButton {
   width: 100%;
 }
@@ -307,6 +313,10 @@
   display: none;
 }
 
+.navMobileOnly {
+  display: none;
+}
+
 .navItem svg,
 .navItemActive svg {
   flex: 0 0 auto;
@@ -371,6 +381,16 @@
   font-size: var(--text-xs);
 }
 
+.accountName {
+  color: var(--color-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .version,
 .count {
   color: var(--color-faint);
@@ -386,6 +406,20 @@
   overflow: hidden;
 }
 
+.pluginWorkspace {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  background: var(--color-surface);
+}
+
+.pluginFrame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--color-surface);
+}
+
 .sourceBackdrop,
 .mobileBackButton {
   display: none;
@@ -394,7 +428,7 @@
 .managementWorkspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--color-surface);
 }
@@ -443,25 +477,13 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  border-right: var(--border-default);
   background: var(--color-surface);
 }
 
 .feedManagementSection {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-}
-
-.folderManagementSection {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-}
-
-.folderManagementLayout {
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -479,16 +501,44 @@
   background: var(--color-paper);
 }
 
-.managementHeaderActions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 .managementHeader h2,
 .managementHeader h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  line-height: 1.25;
+}
+
+.managementDialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgb(32 36 33 / 0.22);
+}
+
+.managementDialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  display: grid;
+  overflow: auto;
+  border: var(--border-default);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.managementDialogHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: var(--border-default);
+  padding: var(--space-4);
+  background: var(--color-paper);
+}
+
+.managementDialogHeader h3 {
   margin: 0;
   font-size: var(--text-lg);
   line-height: 1.25;
@@ -536,8 +586,6 @@
 
 .managementFolderRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
   gap: var(--space-2);
   border-bottom: var(--border-subtle);
   padding: var(--space-3) var(--space-4);
@@ -556,11 +604,10 @@
 .managementActions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
 .managementHint {
-  grid-column: 1 / -1;
   margin: 0;
   color: var(--color-muted);
   font-size: var(--text-xs);
@@ -756,58 +803,11 @@
   min-height: 0;
 }
 
-.feedManagementListPane {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.feedManagementListPane > .opmlSummary {
-  border-bottom: var(--border-default);
-}
-
-.feedListFilters {
-  display: grid;
-  gap: var(--space-2);
-  border-bottom: var(--border-default);
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-surface);
-}
-
-.feedListFilterHeader {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--space-3);
-}
-
-.feedListFilterHeader h3,
-.feedListFilterHeader p {
-  margin: 0;
-}
-
-.feedListFilterHeader h3 {
-  font-size: var(--text-sm);
-  line-height: 1.35;
-}
-
-.feedListFilterHeader p {
-  color: var(--color-muted);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-}
-
-.feedManagementListPane > .managementList,
-.feedManagementGrid > .managementEditor,
-.folderManagementLayout > .managementList {
+.feedManagementGrid > .managementList,
+.feedManagementGrid > .managementEditor {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-}
-
-.feedManagementListPane > .managementList {
-  flex: 1 1 auto;
 }
 
 .managementFeedItem,
@@ -900,47 +900,10 @@
   font-size: var(--text-xs);
 }
 
-.managementDialogOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: var(--space-4);
-  background: rgb(32 36 33 / 0.2);
-}
-
-.managementDialog {
-  width: min(720px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 32px));
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  overflow: auto;
-  border: var(--border-default);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-popover);
-}
-
-.managementDialogHeader {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: var(--space-3);
-  border-bottom: var(--border-default);
-  padding: var(--space-4);
-  background: var(--color-paper);
-}
-
-.managementDialogHeader h3 {
-  margin: 0;
-  font-size: var(--text-lg);
-  line-height: 1.25;
-}
-
 .settingsWorkspace {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   background: var(--color-surface);
 }
 
@@ -979,6 +942,10 @@
   background: var(--color-surface);
 }
 
+.settingsSection[hidden] {
+  display: none;
+}
+
 .settingsSection h3,
 .settingsSection p {
   margin: 0;
@@ -994,6 +961,22 @@
   color: var(--color-muted);
   font-size: var(--text-sm);
   line-height: 1.6;
+}
+
+.pluginSettingsPanel {
+  min-height: min(760px, calc(100vh - 210px));
+  display: grid;
+}
+
+.pluginSettingsPanel[hidden] {
+  display: none;
+}
+
+.pluginSettingsFrame {
+  width: 100%;
+  min-height: min(760px, calc(100vh - 210px));
+  border: 0;
+  background: var(--color-surface);
 }
 
 .algorithmTermList {
@@ -1151,7 +1134,7 @@
 
 .algorithmFamilyList {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-4);
 }
 
 .algorithmFamilyRow {
@@ -1195,6 +1178,46 @@
   padding-top: var(--space-3);
 }
 
+.algorithmPolarityGroup {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.algorithmPolarityGroup h4 {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--text-base);
+  line-height: 1.35;
+}
+
+.algorithmFamilyGroupHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.algorithmFamilyGroupHeader strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.algorithmFamilyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.algorithmFamilyActions .secondaryButton {
+  min-height: 34px;
+  min-width: 112px;
+  padding: 6px var(--space-3);
+  white-space: normal;
+}
+
 .algorithmFamilyGroup summary {
   cursor: pointer;
   color: var(--color-ink);
@@ -1236,6 +1259,16 @@
   color: var(--color-muted);
   font-size: var(--text-xs);
   line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .algorithmFamilyGroupHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .algorithmFamilyActions {
+    justify-content: flex-start;
+  }
 }
 
 .clusterEvidenceList {
@@ -1981,6 +2014,21 @@
   line-height: 1.5;
 }
 
+.pluginStatusCard {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 156px);
+}
+
+.pluginCardActions {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.pluginCardActions .secondaryButton,
+.pluginCardActions .dangerButton {
+  width: 100%;
+  min-width: 0;
+}
+
 .segmentedControl {
   width: fit-content;
   display: inline-grid;
@@ -2339,6 +2387,21 @@
   display: block;
 }
 
+.searchInlineOption {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.searchInlineOption input {
+  margin: 0;
+}
+
 .searchField {
   min-width: 0;
   display: grid;
@@ -2358,6 +2421,11 @@
   background: var(--input-background);
   color: var(--color-ink);
   font-size: var(--text-sm);
+}
+
+.listVirtualWindow {
+  position: relative;
+  min-height: 1px;
 }
 
 .searchHint,
@@ -2413,6 +2481,9 @@
 .mobileSourceCloseButton,
 .mobileBackButton {
   min-height: var(--button-height-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: var(--border-default);
   border-radius: var(--button-radius);
   padding-inline: var(--button-padding-x-md);
@@ -2420,17 +2491,15 @@
   color: var(--color-muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+  line-height: 1;
 }
 
 .mobileSourceButton,
 .mobileSourceCloseButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  min-width: 0;
 }
 
 .mobileSourceButton {
-  min-width: 0;
   max-width: min(280px, 42vw);
   gap: var(--space-1);
 }
@@ -2533,12 +2602,15 @@
 .opmlActions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
+  border-bottom: var(--border-subtle);
+  padding: var(--space-4);
 }
 
 .opmlActions .secondaryButton {
   min-width: 0;
-  flex: 0 0 auto;
+  flex: 1 1 108px;
 }
 
 .fileInput {
@@ -2631,6 +2703,7 @@
   --article-strip-background: var(--color-pine);
   --article-strip-width: 4px;
   position: relative;
+  min-width: 0;
   width: 100%;
   display: grid;
   gap: var(--article-item-gap);
@@ -2785,31 +2858,39 @@
 .articleItem strong,
 .articleItemRead strong,
 .articleItemActive strong {
+  min-width: 0;
   display: -webkit-box;
   overflow: hidden;
   color: inherit;
   font-size: var(--article-item-title-size);
   line-height: 1.4;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
 
 .summary {
+  min-width: 0;
   display: -webkit-box;
   overflow: hidden;
   color: var(--color-muted);
   font-size: var(--article-item-summary-size);
   line-height: 1.6;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
 .meta {
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-faint);
   font-size: var(--article-item-meta-size);
+  overflow-wrap: anywhere;
 }
 
 .articleMain {
+  min-width: 0;
   width: 100%;
   display: grid;
   gap: inherit;
@@ -2827,10 +2908,12 @@
   justify-content: center;
   border-top: var(--border-subtle);
   padding: var(--space-3) var(--space-4);
+  overflow-anchor: none;
 }
 
 .loadMoreBar .secondaryButton {
   min-width: 128px;
+  overflow-anchor: none;
 }
 
 .paginationError {
@@ -2991,13 +3074,23 @@
   font-size: var(--reader-meta-size);
 }
 
+.readerHeaderToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
 .inlineNotice {
   width: fit-content;
+  min-width: 0;
   border: var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   color: var(--color-muted);
   font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 .readerActions {
@@ -3008,7 +3101,8 @@
 }
 
 .readerActionsTop {
-  margin-top: var(--space-4);
+  flex: 0 0 auto;
+  margin-top: 0;
 }
 
 .readerActionsBottom {
@@ -3031,6 +3125,8 @@
 }
 
 .articleRowActions {
+  min-width: 0;
+  flex-wrap: wrap;
   gap: var(--space-1);
   justify-content: flex-start;
 }
@@ -3324,11 +3420,11 @@
     grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   }
 
-  .feedManagementGrid {
-    grid-template-columns: minmax(0, 1fr);
+  .managementWorkspace {
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
-  .feedListFilterHeader {
+  .feedManagementGrid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -3432,6 +3528,14 @@
 
   .navUtilityItem {
     display: none;
+  }
+
+  .navDesktopOnly {
+    display: none;
+  }
+
+  .navMobileOnly {
+    display: grid;
   }
 
   .navUtilityToggle {
@@ -3551,19 +3655,8 @@
     overflow-x: auto;
   }
 
-  .managementHeader {
-    flex-wrap: wrap;
-  }
-
-  .managementHeader > :first-child {
-    min-width: min(180px, 100%);
-    flex: 1 1 180px;
-  }
-
-  .managementHeaderActions,
   .opmlActions {
-    width: 100%;
-    justify-content: flex-start;
+    padding: var(--space-3);
   }
 
   .settingsContent {
@@ -3582,26 +3675,15 @@
     overflow: visible;
   }
 
-  .folderManagementSection,
-  .folderManagementLayout {
-    display: block;
-    overflow: visible;
-  }
-
-  .feedManagementListPane,
-  .feedManagementListPane > .managementList,
+  .feedManagementGrid > .managementList,
   .feedManagementGrid > .managementEditor,
-  .folderManagementLayout > .managementList,
   .managementSection {
     overflow: visible;
   }
 
   .managementSection {
+    border-right: 0;
     border-bottom: var(--border-default);
-  }
-
-  .managementFolderRow {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .managementActions {
@@ -4058,6 +4140,10 @@
   }
 
   .settingsIndexStatus {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pluginStatusCard {
     grid-template-columns: minmax(0, 1fr);
   }
 

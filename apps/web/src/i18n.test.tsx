@@ -28,12 +28,7 @@ import {
   unreadCountWithKnownLocalStates,
   unreadCountAfterStateChange
 } from "./articleListState.js";
-import {
-  defaultAppSettings,
-  type ArticleDetail,
-  type ArticleListItem,
-  type EmbeddingProvider
-} from "./api.js";
+import { defaultAppSettings, type ArticleDetail, type ArticleListItem, type EmbeddingProvider } from "./api.js";
 import { FeedManagementWorkspace } from "./FeedManagementPanel.js";
 import {
   DibaoI18nProvider,
@@ -63,6 +58,7 @@ describe("web i18n", () => {
 
     expect(i18n.locale).toBe(defaultLocale);
     expect(i18n.t.errors.api.requestFailed).toBe("请求失败，请稍后重试。");
+    expect(i18n.t.errors.api.requestTimeout).toBe("请求超时。系统可能正在处理后台维护，请稍后重试。");
     expect(i18n.formatDate("2026-05-14T08:00:00.000Z")).not.toBe("2026-05-14T08:00:00.000Z");
     expect(i18n.formatArticleDate("2026-05-14T08:00:00.000Z")).toContain("2026");
   });
@@ -93,13 +89,15 @@ describe("web i18n", () => {
     expect(
       stageForAuthSession({
         setupCompleted: false,
-        authenticated: false
+        authenticated: false,
+        username: null
       })
     ).toEqual({ type: "welcome" });
     expect(
       stageForAuthSession({
         setupCompleted: true,
-        authenticated: false
+        authenticated: false,
+        username: null
       })
     ).toEqual({ type: "login" });
     expect(
@@ -382,8 +380,7 @@ describe("web i18n", () => {
     expect(sourcesHtml).toContain("网站或 RSS / Atom URL");
     expect(providerHtml).toContain("推荐能力");
     expect(providerHtml).toContain("查看这里选择合适的（免费）Provider。");
-    expect(providerHtml).toContain("tree/main");
-    expect(providerHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
+    expect(providerHtml).toContain("https://docs.dibao.app/zh/providers/");
     expect(providerHtml).toContain("跳过，使用基础排序");
     expect(providerHtml).toContain("保存配置并测试连接");
     expect(providerHtml).toContain("API Key");
@@ -393,11 +390,9 @@ describe("web i18n", () => {
     expect(testedProviderHtml).toContain("启用 Provider 并继续");
     expect(testedProviderHtml).not.toContain("保存配置并测试连接</button>");
     expect(testedProviderHtml).not.toContain("删除");
-    expect(providerEnglishHtml).toContain("tree/main");
-    expect(providerEnglishHtml).toContain("#%E6%8E%A8%E8%8D%90-provider");
-    expect(providerJapaneseHtml).toContain("README.ja.md");
-    expect(providerJapaneseHtml).toContain("blob/main");
-    expect(providerJapaneseHtml).not.toContain("%E3%81%8A%E3%81%99%E3%81%99%E3%82%81-provider");
+    expect(providerEnglishHtml).toContain("https://docs.dibao.app/en/providers/");
+    expect(providerJapaneseHtml).toContain("https://docs.dibao.app/ja/providers/");
+    expect(providerJapaneseHtml).not.toContain("README.ja.md");
   });
 
   it("renders OPML, folder, and pagination copy from the dictionary", () => {
@@ -479,7 +474,6 @@ describe("web i18n", () => {
             title: "设计",
             sortOrder: 0
           }}
-          sourceSelection={{ type: "folder", folderId: "folder_design" }}
           showRecommendationStatus={false}
           showQuickFilters={true}
           timeWindow="all"
@@ -498,9 +492,9 @@ describe("web i18n", () => {
     expect(articlePanel).toContain("只看未读");
     expect(articlePanel).toContain("全部");
     expect(articlePanel).toContain("加载更多");
+    expect(articlePanel).toContain("设计");
     expect(articlePanel).toContain('aria-label="打开来源: 设计"');
     expect(articlePanel).toContain('aria-pressed="true"');
-    expect(articlePanel).toContain("设计");
   });
 
   it("renders recommendation status with diagnostics metrics", () => {
@@ -571,7 +565,6 @@ describe("web i18n", () => {
           selectedArticleId={null}
           selectedFeed={null}
           selectedFolder={null}
-          sourceSelection={{ type: "all" }}
           showRecommendationStatus
           showQuickFilters={true}
           timeWindow="all"
@@ -648,7 +641,6 @@ describe("web i18n", () => {
           selectedArticleId={null}
           selectedFeed={null}
           selectedFolder={null}
-          sourceSelection={{ type: "folder", folderId: "folder_design" }}
           showRecommendationStatus={false}
           showQuickFilters={true}
           timeWindow="all"
@@ -660,7 +652,6 @@ describe("web i18n", () => {
 
     expect(html).toContain("摘要 正文 &amp; 线索");
     expect(html).toContain("2026");
-    expect(html).toContain("view=latest&amp;folderId=folder_design&amp;article=article_html_summary");
     expect(html).not.toContain("&lt;strong&gt;");
   });
 
@@ -739,7 +730,6 @@ describe("web i18n", () => {
           selectedArticleId={null}
           selectedFeed={null}
           selectedFolder={null}
-          sourceSelection={{ type: "all" }}
           showRecommendationStatus={false}
           showQuickFilters={true}
           timeWindow="all"
@@ -781,7 +771,6 @@ describe("web i18n", () => {
           selectedArticleId={null}
           selectedFeed={null}
           selectedFolder={null}
-          sourceSelection={{ type: "all" }}
           showRecommendationStatus={false}
           showQuickFilters={true}
           timeWindow="all"
@@ -830,7 +819,6 @@ describe("web i18n", () => {
           selectedArticleId={null}
           selectedFeed={null}
           selectedFolder={null}
-          sourceSelection={{ type: "all" }}
           showRecommendationStatus={false}
           showQuickFilters={false}
           timeWindow="all"
@@ -872,7 +860,6 @@ describe("web i18n", () => {
           selectedArticleId={null}
           selectedFeed={null}
           selectedFolder={null}
-          sourceSelection={{ type: "all" }}
           showRecommendationStatus={false}
           showQuickFilters={false}
           timeWindow="all"
@@ -908,6 +895,7 @@ describe("web i18n", () => {
           onRunMaintenanceTask={() => Promise.resolve()}
           onUpdateClusterLabelLexicon={() => Promise.resolve()}
           onUpdateClusterLabel={() => Promise.resolve()}
+          onUpdateFamilyLabel={() => Promise.resolve()}
           runningMaintenanceTask={null}
           status={{
             mode: "personalized",
@@ -982,6 +970,7 @@ describe("web i18n", () => {
           }}
           updatingClusterLexicon={false}
           updatingClusterLabelId={null}
+          updatingFamilyLabelId={null}
           updatingMergeCandidateId={null}
         />
       </DibaoI18nProvider>
@@ -1078,22 +1067,20 @@ describe("web i18n", () => {
           onUpdateFeed={() => Promise.resolve()}
           onUpdateFeedUrl={() => undefined}
           onUpdateFolder={() => Promise.resolve()}
-          onViewFeedArticles={() => undefined}
-          onViewFolderArticles={() => undefined}
           opmlSummary={null}
           refreshingFeedId={null}
         />
       </DibaoI18nProvider>
     );
 
-    expect(html).toContain("订阅源管理");
-    expect(html).toContain("订阅源分组管理");
+    expect(html).toContain("新建分组");
     expect(html).toContain("导入 OPML");
     expect(html).toContain("导出 OPML");
     expect(html).toContain("刷新全部");
     expect(html).toContain("添加订阅源");
     expect(html).toContain("订阅源健康");
-    expect(html).toContain("查看文章");
+    expect(html).toContain("导入、导出与刷新");
+    expect(html).toContain("重命名");
     expect(html).toContain("删除");
     expect(html).toContain("Design Feed");
     expect(html).toContain("Feed URL");
@@ -1142,6 +1129,9 @@ describe("web i18n", () => {
     );
 
     expect(html).toContain("设置");
+    expect(html).toContain("基础设置");
+    expect(html).toContain("算法");
+    expect(html).toContain("插件");
     expect(html).toContain("界面语言");
     expect(html).toContain("首页默认打开");
     expect(html).toContain("账户安全");
@@ -1162,7 +1152,7 @@ describe("web i18n", () => {
     expect(html).toContain("保留天数");
     expect(html).toContain("retention.retentionDays");
     expect(html).toContain("关于");
-    expect(html).toContain("v0.1.3");
+    expect(html).toContain("v0.2.1");
     expect(html).toContain("评论尸");
     expect(html).toContain("https://x.com/JeffreyCalm");
     expect(html).toContain("https://1q43.blog");
@@ -1184,7 +1174,33 @@ describe("web i18n", () => {
     expect(html).toContain("QPD");
     expect(html).toContain("新的向量空间");
     expect(html).toContain("测试连接");
+    expect(html).toContain("查看插件安装说明");
+    expect(html).toContain("https://docs.dibao.app/zh/plugins/installation/");
+    expect(html).not.toContain("插件包 URL");
+    expect(html).not.toContain("插件包 JSON");
     expect(html.indexOf("智能能力")).toBeLessThan(html.indexOf("关于"));
+  });
+
+  it("keeps plugin iframes sandboxed and bridge-scoped", () => {
+    const appRuntime = readFileSync(new URL("./AppRuntime.tsx", import.meta.url), "utf8");
+    const settingsWorkspace = readFileSync(new URL("./settings/SettingsWorkspace.tsx", import.meta.url), "utf8");
+    const dailyBrief = readFileSync(
+      new URL("../../../plugins/official/app.dibao.daily-brief/web/index.html", import.meta.url),
+      "utf8"
+    );
+
+    expect(appRuntime).toContain('sandbox="allow-scripts allow-forms"');
+    expect(settingsWorkspace).toContain('sandbox="allow-scripts allow-forms"');
+    expect(appRuntime).toContain("event.source !== frameRef.current?.contentWindow");
+    expect(settingsWorkspace).toContain("event.source !== frameRef.current?.contentWindow");
+    expect(appRuntime).toContain("data.pluginId !== props.plugin.id");
+    expect(settingsWorkspace).toContain("data.pluginId !== props.plugin.id");
+    expect(appRuntime).toContain('case "getAuthSession"');
+    expect(settingsWorkspace).toContain('case "getAuthSession"');
+    expect(dailyBrief).toContain('bridge("getAuthSession"');
+    expect(dailyBrief).toContain("article-title-link");
+    expect(dailyBrief).not.toContain("在邸报中打开");
+    expect(dailyBrief).not.toContain("打开原文");
   });
 
   it("renders provider connection and embedding job status separately", () => {

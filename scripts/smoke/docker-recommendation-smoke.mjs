@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 
 const project = `dibao-d-smoke-${process.pid}`;
 const hostPort = process.env.DIBAO_DOCKER_SMOKE_PORT ?? "18080";
+const httpTimeoutMs = Number(process.env.DIBAO_DOCKER_SMOKE_HTTP_TIMEOUT_MS ?? "10000");
 const username = "docker-smoke";
 const password = "docker smoke password";
 const fixtureRss = `<?xml version="1.0"?>
@@ -47,7 +48,11 @@ writeFileSync(
   dibao:
     environment:
       DIBAO_BACKGROUND_JOBS: "true"
+      DIBAO_BACKGROUND_STARTUP_DELAY_MS: "1"
+      DIBAO_FETCH_ALLOW_PRIVATE: "true"
+      DIBAO_FOREGROUND_QUIET_WINDOW_MS: "1"
       DIBAO_JOB_RUNNER_INTERVAL_MS: "500"
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
     volumes:
       - "${dataPath}:/data"
     extra_hosts:
@@ -55,13 +60,16 @@ writeFileSync(
 `
 );
 
+let smokeError;
+let sessionCookie;
+
 try {
   run("docker", ["compose", "-p", project, "-f", "compose.yaml", "-f", overridePath, "up", "-d", "--build"]);
   await waitForHealth(apiBase);
 
   const setup = await postJson(`${apiBase}/api/auth/setup`, { username, password });
-  const cookie = setup.headers.get("set-cookie")?.split(";")[0];
-  if (!cookie) {
+  sessionCookie = setup.headers.get("set-cookie")?.split(";")[0];
+  if (!sessionCookie) {
     throw new Error("Setup did not return a session cookie");
   }
 
@@ -70,7 +78,7 @@ try {
     {
       feedUrl: `http://host.docker.internal:${fixture.port}/feeds/main.xml`
     },
-    cookie
+    sessionCookie
   );
 
   const provider = await postJson(
@@ -83,21 +91,21 @@ try {
       dimension: 4,
       enabled: true
     },
-    cookie
+    sessionCookie
   );
   if (!provider.data?.id) {
     throw new Error("Provider creation did not return an id");
   }
 
-  const indexes = await getJson(`${apiBase}/api/embedding/indexes`, cookie);
+  const indexes = await getJson(`${apiBase}/api/embedding/indexes`, sessionCookie);
   const activeIndex = indexes.data?.find((index) => index.status === "active");
   if (!activeIndex) {
     throw new Error("No active embedding index after provider setup");
   }
 
-  await postJson(`${apiBase}/api/embedding/indexes/${activeIndex.id}/backfill`, {}, cookie);
-  const status = await waitForRecommendationStatus(apiBase, cookie);
-  const recommended = await getJson(`${apiBase}/api/articles?view=recommended`, cookie);
+  await postJson(`${apiBase}/api/embedding/indexes/${activeIndex.id}/backfill`, {}, sessionCookie);
+  const status = await waitForRecommendationStatus(apiBase, sessionCookie);
+  const recommended = await getJson(`${apiBase}/api/articles?view=recommended`, sessionCookie);
   if (!Array.isArray(recommended.data) || recommended.data.length === 0) {
     throw new Error("Recommended API returned no articles");
   }
@@ -116,12 +124,24 @@ try {
       2
     )
   );
+} catch (error) {
+  smokeError = error;
+  await printJobStatus(apiBase, sessionCookie);
+  try {
+    run("docker", ["compose", "-p", project, "-f", "compose.yaml", "-f", overridePath, "logs", "--no-color", "--tail", "250"]);
+  } catch (logError) {
+    console.error("Failed to collect Docker smoke logs", logError);
+  }
 } finally {
   try {
     run("docker", ["compose", "-p", project, "-f", "compose.yaml", "-f", overridePath, "down", "-v"]);
   } finally {
     await fixture.close();
   }
+}
+
+if (smokeError) {
+  throw smokeError;
 }
 
 function run(command, args) {
@@ -139,7 +159,7 @@ async function waitForHealth(baseUrl) {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/api/system/health`);
+      const response = await fetchWithTimeout(`${baseUrl}/api/system/health`, {}, 5_000);
       if (response.ok) {
         return;
       }
@@ -152,22 +172,22 @@ async function waitForHealth(baseUrl) {
 }
 
 async function waitForRecommendationStatus(baseUrl, cookie) {
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 120_000;
   let last;
   while (Date.now() < deadline) {
     last = await getJson(`${baseUrl}/api/recommendation/status`, cookie);
     if (last.data?.coverage?.embeddingCount > 0 && last.data?.coverage?.pendingJobs === 0) {
       return last;
     }
-    await sleep(1000);
+    await sleep(5000);
   }
   throw new Error(`Timed out waiting for embedding jobs: ${JSON.stringify(last)}`);
 }
 
 async function getJson(url, cookie) {
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
-      cookie
+      ...(cookie ? { cookie } : {})
     }
   });
   const payload = await response.json();
@@ -178,7 +198,7 @@ async function getJson(url, cookie) {
 }
 
 async function postJson(url, body, cookie) {
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -194,6 +214,37 @@ async function postJson(url, body, cookie) {
     ...payload,
     headers: response.headers
   };
+}
+
+async function printJobStatus(baseUrl, cookie) {
+  if (!cookie) {
+    return;
+  }
+  try {
+    const jobs = await getJson(`${baseUrl}/api/jobs?type=embedding_generate&limit=5`, cookie);
+    console.error("Embedding job status before Docker smoke cleanup:");
+    console.error(JSON.stringify(jobs, null, 2));
+  } catch (error) {
+    console.error("Failed to collect embedding job status", error);
+  }
+}
+
+async function fetchWithTimeout(url, init = {}, timeoutMs = httpTimeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: init.signal ?? controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`${init.method ?? "GET"} ${url} timed out after ${timeoutMs} ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function sleep(ms) {

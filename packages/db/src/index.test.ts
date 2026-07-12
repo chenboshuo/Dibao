@@ -12,6 +12,7 @@ import {
   SqliteFeedFolderRepository,
   SqliteFeedRepository,
   SqliteJobRepository,
+  SqlitePluginRepository,
   SqliteProfileRepository,
   SqliteRankingRepository,
   SqliteReaderCommandEventRepository,
@@ -151,9 +152,20 @@ describe("db package", () => {
         "embedding_usage_events",
         "interest_cluster_merge_candidates",
         "interest_families",
+        "interest_family_labels",
         "interest_cluster_family_members",
         "interest_cluster_calibrations",
         "reader_command_events",
+        "plugin_installs",
+        "plugin_capability_grants",
+        "plugin_settings",
+        "plugin_kv",
+        "plugin_migrations",
+        "plugin_update_checks",
+        "plugin_secrets",
+        "plugin_deliveries",
+        "plugin_delivery_attempts",
+        "behavior_projection_cursors",
         "jobs"
       ]) {
         expect(hasTableOrView(db, name), name).toBe(true);
@@ -164,6 +176,9 @@ describe("db package", () => {
       expect(hasIndex(db, "idx_article_states_liked_at")).toBe(true);
       expect(hasColumn(db, "rank_model_weights", "z")).toBe(true);
       expect(hasColumn(db, "rank_model_weights", "n")).toBe(true);
+      expect(hasColumn(db, "jobs", "priority")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_action_at")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_ignored_at")).toBe(true);
       expect(hasColumn(db, "feed_stats", "clear_positive")).toBe(true);
       expect(hasColumn(db, "feed_stats", "source_confidence")).toBe(true);
       expect(hasColumn(db, "interest_cluster_evidence", "article_title_snapshot")).toBe(true);
@@ -177,6 +192,13 @@ describe("db package", () => {
       expect(hasIndex(db, "idx_interest_cluster_calibrations_algorithm")).toBe(true);
       expect(hasIndex(db, "idx_reader_command_events_created_at")).toBe(true);
       expect(hasIndex(db, "idx_profile_terms_polarity_scope_weight")).toBe(true);
+      expect(hasIndex(db, "idx_plugin_deliveries_plugin_status")).toBe(true);
+      expect(hasIndex(db, "idx_plugin_delivery_attempts_delivery")).toBe(true);
+      expect(hasIndex(db, "idx_behavior_events_projection_order")).toBe(true);
+      expect(hasIndex(db, "idx_jobs_status_priority_run_after")).toBe(true);
+      expect(hasIndex(db, "idx_article_states_last_action_at")).toBe(true);
+      expect(hasIndex(db, "idx_article_states_last_ignored_at")).toBe(true);
+      expect(hasIndex(db, "idx_article_rank_scores_context_recommended_order")).toBe(true);
     } finally {
       db.close();
     }
@@ -213,9 +235,18 @@ describe("db package", () => {
         "015",
         "016",
         "017",
-        "018"
+        "018",
+        "019",
+        "020",
+        "021",
+        "022",
+        "023",
+        "024",
+        "025"
       ]);
       expect(hasColumn(db, "article_states", "liked_at")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_action_at")).toBe(true);
+      expect(hasColumn(db, "article_states", "last_ignored_at")).toBe(true);
       expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
       expect(db.prepare("select username from auth_credentials where id = ?").get("single_user")).toEqual({
         username: null
@@ -230,12 +261,18 @@ describe("db package", () => {
       expect(hasTableOrView(db, "interest_cluster_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_merge_candidates")).toBe(true);
       expect(hasTableOrView(db, "interest_families")).toBe(true);
+      expect(hasTableOrView(db, "interest_family_labels")).toBe(true);
       expect(hasTableOrView(db, "interest_cluster_family_members")).toBe(true);
       expect(hasColumn(db, "embedding_providers", "text_max_chars")).toBe(true);
       expect(hasColumn(db, "embedding_providers", "requests_per_minute")).toBe(true);
       expect(hasColumn(db, "embedding_providers", "requests_per_day")).toBe(true);
       expect(hasColumn(db, "embedding_indexes", "text_max_chars")).toBe(true);
       expect(hasTableOrView(db, "reader_command_events")).toBe(true);
+      expect(hasTableOrView(db, "plugin_secrets")).toBe(true);
+      expect(hasTableOrView(db, "plugin_deliveries")).toBe(true);
+      expect(hasTableOrView(db, "plugin_delivery_attempts")).toBe(true);
+      expect(hasTableOrView(db, "behavior_projection_cursors")).toBe(true);
+      expect(hasColumn(db, "jobs", "priority")).toBe(true);
 
       db.prepare(
         `
@@ -392,6 +429,133 @@ describe("db package", () => {
       expect(
         db.prepare("select type from jobs where id = 'job_interest_family_rebuild'").get()
       ).toEqual({ type: "interest_family_rebuild" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("converts legacy high-volume profile jobs into behavior projection cursor state", () => {
+    const db = openDatabase(":memory:", { loadSqliteVec: false });
+    try {
+      const migrationsThrough022 = loadDefaultMigrations().filter(
+        (migration) => Number.parseInt(migration.version, 10) <= 22
+      );
+      expect(
+        runMigrations(db, migrationsThrough022, () => 1000).at(-1)?.version
+      ).toBe("022");
+
+      db.prepare(
+        `
+          insert into feeds (id, title, feed_url, created_at, updated_at)
+          values ('feed_023', '023 Feed', 'https://example.com/023.xml', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into articles (
+            id,
+            feed_id,
+            url,
+            title,
+            discovered_at,
+            dedupe_key,
+            created_at,
+            updated_at
+          )
+          values ('article_023', 'feed_023', 'https://example.com/023', '023 Article', 1000, 'article_023', 1000, 1000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into behavior_events (
+            id,
+            article_id,
+            event_type,
+            event_weight,
+            created_at
+          )
+          values
+            ('event_open_023', 'article_023', 'open', 0.1, 2000),
+            ('event_favorite_023', 'article_023', 'favorite', 1.5, 3000)
+        `
+      ).run();
+      db.prepare(
+        `
+          insert into jobs (
+            id,
+            type,
+            status,
+            payload_json,
+            attempts,
+            max_attempts,
+            run_after,
+            created_at,
+            updated_at
+          )
+          values
+            (
+              'job_open_023',
+              'profile_event_process',
+              'queued',
+              '{"eventId":"event_open_023","articleId":"article_023","actionType":"open"}',
+              0,
+              2,
+              2000,
+              2000,
+              2000
+            ),
+            (
+              'job_favorite_023',
+              'profile_event_process',
+              'queued',
+              '{"eventId":"event_favorite_023","articleId":"article_023","actionType":"favorite"}',
+              0,
+              2,
+              3000,
+              3000,
+              3000
+            )
+        `
+      ).run();
+
+      const migration023 = loadDefaultMigrations().find((migration) => migration.version === "023");
+      expect(migration023).toBeDefined();
+      expect(runMigrations(db, [migration023!], () => 4000).map((migration) => migration.version)).toEqual([
+        "023"
+      ]);
+
+      expect(
+        db
+          .prepare("select status, priority from jobs where id = 'job_open_023'")
+          .get()
+      ).toEqual({
+        status: "cancelled",
+        priority: 40
+      });
+      expect(
+        db
+          .prepare("select status, priority from jobs where id = 'job_favorite_023'")
+          .get()
+      ).toEqual({
+        status: "queued",
+        priority: 40
+      });
+      expect(
+        db
+          .prepare(
+            `
+              select
+                last_created_at as lastCreatedAt,
+                last_event_id as lastEventId
+              from behavior_projection_cursors
+              where projector_id = 'profile'
+            `
+          )
+          .get()
+      ).toEqual({
+        lastCreatedAt: 1999,
+        lastEventId: ""
+      });
     } finally {
       db.close();
     }
@@ -640,7 +804,14 @@ describe("db package", () => {
         "015",
         "016",
         "017",
-        "018"
+        "018",
+        "019",
+        "020",
+        "021",
+        "022",
+        "023",
+        "024",
+        "025"
       ]);
 
       expect(getAppliedMigrations(db).find((migration) => migration.version === "004")?.checksum).toBe(checksum004);
@@ -659,6 +830,8 @@ describe("db package", () => {
       expect(hasTableOrView(db, "interest_cluster_calibrations")).toBe(true);
       expect(hasTableOrView(db, "reader_command_events")).toBe(true);
       expect(hasColumn(db, "auth_credentials", "username")).toBe(true);
+      expect(hasTableOrView(db, "behavior_projection_cursors")).toBe(true);
+      expect(hasColumn(db, "jobs", "priority")).toBe(true);
     } finally {
       db.close();
     }
@@ -680,14 +853,16 @@ describe("db package", () => {
       expect(job.status).toBe("queued");
       expect(job.attempts).toBe(0);
       expect(jobs.claimNextDue(999)).toBeNull();
+      expect(jobs.claimById("job_feed_refresh", 999)).toBeNull();
 
-      const firstClaim = jobs.claimNextDue(1000);
+      const firstClaim = jobs.claimById("job_feed_refresh", 1000);
       expect(firstClaim).toMatchObject({
         id: "job_feed_refresh",
         status: "running",
         attempts: 1,
         startedAt: 1000
       });
+      expect(jobs.claimById("job_feed_refresh", 1000)).toBeNull();
 
       const retry = jobs.markFailedOrRetry("job_feed_refresh", "temporary", 1100, 5000);
       expect(retry).toMatchObject({
@@ -710,6 +885,175 @@ describe("db package", () => {
         attempts: 2,
         error: "permanent",
         finishedAt: 6200
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("claims due jobs by priority before older lower-priority work", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const jobs = new SqliteJobRepository(db);
+      jobs.enqueue({
+        id: "job_low",
+        type: "feed_refresh",
+        payloadJson: JSON.stringify({ feedId: "feed_low" }),
+        maxAttempts: 1,
+        priority: 0,
+        runAfter: 900,
+        now: 900
+      });
+      jobs.enqueue({
+        id: "job_projection",
+        type: "behavior_event_project",
+        payloadJson: JSON.stringify({}),
+        maxAttempts: 1,
+        priority: 60,
+        runAfter: 1000,
+        now: 1000
+      });
+
+      expect(jobs.findById("job_projection")).toMatchObject({
+        priority: 60
+      });
+      expect(jobs.claimNextDue(1000)).toMatchObject({
+        id: "job_projection",
+        type: "behavior_event_project",
+        priority: 60
+      });
+      expect(jobs.claimNextDue(1000)).toMatchObject({
+        id: "job_low",
+        type: "feed_refresh",
+        priority: 0
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("stores plugin installs, grants, settings, kv, and plugin job cancellation", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const plugins = new SqlitePluginRepository(db);
+      const jobs = new SqliteJobRepository(db);
+      const manifest = {
+        manifestVersion: 1,
+        id: "com.example.test",
+        name: "Test Plugin",
+        version: "1.0.0",
+        publisher: "Example",
+        dibao: { minVersion: "0.1.0", maxVersion: "<1.0.0" },
+        capabilities: ["articles:read"],
+        contributes: { hooks: ["settings.afterUpdated"] }
+      };
+
+      plugins.upsertInstall({
+        id: manifest.id,
+        version: manifest.version,
+        sourceType: "local_file",
+        packagePath: "/tmp/plugin",
+        dataPath: "/tmp/plugin-data",
+        manifestJson: JSON.stringify(manifest),
+        status: "installed",
+        official: false,
+        bundled: false,
+        trustLevel: "untrusted",
+        now: 1000
+      });
+      plugins.grantCapabilities(manifest.id, manifest.capabilities, 1100);
+      plugins.setSetting(manifest.id, "enabledFlag", true, 1200);
+      plugins.setKv(manifest.id, "hook:settings.afterUpdated:last", { ok: true }, 1300);
+      plugins.upsertSecret({
+        pluginId: manifest.id,
+        key: "webhook.token",
+        ciphertext: "ciphertext",
+        hint: "tok...",
+        now: 1350
+      });
+      const delivery = plugins.upsertDelivery({
+        id: "delivery_test",
+        pluginId: manifest.id,
+        status: "queued",
+        method: "POST",
+        url: "https://example.com/hook",
+        requestJson: JSON.stringify({ method: "POST" }),
+        idempotencyKey: "once",
+        now: 1360
+      });
+      plugins.insertDeliveryAttempt({
+        id: "attempt_test",
+        deliveryId: delivery.id,
+        attempt: 1,
+        status: "failed",
+        statusCode: 500,
+        durationMs: 12,
+        requestJson: "{}",
+        responseJson: "{}",
+        error: "HTTP 500",
+        now: 1370
+      });
+      const updateCheck = plugins.upsertUpdateCheck({
+        pluginId: manifest.id,
+        latestVersion: "1.1.0",
+        updateUrl: "https://example.com/plugin.json",
+        checksum: "abc",
+        now: 1400
+      });
+
+      expect(plugins.findInstall(manifest.id)).toMatchObject({
+        id: manifest.id,
+        status: "installed",
+        trustLevel: "untrusted"
+      });
+      expect(plugins.listCapabilityGrants(manifest.id)).toEqual(["articles:read"]);
+      expect(plugins.listSettings(manifest.id)).toEqual({ enabledFlag: true });
+      expect(plugins.getKv(manifest.id, "hook:settings.afterUpdated:last")).toEqual({ ok: true });
+      expect(plugins.listSecrets(manifest.id)).toEqual([
+        expect.objectContaining({
+          key: "webhook.token",
+          hasValue: true,
+          hint: "tok..."
+        })
+      ]);
+      expect(plugins.getSecret(manifest.id, "webhook.token")?.ciphertext).toBe("ciphertext");
+      expect(plugins.findDeliveryByIdempotencyKey(manifest.id, "once")).toMatchObject({
+        id: "delivery_test",
+        status: "queued"
+      });
+      expect(plugins.listDeliveryAttempts("delivery_test")).toEqual([
+        expect.objectContaining({
+          id: "attempt_test",
+          status: "failed",
+          statusCode: 500
+        })
+      ]);
+      expect(plugins.updateDeliveryStatus("delivery_test", {
+        status: "failed",
+        error: "done",
+        finishedAt: 1380,
+        now: 1380
+      })).toMatchObject({
+        status: "failed",
+        error: "done",
+        finishedAt: 1380
+      });
+      expect(updateCheck).toMatchObject({
+        pluginId: manifest.id,
+        latestVersion: "1.1.0",
+        checksum: "abc"
+      });
+
+      const pluginJob = jobs.enqueue({
+        id: "job_plugin",
+        type: "plugin:com.example.test:manual",
+        now: 1500
+      });
+      expect(pluginJob.type).toBe("plugin:com.example.test:manual");
+      expect(jobs.cancel(pluginJob.id, "Cancelled by test", 1600)).toMatchObject({
+        status: "cancelled",
+        error: "Cancelled by test",
+        finishedAt: 1600
       });
     } finally {
       db.close();
@@ -1438,6 +1782,88 @@ describe("db package", () => {
     }
   });
 
+  it("paginates non-recommended article lists with keyset cursors", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      const articles = new SqliteArticleRepository(db);
+      const actions = new SqliteArticleActionRepository(db);
+
+      feeds.upsert({
+        id: "feed_keyset",
+        title: "Keyset Feed",
+        feedUrl: "https://example.com/keyset.xml",
+        now: 1000
+      });
+
+      for (const timestamp of [1000, 2000, 3000, 4000, 5000]) {
+        articles.upsert({
+          id: `article_keyset_${timestamp}`,
+          feedId: "feed_keyset",
+          url: `https://example.com/keyset/${timestamp}`,
+          title: `Keyset ${timestamp}`,
+          publishedAt: timestamp,
+          discoveredAt: timestamp,
+          dedupeKey: `article_keyset_${timestamp}`,
+          now: timestamp
+        });
+      }
+
+      actions.record({ articleId: "article_keyset_1000", type: "favorite", now: 11_000 });
+      actions.record({ articleId: "article_keyset_2000", type: "favorite", now: 12_000 });
+      actions.record({ articleId: "article_keyset_3000", type: "favorite", now: 13_000 });
+      actions.record({ articleId: "article_keyset_3000", type: "read_later", now: 21_000 });
+      actions.record({ articleId: "article_keyset_4000", type: "read_later", now: 22_000 });
+      actions.record({ articleId: "article_keyset_5000", type: "read_later", now: 23_000 });
+
+      const latestFirst = articles.list({ view: "latest", limit: 2 });
+      expect(latestFirst.items.map((article) => article.id)).toEqual([
+        "article_keyset_5000",
+        "article_keyset_4000"
+      ]);
+      expect(latestFirst.nextCursor).toMatchObject({ type: "latest" });
+      expect(
+        articles.list({ view: "latest", limit: 2, cursor: latestFirst.nextCursor ?? undefined }).items.map((article) => article.id)
+      ).toEqual(["article_keyset_3000", "article_keyset_2000"]);
+
+      const favoritesFirst = articles.list({ view: "favorites", sort: "favorited_desc", limit: 2 });
+      expect(favoritesFirst.items.map((article) => article.id)).toEqual([
+        "article_keyset_3000",
+        "article_keyset_2000"
+      ]);
+      expect(favoritesFirst.nextCursor).toMatchObject({ type: "favorites" });
+      expect(
+        articles.list({
+          view: "favorites",
+          sort: "favorited_desc",
+          limit: 2,
+          cursor: favoritesFirst.nextCursor ?? undefined
+        }).items.map((article) => article.id)
+      ).toEqual(["article_keyset_1000"]);
+
+      const readLaterFirst = articles.list({
+        view: "read_later",
+        sort: "read_later_desc",
+        limit: 2
+      });
+      expect(readLaterFirst.items.map((article) => article.id)).toEqual([
+        "article_keyset_5000",
+        "article_keyset_4000"
+      ]);
+      expect(readLaterFirst.nextCursor).toMatchObject({ type: "read_later" });
+      expect(
+        articles.list({
+          view: "read_later",
+          sort: "read_later_desc",
+          limit: 2,
+          cursor: readLaterFirst.nextCursor ?? undefined
+        }).items.map((article) => article.id)
+      ).toEqual(["article_keyset_3000"]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("resolves unread article scopes and marks ids read without behavior events", () => {
     const db = openDatabase(tempDatabasePath(), { migrate: true });
     try {
@@ -1633,6 +2059,16 @@ describe("db package", () => {
         candidate?.behaviorProjectionScore ?? 0
       );
 
+      const pagedCandidate = rankings.listCandidates({
+        afterArticleId: "article_like_rank",
+        limit: 1
+      })[0];
+      expect(pagedCandidate).toMatchObject({
+        articleId: "article_rank",
+        behaviorProjectionScore: 0.12,
+        behaviorEventCount: 1
+      });
+
       rankings.upsertBaseScore({
         articleId: "article_rank",
         score: 0.75,
@@ -1752,6 +2188,75 @@ describe("db package", () => {
     }
   });
 
+  it("orders recommended article lists from rank scores while preserving active and base fallback", () => {
+    const db = openDatabase(tempDatabasePath(), { migrate: true });
+    try {
+      const feeds = new SqliteFeedRepository(db);
+      const articles = new SqliteArticleRepository(db);
+      feeds.upsert({
+        id: "feed_ranked_list",
+        title: "Ranked List Feed",
+        feedUrl: "https://example.com/ranked-list.xml",
+        now: 1000
+      });
+
+      for (const id of ["base_only", "active_high", "active_low", "unranked"]) {
+        articles.upsert({
+          id: `article_${id}`,
+          feedId: "feed_ranked_list",
+          url: `https://example.com/${id}`,
+          title: id,
+          publishedAt: 1000,
+          discoveredAt: 1000,
+          dedupeKey: id,
+          now: 1000
+        });
+      }
+
+      insertRank(db, "article_base_only", 0.95, 2000);
+      insertRank(db, "article_active_high", 0.1, 2000);
+      insertRank(db, "article_active_high", 0.9, 3000, "active");
+      insertRank(db, "article_active_low", 0.7, 3000, "active");
+
+      const firstPage = articles.list({ view: "recommended", rankContext: "active", limit: 2 });
+      expect(firstPage.items.map((item) => item.id)).toEqual([
+        "article_base_only",
+        "article_active_high"
+      ]);
+      expect(firstPage.nextCursor).toMatchObject({ type: "recommended" });
+      expect(firstPage.timing).toMatchObject({
+        unreadCountMs: expect.any(Number),
+        rankCandidateMs: expect.any(Number),
+        hydrateMs: expect.any(Number)
+      });
+      expect(
+        articles
+          .list({ view: "recommended", rankContext: "active", limit: 3, offset: 2 })
+          .items.map((item) => item.id)
+      ).toEqual(["article_active_low", "article_unranked"]);
+      expect(
+        articles
+          .list({
+            view: "recommended",
+            rankContext: "active",
+            limit: 3,
+            cursor: firstPage.nextCursor ?? undefined
+          })
+          .items.map((item) => item.id)
+      ).toEqual(["article_active_low", "article_unranked"]);
+      const withoutCount = articles.list({
+        view: "recommended",
+        rankContext: "active",
+        includeUnreadCount: false,
+        limit: 2
+      });
+      expect(withoutCount.unreadCount).toBeNull();
+      expect(withoutCount.timing?.unreadCountMs).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   it("stores auth credentials and hashed sessions", () => {
     const db = openDatabase(tempDatabasePath(), { migrate: true });
     try {
@@ -1776,11 +2281,20 @@ describe("db package", () => {
         updatedAt: 1000
       });
 
-      sessions.createSession({
+      const createdSession = sessions.createSession({
         id: "session_1",
         sessionHash: "hash_1",
         createdAt: 2000,
         expiresAt: 3000,
+        userAgent: "vitest",
+        ipHash: "ip_hash"
+      });
+      expect(createdSession).toMatchObject({
+        id: "session_1",
+        sessionHash: "hash_1",
+        createdAt: 2000,
+        expiresAt: 3000,
+        lastSeenAt: 2000,
         userAgent: "vitest",
         ipHash: "ip_hash"
       });
@@ -1813,7 +2327,8 @@ function insertRank(
   db: ReturnType<typeof openDatabase>,
   articleId: string,
   score: number,
-  calculatedAt: number
+  calculatedAt: number,
+  rankContext = "base"
 ): void {
   db.prepare(
     `
@@ -1830,9 +2345,9 @@ function insertRank(
         penalty_score,
         calculated_at
       )
-      values (?, 'base', null, ?, 0, 0, 0, 0, 0, 0, ?)
+      values (?, ?, null, ?, 0, 0, 0, 0, 0, 0, ?)
     `
-  ).run(articleId, score, calculatedAt);
+  ).run(articleId, rankContext, score, calculatedAt);
 }
 
 function hasTableOrView(db: ReturnType<typeof openDatabase>, name: string): boolean {

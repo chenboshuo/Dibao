@@ -45,27 +45,35 @@ export type RecommendationMaintenanceSchedulerOptions = {
   embeddingJobs?: Pick<EmbeddingJobService, "enqueueBackfillForActiveIndex">;
   runner?: Pick<JobRunner, "drainDue">;
   intervalMs?: number;
+  initialDelayMs?: number;
   now?: () => number;
   onError?: (error: unknown) => void;
 };
 
 export class RecommendationMaintenanceScheduler {
   private readonly intervalMs: number;
+  private readonly initialDelayMs: number;
   private readonly now: () => number;
   private interval: ReturnType<typeof setInterval> | null = null;
+  private initialTick: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: RecommendationMaintenanceSchedulerOptions) {
     this.intervalMs =
       options.intervalMs ?? DEFAULT_RECOMMENDATION_MAINTENANCE_SCHEDULER_INTERVAL_MS;
+    this.initialDelayMs = Math.max(0, Math.floor(options.initialDelayMs ?? 0));
     this.now = options.now ?? Date.now;
   }
 
   start(): void {
-    if (this.interval || this.intervalMs <= 0) {
+    if (this.interval || this.initialTick || this.intervalMs <= 0) {
       return;
     }
 
-    void this.tick().catch((error) => this.options.onError?.(error));
+    this.initialTick = setTimeout(() => {
+      this.initialTick = null;
+      void this.tick().catch((error) => this.options.onError?.(error));
+    }, this.initialDelayMs);
+    this.initialTick.unref?.();
     this.interval = setInterval(() => {
       void this.tick().catch((error) => this.options.onError?.(error));
     }, this.intervalMs);
@@ -73,6 +81,10 @@ export class RecommendationMaintenanceScheduler {
   }
 
   stop(): void {
+    if (this.initialTick) {
+      clearTimeout(this.initialTick);
+      this.initialTick = null;
+    }
     if (!this.interval) {
       return;
     }

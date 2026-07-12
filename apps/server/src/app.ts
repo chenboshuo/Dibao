@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, extname, isAbsolute, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import Fastify, {
   type FastifyInstance,
@@ -20,14 +21,17 @@ import {
   SqliteFeedFolderRepository,
   SqliteFeedRepository,
   SqliteJobRepository,
+  SqlitePluginRepository,
   SqliteProfileRepository,
   SqliteRankingRepository,
   SqliteReaderCommandEventRepository,
   SqliteSessionRepository,
   SqliteVecVectorStore,
   fromVectorBlob,
+  runMigrations,
   type ArticleActionType,
   type ArticleDetailRow,
+  type ArticleListCursor,
   type ArticleListInput,
   type ArticleListItemRow,
   type ArticleListView,
@@ -47,6 +51,7 @@ import {
   type InterestClusterRow,
   type JobRow,
   type JobStatus,
+  type PluginJobType,
   type JobType,
   type ProfileSignalCountRow
 } from "@dibao/db";
@@ -56,13 +61,24 @@ import {
   ArticleActionService,
   ArticleActionServiceError
 } from "./article-action-service.js";
+import { BackgroundWriteCoordinator } from "./background-write-coordinator.js";
+import {
+  BEHAVIOR_EVENT_PROJECT_JOB_PRIORITY,
+  BEHAVIOR_EVENT_PROJECT_JOB_TYPE,
+  BehaviorProjectionJobService
+} from "./behavior-projection-job-service.js";
 import {
   readSessionCookie,
   serializeClearSessionCookie,
   serializeSessionCookie
 } from "./auth-cookie.js";
 import { AuthService, AuthServiceError } from "./auth-service.js";
+import { isSqliteBusyError } from "./sqlite-errors.js";
 import { ArticleRetentionService } from "./article-retention-service.js";
+import {
+  CoreDatabaseMigrationService,
+  type CoreDatabaseMigrationStatus
+} from "./core-database-migration-service.js";
 import {
   DerivedDataUpgradeService,
   type DerivedDataUpgradeStatus
@@ -110,6 +126,12 @@ import {
   type FullContentBackfillResult,
   type FullContentPreviewResponse
 } from "./feed-full-content-service.js";
+import {
+  DEFAULT_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS,
+  foregroundQuietUntil,
+  foregroundActivitySignalPath,
+  writeForegroundActivitySignal
+} from "./foreground-activity.js";
 import { FullContentExtractionService } from "./full-content-extraction-service.js";
 import {
   InterestClusterLabelService,
@@ -125,12 +147,25 @@ import {
 } from "./interest-cluster-merge-service.js";
 import {
   InterestFamilyService,
+  InterestFamilyServiceError,
   INTEREST_FAMILY_REBUILD_JOB_TYPE,
   type RecommendationClusterFamily
 } from "./interest-family-service.js";
-import { JobRunner } from "./job-runner.js";
+import {
+  jobQueueWakeSignalPath,
+  watchJobQueueWakeSignal,
+  writeJobQueueWakeSignal
+} from "./job-queue-wake-signal.js";
+import { JobRunner, type JobRunnerEvent } from "./job-runner.js";
+import {
+  DEFAULT_JOB_HISTORY_CLEANUP_INTERVAL_MS,
+  DEFAULT_JOB_HISTORY_RETENTION_DAYS,
+  JobHistoryCleanupScheduler
+} from "./job-history-cleanup-scheduler.js";
 import { LatestReleaseService } from "./latest-release-service.js";
 import { OpmlService, OpmlServiceError } from "./opml-service.js";
+import { PluginService, PluginServiceError } from "./plugin-service.js";
+import { pluginUiCss } from "./plugin-ui.js";
 import {
   DEFAULT_PROFILE_DECAY_INTERVAL_MS,
   ProfileDecayJobService,
@@ -167,7 +202,8 @@ import {
 } from "./recommendation-maintenance-scheduler.js";
 import {
   RecommendationRankingService,
-  type RankExplanationClusterMatch
+  type RankExplanationClusterMatch,
+  type RankExplanationResult
 } from "./ranking-service.js";
 import {
   DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
@@ -199,7 +235,9 @@ type SetupStatusResponse = {
   hasFeeds: boolean;
   hasEmbeddingProvider: boolean;
   firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+  coreDatabaseMigration?: CoreDatabaseMigrationStatus;
   derivedDataUpgrade?: DerivedDataUpgradeStatus;
+  optionalPluginSteps?: unknown[];
 };
 
 type FeedQuery = {
@@ -245,6 +283,7 @@ type ArticleQuery = {
   folderId?: string;
   status?: string;
   unreadOnly?: string;
+  includeUnreadCount?: string;
   todayOnly?: string;
   timeWindow?: string;
   limit?: string;
@@ -254,6 +293,7 @@ type ArticleQuery = {
 
 type SearchQuery = {
   q?: string;
+  scope?: string;
   feedId?: string;
   folderId?: string;
   from?: string;
@@ -262,12 +302,64 @@ type SearchQuery = {
   sort?: string;
   limit?: string;
   cursor?: string;
+  includeUnreadCount?: string;
 };
 
 type JobQuery = {
   status?: string;
   type?: string;
   limit?: string;
+};
+
+type PluginParams = {
+  id: string;
+};
+
+type PluginTaskParams = {
+  id: string;
+  taskId: string;
+};
+
+type PluginTaskRunParams = {
+  id: string;
+  runId: string;
+};
+
+type PluginSecretParams = {
+  id: string;
+  key: string;
+};
+
+type PluginDeliveryParams = {
+  id: string;
+  deliveryId: string;
+};
+
+type PluginDeliveryQuery = {
+  status?: string;
+  limit?: string;
+};
+
+type PluginApiParams = {
+  id: string;
+  "*": string;
+};
+
+type PluginAssetParams = PluginApiParams;
+
+type PluginInstallBody = {
+  url?: unknown;
+  package?: unknown;
+  sha256?: unknown;
+};
+
+type OptionalPluginBody = {
+  enabled?: unknown;
+  timezone?: unknown;
+};
+
+type PluginUninstallQuery = {
+  deleteData?: string;
 };
 
 type ArticleParams = {
@@ -279,6 +371,10 @@ type ArticleActionBody = {
   value?: unknown;
   progress?: unknown;
   metadata?: unknown;
+};
+
+type BulkArticleActionBody = {
+  actions?: unknown;
 };
 
 type ReaderCommandBody = {
@@ -299,10 +395,13 @@ type RecommendationMaintenanceParams = {
 
 type RecommendationClusterQuery = {
   limit?: string;
+  clusterDetailLevel?: string;
 };
 
 type RecommendationStatusQuery = {
   includeClusterItems?: string;
+  clusterItemLimit?: string;
+  clusterDetailLevel?: string;
 };
 
 type RecommendationMergeCandidateQuery = {
@@ -318,13 +417,28 @@ type RecommendationMergeCandidateParams = {
   id: string;
 };
 
+type RecommendationFamilyParams = {
+  id: string;
+};
+
 type RecommendationClusterLabelBody = {
   manualLabel?: unknown;
 };
 
+type RecommendationFamilyLabelBody = {
+  manualLabel?: unknown;
+};
+
+type RecommendationClusterDetailLevel = "summary" | "diagnostic";
+
 type CursorPayload = {
   offset: number;
 };
+
+type EncodedCursorPayload = CursorPayload | { keyset: ArticleListCursor };
+
+const ARTICLE_EXPLANATION_CACHE_TTL_MS = 60_000;
+const ARTICLE_EXPLANATION_CACHE_MAX_ENTRIES = 500;
 
 type BuildServerOptions = {
   db?: DibaoDatabase;
@@ -341,17 +455,42 @@ type BuildServerOptions = {
   backgroundJobs?: boolean;
   feedRefreshIntervalMs?: number;
   retentionCleanupIntervalMs?: number;
+  jobHistoryCleanupIntervalMs?: number;
+  jobHistoryRetentionDays?: number;
   profileDecayIntervalMs?: number;
   recommendationMaintenanceIntervalMs?: number;
   jobRunnerIntervalMs?: number;
+  jobRunnerMaxJobsPerDrain?: number;
   jobRetryDelayMs?: number;
   embeddingFetcher?: typeof fetch;
   fullContentFetcher?: typeof fetch;
   latestReleaseFetcher?: typeof fetch;
+  pluginFetcher?: typeof fetch;
+  enableUserPluginInstall?: boolean;
+  pluginTrustedPublicKeys?: Record<string, string>;
+  officialPluginsDir?: string;
+  pluginDataDir?: string;
+  pluginSecretKey?: string;
   webDistDir?: string | false;
+  coreMigrationDeferMs?: number;
+  upgradeAutoStart?: boolean;
+  recordForegroundActivity?: boolean;
+  foregroundActivityWriteThrottleMs?: number;
+  foregroundQuietWindowMs?: number;
+  backgroundStartupDelayMs?: number;
+  rankingTargetChunkMs?: number;
+};
+
+export type DibaoServerInstance = FastifyInstance & {
+  drainBackgroundJobsNow?: () => Promise<number>;
 };
 
 export function buildServer(options: BuildServerOptions = {}) {
+  const configuredDatabasePath = options.databasePath
+    ? resolveDatabasePath(options.databasePath)
+    : options.db
+      ? undefined
+      : resolveDatabasePath(undefined);
   const db = options.db ?? openConfiguredDatabase(options);
   const closeDatabaseOnClose = options.closeDatabaseOnClose ?? !options.db;
   const settings = new SqliteAppSettingsRepository(db);
@@ -360,6 +499,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const folders = new SqliteFeedFolderRepository(db);
   const feeds = new SqliteFeedRepository(db);
   const jobs = new SqliteJobRepository(db);
+  const plugins = new SqlitePluginRepository(db);
   const articles = new SqliteArticleRepository(db);
   const readerCommandEvents = new SqliteReaderCommandEventRepository(db);
   const embeddings = new SqliteEmbeddingRepository(db);
@@ -370,6 +510,28 @@ export function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? true
   });
+  const backgroundJobs = options.backgroundJobs ?? false;
+  const recordForegroundActivityEnabled = options.recordForegroundActivity ?? !backgroundJobs;
+  const foregroundActivityWriteThrottleMs =
+    options.foregroundActivityWriteThrottleMs ??
+    DEFAULT_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS;
+  const foregroundSignalPath = foregroundActivitySignalPath(configuredDatabasePath);
+  const jobWakeSignalPath = jobQueueWakeSignalPath(configuredDatabasePath);
+  const foregroundQuietWindowMs = Math.max(0, options.foregroundQuietWindowMs ?? 0);
+  const backgroundStartupDelayMs = Math.max(0, options.backgroundStartupDelayMs ?? 0);
+  const backgroundInitialTickDelayMs = backgroundJobs
+    ? Math.max(backgroundStartupDelayMs, foregroundQuietWindowMs)
+    : 0;
+  let lastForegroundActivityWriteAt = 0;
+  const coreDatabaseMigrationService = new CoreDatabaseMigrationService({
+    db,
+    databasePath: configuredDatabasePath,
+    runInChildProcess: !options.db && configuredDatabasePath !== undefined,
+    now: options.now,
+    deferMs: options.coreMigrationDeferMs,
+    onError: (error) => app.log.error(error)
+  });
+  const hasBlockingCoreMigration = coreDatabaseMigrationService.getStatus().blocking;
   const onFetchWarning = (warning: unknown) => {
     app.log.warn({ event: "outbound_fetch_private_target", warning });
   };
@@ -426,11 +588,132 @@ export function buildServer(options: BuildServerOptions = {}) {
     profiles,
     rankings,
     getRankingSettings: () => settingsService.getSettings().ranking,
+    shouldPause: () => {
+      if (foregroundQuietWindowMs <= 0) {
+        return { pause: false };
+      }
+      const now = options.now?.() ?? Date.now();
+      const resumeAfter = foregroundQuietUntil(settings, {
+        now,
+        quietWindowMs: foregroundQuietWindowMs,
+        signalPath: foregroundSignalPath
+      });
+      return resumeAfter ? { pause: true, resumeAfter } : { pause: false };
+    },
+    maxChunkDurationMs: options.rankingTargetChunkMs,
     now: options.now
+  });
+  const articleExplanationCache = new Map<
+    string,
+    { articleId: string; rankContext: string; explanation: RankExplanationResult; expiresAt: number }
+  >();
+  function cachedArticleExplanation(articleId: string): {
+    explanation: RankExplanationResult | null;
+    cacheHit: boolean;
+  } {
+    const rankContext = rankingService.getActiveRankContext();
+    const cacheKey = `${rankContext}:${articleId}`;
+    const now = options.now?.() ?? Date.now();
+    const cached = articleExplanationCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      articleExplanationCache.delete(cacheKey);
+      articleExplanationCache.set(cacheKey, cached);
+      return { explanation: cached.explanation, cacheHit: true };
+    }
+    if (cached) {
+      articleExplanationCache.delete(cacheKey);
+    }
+
+    const explanation = rankingService.explainArticle(articleId);
+    if (!explanation) {
+      return { explanation: null, cacheHit: false };
+    }
+
+    articleExplanationCache.set(cacheKey, {
+      articleId,
+      rankContext,
+      explanation,
+      expiresAt: now + ARTICLE_EXPLANATION_CACHE_TTL_MS
+    });
+    while (articleExplanationCache.size > ARTICLE_EXPLANATION_CACHE_MAX_ENTRIES) {
+      const oldestKey = articleExplanationCache.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      articleExplanationCache.delete(oldestKey);
+    }
+    return { explanation, cacheHit: false };
+  }
+  function invalidateArticleExplanationCache(articleId: string): void {
+    for (const [key, value] of articleExplanationCache) {
+      if (value.articleId === articleId) {
+        articleExplanationCache.delete(key);
+      }
+    }
+  }
+  let drainDueJobsForPlugins: (() => Promise<number>) | null = null;
+  const pluginService = new PluginService({
+    db,
+    plugins,
+    jobs,
+    dibaoVersion,
+    getActiveRankContext: () => rankingService.getActiveRankContext(),
+    officialPluginsDir: options.officialPluginsDir,
+    pluginDataDir: options.pluginDataDir,
+    secretKey: options.pluginSecretKey,
+    fetcher: options.pluginFetcher,
+    enableUserPluginInstall: options.enableUserPluginInstall,
+    trustedPublicKeys: options.pluginTrustedPublicKeys,
+    now: options.now,
+    drainDueJobs: async () => drainDueJobsForPlugins ? await drainDueJobsForPlugins() : 0,
+    logPerformance: (record) => {
+      app.log.info(record, "plugin.api.performance");
+    }
+  });
+  if (!hasBlockingCoreMigration) {
+    pluginService.reconcileOfficialPlugins();
+  }
+  const backgroundWriteCoordinator = new BackgroundWriteCoordinator({
+    onRun: (record) => {
+      app.log.info(
+        {
+          route: "jobs.backgroundWrite",
+          name: record.name,
+          priority: record.priority,
+          durationMs: roundDuration(record.durationMs)
+        },
+        "job.performance"
+      );
+    }
   });
   const rankingJobService = new RankingRecalculateJobService({
     jobs,
     ranking: rankingService,
+    now: options.now,
+    targetChunkMs: options.rankingTargetChunkMs,
+    onChunk: (record) => {
+      app.log.info(
+        {
+          route: "jobs.rankingRecalculate.chunk",
+          jobId: record.jobId,
+          durationMs: roundDuration(record.durationMs),
+          processed: record.processed,
+          limit: record.limit,
+          nextLimit: record.nextLimit,
+          hasNextCursor: record.nextCursor !== null,
+          paused: record.paused,
+          pauseReason: record.pauseReason ?? null,
+          resumeAfter: timestampToIso(record.resumeAfter)
+        },
+        "job.performance"
+      );
+    }
+  });
+  const behaviorProjectionJobService = new BehaviorProjectionJobService({
+    db,
+    jobs,
+    profile: profileService,
+    rankingJobs: rankingJobService,
     now: options.now
   });
   const readerCommandService = new ReaderCommandService({
@@ -569,6 +852,30 @@ export function buildServer(options: BuildServerOptions = {}) {
     refreshService: feedRefreshService,
     afterRefresh: (result) => {
       handleEffectiveContentChanged(result.effectiveContentChangedArticleIds);
+      void pluginService.emitHook("feed.refreshCompleted", {
+        feedId: result.feed.id,
+        refreshedAt: options.now?.() ?? Date.now(),
+        articleIds: result.articleIds,
+        createdArticleIds: result.createdArticleIds,
+        updatedArticleIds: result.updatedArticleIds,
+        articlesSeen: result.articlesSeen,
+        articlesCreated: result.articlesCreated,
+        articlesUpdated: result.articlesUpdated
+      }).catch((error) => app.log.error(error));
+      for (const articleId of result.createdArticleIds) {
+        void pluginService.emitHook("article.created", {
+          articleId,
+          feedId: result.feed.id,
+          createdAt: options.now?.() ?? Date.now()
+        }).catch((error) => app.log.error(error));
+      }
+      for (const articleId of result.updatedArticleIds) {
+        void pluginService.emitHook("article.updated", {
+          articleId,
+          feedId: result.feed.id,
+          updatedAt: options.now?.() ?? Date.now()
+        }).catch((error) => app.log.error(error));
+      }
       const maintenanceSettings = settingsService.getSettings().recommendationMaintenance;
       if (
         result.articleIds.length > 0 &&
@@ -597,8 +904,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
   const articleActionService = new ArticleActionService({
     actions: articleActions,
-    profileJobs: profileEventJobService,
-    rankingJobs: rankingJobService,
+    behaviorProjectionJobs: behaviorProjectionJobService,
     maintenance: {
       enqueueStrongActionMaintenance: (now) => {
         const maintenanceSettings = settingsService.getSettings().recommendationMaintenance;
@@ -661,7 +967,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     settings,
     now: options.now,
     maxFailedLoginAttempts: options.authMaxFailedLoginAttempts,
-    loginLockoutMs: options.authLoginLockoutMs
+    loginLockoutMs: options.authLoginLockoutMs,
+    onSessionTouchError: (error) => {
+      app.log.warn({ error, route: "auth.session.touch" }, "database is busy while touching session");
+    }
   });
   const articleRetentionService = new ArticleRetentionService({
     settings,
@@ -685,7 +994,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     secure: resolveCookieSecure(options.cookieSecure)
   };
   const authRequired = options.authRequired ?? true;
-  const backgroundJobs = options.backgroundJobs ?? false;
+  let maintenanceTickTimer: NodeJS.Timeout | null = null;
+  let maintenanceInitialTickTimer: NodeJS.Timeout | null = null;
+  let backgroundStartupTimer: NodeJS.Timeout | null = null;
+  let stopJobWakeWatcher: (() => void) | null = null;
+  let backgroundServicesStarted = false;
 
   const jobRunner = new JobRunner({
     jobs,
@@ -695,8 +1008,40 @@ export function buildServer(options: BuildServerOptions = {}) {
       profile_decay: (job) => profileDecayJobService.handleProfileDecayJob(job),
       [PROFILE_EVENT_PROCESS_JOB_TYPE]: (job) =>
         profileEventJobService.handleProfileEventProcessJob(job),
-      [RANKING_RECALCULATE_JOB_TYPE]: (job) =>
-        rankingJobService.handleRankingRecalculateJob(job),
+      [BEHAVIOR_EVENT_PROJECT_JOB_TYPE]: async (job) => {
+        const result = await backgroundWriteCoordinator.run(
+          {
+            name: BEHAVIOR_EVENT_PROJECT_JOB_TYPE,
+            priority: BEHAVIOR_EVENT_PROJECT_JOB_PRIORITY
+          },
+          () => behaviorProjectionJobService.handleBehaviorEventProjectJob(job)
+        );
+        app.log.info(
+          {
+            route: "jobs.behaviorProjection",
+            jobId: job.id,
+            processed: result.processed,
+            hasMore: result.hasMore,
+            enqueuedRanking: result.enqueuedRanking
+          },
+          "job.performance"
+        );
+      },
+      [RANKING_RECALCULATE_JOB_TYPE]: async (job) => {
+        const result = await backgroundWriteCoordinator.run(
+          {
+            name: RANKING_RECALCULATE_JOB_TYPE,
+            priority: job.priority
+          },
+          () => rankingJobService.handleRankingRecalculateJob(job)
+        );
+        if (result.processed > 0) {
+          await pluginService.emitHook("ranking.afterRanked", {
+            jobId: job.id,
+            rankedAt: options.now?.() ?? Date.now()
+          });
+        }
+      },
       [EMBEDDING_GENERATE_JOB_TYPE]: (job) =>
         embeddingJobService.handleEmbeddingGenerateJob(job),
       [VECTOR_INDEX_REBUILD_JOB_TYPE]: (job) =>
@@ -724,27 +1069,74 @@ export function buildServer(options: BuildServerOptions = {}) {
       [INTEREST_FAMILY_REBUILD_JOB_TYPE]: (job) =>
         recommendationMaintenanceService.handleJob(job)
     },
+    pluginHandler: pluginService.handlePluginJob,
     now: options.now,
     pollIntervalMs: options.jobRunnerIntervalMs,
     retryDelayMs: options.jobRetryDelayMs,
+    maxJobsPerDrain: options.jobRunnerMaxJobsPerDrain,
+    onEvent: (event) => {
+      app.log.info(jobRunnerEventLog(event), "job.runner");
+    },
+    beforeRun: (job) => {
+      if (foregroundQuietWindowMs <= 0 || !isForegroundDeferrableJobType(job.type)) {
+        return { run: true };
+      }
+
+      const now = options.now?.() ?? Date.now();
+      const deferUntil = foregroundQuietUntil(settings, {
+        now,
+        quietWindowMs: foregroundQuietWindowMs,
+        signalPath: foregroundSignalPath
+      });
+      return deferUntil
+        ? {
+            run: false,
+            deferUntil,
+            reason: `Deferred ${job.type} until foreground quiet window ends`
+          }
+        : { run: true };
+    },
     onError: (error) => app.log.error(error)
   });
+  drainDueJobsForPlugins = async () => await jobRunner.drainDue();
+  (app as DibaoServerInstance).drainBackgroundJobsNow = async () => await jobRunner.drainDue();
   const feedRefreshScheduler = new FeedRefreshScheduler({
     refreshJobs: feedRefreshJobService,
     runner: jobRunner,
     intervalMs: options.feedRefreshIntervalMs ?? DEFAULT_FEED_REFRESH_INTERVAL_MS,
+    initialDelayMs: backgroundInitialTickDelayMs,
     onError: (error) => app.log.error(error)
   });
   const retentionCleanupScheduler = new RetentionCleanupScheduler({
     cleanupJobs: retentionCleanupJobService,
     runner: jobRunner,
     intervalMs: options.retentionCleanupIntervalMs ?? DEFAULT_RETENTION_CLEANUP_INTERVAL_MS,
+    initialDelayMs: backgroundInitialTickDelayMs,
+    onError: (error) => app.log.error(error)
+  });
+  const jobHistoryCleanupScheduler = new JobHistoryCleanupScheduler({
+    jobs,
+    retentionDays: options.jobHistoryRetentionDays ?? DEFAULT_JOB_HISTORY_RETENTION_DAYS,
+    intervalMs:
+      options.jobHistoryCleanupIntervalMs ?? DEFAULT_JOB_HISTORY_CLEANUP_INTERVAL_MS,
+    initialDelayMs: backgroundInitialTickDelayMs,
+    now: options.now,
+    onCleanup: (result) => {
+      if (result.deleted > 0) {
+        app.log.info({
+          route: "jobs.historyCleanup",
+          cutoff: result.cutoff,
+          deleted: result.deleted
+        });
+      }
+    },
     onError: (error) => app.log.error(error)
   });
   const profileDecayScheduler = new ProfileDecayScheduler({
     decayJobs: profileDecayJobService,
     runner: jobRunner,
     intervalMs: options.profileDecayIntervalMs ?? DEFAULT_PROFILE_DECAY_INTERVAL_MS,
+    initialDelayMs: backgroundInitialTickDelayMs,
     onError: (error) => app.log.error(error)
   });
   const recommendationMaintenanceScheduler = new RecommendationMaintenanceScheduler({
@@ -757,6 +1149,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     intervalMs:
       options.recommendationMaintenanceIntervalMs ??
       DEFAULT_RECOMMENDATION_MAINTENANCE_SCHEDULER_INTERVAL_MS,
+    initialDelayMs: backgroundInitialTickDelayMs,
     now: options.now,
     onError: (error) => app.log.error(error)
   });
@@ -764,6 +1157,15 @@ export function buildServer(options: BuildServerOptions = {}) {
   function drainBackgroundJobs(): void {
     if (backgroundJobs) {
       void jobRunner.drainDue().catch((error) => app.log.error(error));
+      return;
+    }
+
+    if (jobWakeSignalPath) {
+      writeJobQueueWakeSignal(
+        jobWakeSignalPath,
+        { now: options.now?.() ?? Date.now() },
+        (error) => app.log.warn({ error }, "job.queue_wake.write_failed")
+      );
     }
   }
 
@@ -860,6 +1262,13 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   );
   app.addContentTypeParser(
+    /^application\/octet-stream(?:;.*)?$/i,
+    { parseAs: "buffer" },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
+  app.addContentTypeParser(
     /^text\/xml(?:;.*)?$/i,
     { parseAs: "string" },
     (_request, body, done) => {
@@ -869,11 +1278,16 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.setErrorHandler((error, request, reply) => {
     request.log.error(error);
+    if (isSqliteBusyError(error)) {
+      return sendDatabaseBusyError(reply);
+    }
     return sendApiError(reply, 500, "INTERNAL_ERROR", "Internal server error");
   });
 
   app.addHook("preHandler", async (request, reply) => {
     const pathname = parseRequestPathname(request.url);
+    recordForegroundApiActivity(request, pathname);
+
     if (pathname && !isApiPath(pathname)) {
       return;
     }
@@ -888,55 +1302,188 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
 
     if (
-      derivedDataUpgradeService.isBlocking() &&
+      (coreDatabaseMigrationService.isBlocking() || derivedDataUpgradeService.isBlocking()) &&
       !isUpgradeAllowedRoute(request.method, request.routeOptions.url)
     ) {
+      const isCoreMigrationBlocking = coreDatabaseMigrationService.isBlocking();
+      const status = isCoreMigrationBlocking
+        ? coreDatabaseMigrationService.getStatus()
+        : derivedDataUpgradeService.getStatus();
       return sendApiError(
         reply,
         423,
-        "DERIVED_DATA_UPGRADE_IN_PROGRESS",
-        "Dibao is rebuilding derived recommendation data for this version upgrade",
-        derivedDataUpgradeService.getStatus()
+        isCoreMigrationBlocking
+          ? "CORE_DATABASE_MIGRATION_IN_PROGRESS"
+          : "DERIVED_DATA_UPGRADE_IN_PROGRESS",
+        isCoreMigrationBlocking
+          ? "Dibao is applying database migrations for this version upgrade"
+          : "Dibao is rebuilding derived recommendation data for this version upgrade",
+        status
       );
     }
   });
+
+  function recordForegroundApiActivity(
+    request: FastifyRequest,
+    pathname: string | null
+  ): void {
+    if (!recordForegroundActivityEnabled || !pathname || !isForegroundActivityRoute(pathname)) {
+      return;
+    }
+
+    const now = options.now?.() ?? Date.now();
+    if (now - lastForegroundActivityWriteAt < foregroundActivityWriteThrottleMs) {
+      return;
+    }
+
+    lastForegroundActivityWriteAt = now;
+    if (!foregroundSignalPath) {
+      return;
+    }
+
+    writeForegroundActivitySignal(
+      foregroundSignalPath,
+      {
+        now,
+        route: request.routeOptions.url ?? pathname,
+        method: request.method
+      },
+      (error) => app.log.warn({ error }, "foreground.activity.write_failed")
+    );
+  }
 
   function startBackgroundServices(): void {
     if (!backgroundJobs) {
       return;
     }
-    jobRunner.start();
-    feedRefreshScheduler.start();
-    retentionCleanupScheduler.start();
-    profileDecayScheduler.start();
-    recommendationMaintenanceScheduler.start();
+    if (backgroundStartupTimer || backgroundServicesStarted) {
+      return;
+    }
+    if (backgroundStartupDelayMs > 0) {
+      backgroundStartupTimer = setTimeout(() => {
+        backgroundStartupTimer = null;
+        startBackgroundServicesNow();
+      }, backgroundStartupDelayMs);
+      backgroundStartupTimer.unref?.();
+      app.log.info(
+        { delayMs: backgroundStartupDelayMs },
+        "background services waiting for startup quiet window"
+      );
+      return;
+    }
+    startBackgroundServicesNow();
   }
 
-  if (backgroundJobs) {
-    app.addHook("onReady", async () => {
-      const status = derivedDataUpgradeService.getStatus();
-      if (!status.blocking) {
-        startBackgroundServices();
+  function startBackgroundServicesNow(): void {
+    if (backgroundServicesStarted) {
+      return;
+    }
+    backgroundServicesStarted = true;
+    const pendingProjectionJob = behaviorProjectionJobService.enqueueProjectionIfPending();
+    if (pendingProjectionJob) {
+      app.log.info(
+        {
+          route: "jobs.behaviorProjection.startup",
+          jobId: pendingProjectionJob.id,
+          runAfter: timestampToIso(pendingProjectionJob.runAfter)
+        },
+        "job.performance"
+      );
+    }
+    jobRunner.start();
+    if (jobWakeSignalPath && !stopJobWakeWatcher) {
+      stopJobWakeWatcher = watchJobQueueWakeSignal(
+        jobWakeSignalPath,
+        () => {
+          void jobRunner.drainDue().catch((error) => app.log.error(error));
+        },
+        (error) => app.log.warn({ error }, "job.queue_wake.watch_failed")
+      );
+    }
+    feedRefreshScheduler.start();
+    retentionCleanupScheduler.start();
+    jobHistoryCleanupScheduler.start();
+    profileDecayScheduler.start();
+    recommendationMaintenanceScheduler.start();
+    if (!maintenanceTickTimer) {
+      const intervalMs =
+        options.recommendationMaintenanceIntervalMs ??
+        DEFAULT_RECOMMENDATION_MAINTENANCE_SCHEDULER_INTERVAL_MS;
+      const emitMaintenanceTick = () => {
+        void pluginService
+          .enqueueDueSchedules()
+          .then(() =>
+            pluginService.emitHook("maintenance.tick", {
+              tickedAt: options.now?.() ?? Date.now()
+            })
+          )
+          .then(() => jobRunner.drainDue())
+          .catch((error) => app.log.error(error));
+      };
+      maintenanceInitialTickTimer = setTimeout(() => {
+        maintenanceInitialTickTimer = null;
+        emitMaintenanceTick();
+      }, backgroundInitialTickDelayMs);
+      maintenanceInitialTickTimer.unref?.();
+      maintenanceTickTimer = setInterval(emitMaintenanceTick, intervalMs);
+      maintenanceTickTimer.unref?.();
+    }
+  }
+
+  async function startUpgradePipeline(): Promise<void> {
+    const coreStatus = coreDatabaseMigrationService.getStatus();
+    if (coreStatus.blocking) {
+      const result = await coreDatabaseMigrationService.startIfRequired();
+      if (result.blocking) {
         return;
       }
+      pluginService.reconcileOfficialPlugins();
+    }
 
-      void derivedDataUpgradeService
-        .startIfRequired()
-        .then((result) => {
-          if (!result.blocking) {
-            startBackgroundServices();
-          }
-        })
-        .catch((error) => app.log.error(error));
+    if (backgroundJobs) {
+      const derivedStatus = derivedDataUpgradeService.getStatus();
+      if (derivedStatus.blocking) {
+        const result = await derivedDataUpgradeService.startIfRequired();
+        if (result.blocking) {
+          return;
+        }
+      }
+    }
+
+    startBackgroundServices();
+  }
+
+  if (options.upgradeAutoStart !== false) {
+    app.addHook("onReady", async () => {
+      void startUpgradePipeline().catch((error) => app.log.error(error));
     });
   }
 
   app.addHook("onClose", async () => {
+    coreDatabaseMigrationService.stop();
     recommendationMaintenanceScheduler.stop();
     profileDecayScheduler.stop();
+    jobHistoryCleanupScheduler.stop();
     retentionCleanupScheduler.stop();
     feedRefreshScheduler.stop();
     jobRunner.stop();
+    if (stopJobWakeWatcher) {
+      stopJobWakeWatcher();
+      stopJobWakeWatcher = null;
+    }
+    pluginService.dispose();
+    if (maintenanceTickTimer) {
+      clearInterval(maintenanceTickTimer);
+      maintenanceTickTimer = null;
+    }
+    if (maintenanceInitialTickTimer) {
+      clearTimeout(maintenanceInitialTickTimer);
+      maintenanceInitialTickTimer = null;
+    }
+    if (backgroundStartupTimer) {
+      clearTimeout(backgroundStartupTimer);
+      backgroundStartupTimer = null;
+    }
   });
 
   if (closeDatabaseOnClose) {
@@ -1014,6 +1561,16 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
+  app.post("/api/auth/logout-all", async (_request, reply) => {
+    authService.logoutAll();
+    reply.header("set-cookie", serializeClearSessionCookie(cookieOptions));
+    return {
+      data: {
+        ok: true
+      }
+    };
+  });
+
   app.post<{ Body: ChangePasswordBody }>("/api/auth/password", async (request, reply) => {
     const parsed = parseChangePasswordBody(request.body);
     if (!parsed.ok) {
@@ -1021,7 +1578,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
 
     try {
-      await authService.changePassword(parsed.currentPassword, parsed.newPassword);
+      const session = await authService.changePassword(
+        parsed.currentPassword,
+        parsed.newPassword,
+        requestMeta(request)
+      );
+      reply.header(
+        "set-cookie",
+        serializeSessionCookie(session.token, session.expiresAt, cookieOptions)
+      );
       return {
         data: {
           ok: true
@@ -1032,16 +1597,67 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   });
 
-  app.get("/api/setup/status", async () => ({
-    data: getSetupStatus(
-      credentials.hasCredential(),
-      feeds.list().length > 0,
-      embeddingProviderService.hasActiveProviderAndIndex(),
-      derivedDataUpgradeService.getStatus()
-    )
-  }));
+  app.get("/api/setup/status", async () => {
+    const coreMigrationStatus = coreDatabaseMigrationService.getStatus();
+    if (coreMigrationStatus.blocking) {
+      return {
+        data: getSetupStatus(
+          credentials.hasCredential(),
+          false,
+          false,
+          coreMigrationStatus,
+          null,
+          []
+        )
+      };
+    }
+
+    const hasFeeds = feeds.list().length > 0;
+    return {
+      data: getSetupStatus(
+        credentials.hasCredential(),
+        hasFeeds,
+        embeddingProviderService.hasActiveProviderAndIndex(),
+        coreMigrationStatus,
+        derivedDataUpgradeService.getStatus(),
+        hasFeeds
+          ? pluginService.listSetupSteps().filter(
+              (plugin) => settings.getJson(`setup.optionalPlugin.${plugin.id}`) === null
+            )
+          : []
+      )
+    };
+  });
+
+  app.post<{ Params: PluginParams; Body: OptionalPluginBody }>(
+    "/api/setup/optional-plugins/:id",
+    async (request, reply) => {
+      const parsed = parseOptionalPluginBody(request.body);
+      if (!parsed.ok) {
+        return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+      }
+      try {
+        const plugin = parsed.enabled ? await pluginService.enable(request.params.id) : pluginService.disable(request.params.id);
+        if (parsed.enabled && parsed.timezone) {
+          pluginService.updateSettings(request.params.id, { timezone: parsed.timezone });
+        }
+        settings.setJson(`setup.optionalPlugin.${request.params.id}`, parsed.enabled ? "enabled" : "skipped", options.now?.() ?? Date.now());
+        return { data: plugin };
+      } catch (error) {
+        return sendPluginError(reply, error);
+      }
+    }
+  );
 
   app.get("/api/system/upgrade/status", async () => {
+    const coreMigrationStatus = coreDatabaseMigrationService.getStatus();
+    if (coreMigrationStatus.blocking) {
+      void coreDatabaseMigrationService.startIfRequired().catch((error) => app.log.error(error));
+      return {
+        data: coreMigrationStatus
+      };
+    }
+
     const status = derivedDataUpgradeService.getStatus();
     if (status.blocking) {
       void derivedDataUpgradeService.startIfRequired().catch((error) => app.log.error(error));
@@ -1051,9 +1667,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
-  app.post("/api/system/upgrade/retry", async () => ({
-    data: await derivedDataUpgradeService.retry()
-  }));
+  app.post("/api/system/upgrade/retry", async () => {
+    const coreMigrationStatus = coreDatabaseMigrationService.getStatus();
+    if (coreMigrationStatus.blocking) {
+      return {
+        data: await coreDatabaseMigrationService.retry()
+      };
+    }
+    return {
+      data: await derivedDataUpgradeService.retry()
+    };
+  });
 
   app.get<{ Querystring: JobQuery }>("/api/jobs", async (request, reply) => {
     const parsed = parseJobQuery(request.query);
@@ -1064,6 +1688,217 @@ export function buildServer(options: BuildServerOptions = {}) {
     return {
       data: jobs.list(parsed.input).map(mapJob)
     };
+  });
+
+  app.get("/api/plugins", async () => ({
+    data: pluginService.list()
+  }));
+
+  app.get("/api/plugins/catalog", async () => ({
+    data: pluginService.listCatalog()
+  }));
+
+  app.get("/api/plugins/contributions", async () => ({
+    data: pluginService.listContributions()
+  }));
+
+  app.post<{ Body: PluginInstallBody }>("/api/plugins/install", async (request, reply) => {
+    try {
+      const parsed = parsePluginInstallBody(request.body);
+      if (!parsed.ok) {
+        return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+      }
+      const plugin = typeof parsed.packageContent === "string"
+        ? await pluginService.installFromPackageContent(parsed.packageContent, {
+            sourceType: "local_file",
+            sourceUrl: null,
+            expectedSha256: parsed.sha256
+          })
+        : await pluginService.installFromUrl(parsed.url ?? "", {
+            expectedSha256: parsed.sha256
+          });
+      return { data: plugin };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post("/api/plugins/install/upload", async (request, reply) => {
+    try {
+      const parsed = parsePluginUploadBody(request.body, request.headers["content-type"]);
+      if (!parsed.ok) {
+        return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+      }
+      return {
+        data: await pluginService.installFromPackageContent(parsed.packageContent, {
+          sourceType: "local_file",
+          sourceUrl: null,
+          expectedSha256: null
+        })
+      };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginParams }>("/api/plugins/:id/enable", async (request, reply) => {
+    try {
+      return { data: await pluginService.enable(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginParams }>("/api/plugins/:id/disable", async (request, reply) => {
+    try {
+      return { data: pluginService.disable(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginParams }>("/api/plugins/:id/update", async (request, reply) => {
+    try {
+      return { data: await pluginService.checkUpdate(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: PluginParams; Querystring: PluginUninstallQuery }>(
+    "/api/plugins/:id",
+    async (request, reply) => {
+      try {
+        pluginService.remove(request.params.id, request.query.deleteData === "true");
+        return { data: { ok: true } };
+      } catch (error) {
+        return sendPluginError(reply, error);
+      }
+    }
+  );
+
+  app.get<{ Params: PluginParams }>("/api/plugins/:id/settings", async (request, reply) => {
+    try {
+      return { data: pluginService.getSettings(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.patch<{ Params: PluginParams; Body: unknown }>("/api/plugins/:id/settings", async (request, reply) => {
+    try {
+      return { data: pluginService.updateSettings(request.params.id, request.body) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginParams }>("/api/plugins/:id/secrets", async (request, reply) => {
+    try {
+      return { data: pluginService.listSecretMetadata(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginSecretParams; Body: unknown }>("/api/plugins/:id/secrets/:key", async (request, reply) => {
+    try {
+      const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+        ? request.body as { value?: unknown; hint?: unknown }
+        : {};
+      return {
+        data: pluginService.setSecret(
+          request.params.id,
+          request.params.key,
+          body.value,
+          typeof body.hint === "string" ? body.hint : null
+        )
+      };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: PluginSecretParams }>("/api/plugins/:id/secrets/:key", async (request, reply) => {
+    try {
+      pluginService.deleteSecret(request.params.id, request.params.key);
+      return { data: { ok: true } };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginParams; Querystring: PluginDeliveryQuery }>("/api/plugins/:id/deliveries", async (request, reply) => {
+    try {
+      const status = isPluginDeliveryStatus(request.query.status) ? request.query.status : undefined;
+      return {
+        data: pluginService.listDeliveries(request.params.id, {
+          status,
+          limit: parseOptionalPositiveInteger(request.query.limit)
+        })
+      };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginDeliveryParams }>("/api/plugins/:id/deliveries/:deliveryId", async (request, reply) => {
+    try {
+      return { data: pluginService.getDelivery(request.params.id, request.params.deliveryId) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginParams }>("/api/plugins/:id/health", async (request, reply) => {
+    try {
+      return { data: pluginService.getHealth(request.params.id) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginTaskParams }>("/api/plugins/:id/tasks/:taskId", async (request, reply) => {
+    try {
+      const job = pluginService.startTask(request.params.id, request.params.taskId);
+      drainBackgroundJobs();
+      return { data: mapJob(job) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.get<{ Params: PluginTaskRunParams }>("/api/plugins/:id/tasks/:runId", async (request, reply) => {
+    const job = jobs.findById(request.params.runId);
+    if (!job || !job.type.startsWith(`plugin:${request.params.id}:`)) {
+      return sendApiError(reply, 404, "NOT_FOUND", "Plugin task run not found");
+    }
+    return { data: mapJob(job) };
+  });
+
+  app.post<{ Params: PluginTaskRunParams }>("/api/plugins/:id/tasks/:runId/cancel", async (request, reply) => {
+    const existing = jobs.findById(request.params.runId);
+    if (!existing || !existing.type.startsWith(`plugin:${request.params.id}:`)) {
+      return sendApiError(reply, 404, "NOT_FOUND", "Plugin task run not found");
+    }
+    const job = jobs.cancel(request.params.runId, "Cancelled by user", options.now?.() ?? Date.now()) ?? existing;
+    return { data: mapJob(job) };
+  });
+
+  app.get<{ Params: PluginApiParams }>("/api/plugins/:id/api/*", async (request, reply) => {
+    try {
+      return { data: await pluginService.dispatchApi(request.params.id, "GET", request.params["*"], null) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
+  app.post<{ Params: PluginApiParams; Body: unknown }>("/api/plugins/:id/api/*", async (request, reply) => {
+    try {
+      return { data: await pluginService.dispatchApi(request.params.id, "POST", request.params["*"], request.body) };
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
   });
 
   app.get<{ Querystring: RecommendationStatusQuery }>(
@@ -1096,25 +1931,42 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   );
 
-  app.get("/api/recommendation/transparency", async () => ({
-    data: getRecommendationTransparency({
-      db,
-      embeddings,
-      profiles,
-      rankings,
-      rankingService,
-      clusterLabels: clusterLabelService,
-      interestFamilies: interestFamilyService,
-      settings: settingsService.getSettings().ranking,
-      maintenanceSettings: settingsService.getSettings().recommendationMaintenance,
-      maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates()
-    })
-  }));
+  app.get<{ Querystring: RecommendationStatusQuery }>(
+    "/api/recommendation/transparency",
+    async (request, reply) => {
+      const startedAt = performance.now();
+      const includeClusterItems = parseBooleanParam(request.query.includeClusterItems);
+      const clusterItemLimit = parseOptionalPositiveInteger(request.query.clusterItemLimit);
+      const clusterDetailLevel = parseClusterDetailLevel(request.query.clusterDetailLevel);
+      if (includeClusterItems === null) {
+        return sendApiError(
+          reply,
+          400,
+          "VALIDATION_ERROR",
+          "includeClusterItems must be true or false",
+          { field: "includeClusterItems" }
+        );
+      }
+      if (request.query.clusterItemLimit !== undefined && clusterItemLimit === undefined) {
+        return sendApiError(
+          reply,
+          400,
+          "VALIDATION_ERROR",
+          "clusterItemLimit must be a positive integer",
+          { field: "clusterItemLimit" }
+        );
+      }
+      if (clusterDetailLevel === null) {
+        return sendApiError(
+          reply,
+          400,
+          "VALIDATION_ERROR",
+          "clusterDetailLevel must be summary or diagnostic",
+          { field: "clusterDetailLevel" }
+        );
+      }
 
-  app.get<{ Querystring: RecommendationClusterQuery }>(
-    "/api/recommendation/clusters",
-    async (request) => ({
-      data: getRecommendationClusters({
+      const data = getRecommendationTransparency({
         db,
         embeddings,
         profiles,
@@ -1123,9 +1975,70 @@ export function buildServer(options: BuildServerOptions = {}) {
         clusterLabels: clusterLabelService,
         interestFamilies: interestFamilyService,
         settings: settingsService.getSettings().ranking,
-        limit: request.query.limit === "all" ? null : parsePositiveInteger(request.query.limit, 12)
-      })
-    })
+        maintenanceSettings: settingsService.getSettings().recommendationMaintenance,
+        maintenanceScheduleStates: recommendationMaintenanceService.listScheduleStates(),
+        includeClusterItems: includeClusterItems ?? true,
+        clusterItemLimit: clusterItemLimit ?? 10,
+        clusterDetailLevel: clusterDetailLevel ?? "summary"
+      });
+      app.log.info(
+        {
+          route: "/api/recommendation/transparency",
+          durationMs: roundDuration(performance.now() - startedAt),
+          includeClusterItems: includeClusterItems ?? true,
+          clusterItemLimit: clusterItemLimit ?? 10,
+          clusterDetailLevel: clusterDetailLevel ?? "summary",
+          clusterCount: data.clusters.positive + data.clusters.negative,
+          itemCount: data.clusters.items.length,
+          familyCount: data.clusters.families?.topFamilies.length ?? 0
+        },
+        "api.performance"
+      );
+      return { data };
+    }
+  );
+
+  app.get<{ Querystring: RecommendationClusterQuery }>(
+    "/api/recommendation/clusters",
+    async (request, reply) => {
+      const startedAt = performance.now();
+      const clusterDetailLevel = parseClusterDetailLevel(request.query.clusterDetailLevel);
+      if (clusterDetailLevel === null) {
+        return sendApiError(
+          reply,
+          400,
+          "VALIDATION_ERROR",
+          "clusterDetailLevel must be summary or diagnostic",
+          { field: "clusterDetailLevel" }
+        );
+      }
+      const limit = request.query.limit === "all" ? null : parsePositiveInteger(request.query.limit, 12);
+      const data = getRecommendationClusters({
+        db,
+        embeddings,
+        profiles,
+        rankings,
+        rankingService,
+        clusterLabels: clusterLabelService,
+        interestFamilies: interestFamilyService,
+        settings: settingsService.getSettings().ranking,
+        limit,
+        clusterDetailLevel: clusterDetailLevel ?? "summary"
+      });
+      app.log.info(
+        {
+          route: "/api/recommendation/clusters",
+          durationMs: roundDuration(performance.now() - startedAt),
+          limit: limit ?? "all",
+          clusterDetailLevel: clusterDetailLevel ?? "summary",
+          total: data.total,
+          itemCount: data.items.length,
+          familyCount: data.families?.topFamilies.length ?? 0
+        },
+        "api.performance"
+      );
+      return { data };
+    }
   );
 
   app.post<{ Params: RecommendationMaintenanceParams }>(
@@ -1242,10 +2155,18 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.patch<{ Params: RecommendationClusterParams; Body: RecommendationClusterLabelBody }>(
     "/api/recommendation/clusters/:id/label",
     async (request, reply) => {
+      const startedAt = performance.now();
       try {
         const result = clusterLabelService.setManualLabel(
           request.params.id,
           request.body?.manualLabel
+        );
+        app.log.info(
+          {
+            route: "/api/recommendation/clusters/:id/label",
+            durationMs: roundDuration(performance.now() - startedAt)
+          },
+          "api.performance"
         );
         return {
           data: {
@@ -1257,6 +2178,36 @@ export function buildServer(options: BuildServerOptions = {}) {
         };
       } catch (error) {
         return sendInterestClusterLabelError(reply, error);
+      }
+    }
+  );
+
+  app.patch<{ Params: RecommendationFamilyParams; Body: RecommendationFamilyLabelBody }>(
+    "/api/recommendation/families/:id/label",
+    async (request, reply) => {
+      const startedAt = performance.now();
+      try {
+        const result = interestFamilyService.setManualLabel(
+          request.params.id,
+          request.body?.manualLabel
+        );
+        app.log.info(
+          {
+            route: "/api/recommendation/families/:id/label",
+            durationMs: roundDuration(performance.now() - startedAt)
+          },
+          "api.performance"
+        );
+        return {
+          data: {
+            ok: true,
+            familyId: result.familyId,
+            displayLabel: result.displayLabel,
+            manualLabel: result.manualLabel
+          }
+        };
+      } catch (error) {
+        return sendInterestFamilyError(reply, error);
       }
     }
   );
@@ -1315,6 +2266,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (rankingJob || familyJob) {
         drainBackgroundJobs();
       }
+      void pluginService.emitHook("settings.afterUpdated", {
+        before: beforeSettings,
+        after: result.settings
+      }).catch((error) => app.log.error(error));
       return {
         data: {
           ...result,
@@ -1671,15 +2626,42 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
 
+    const startedAt = performance.now();
     const result = articles.list({
       ...parsed.input,
       rankContext: rankingService.getActiveRankContext()
     });
+    const responseMapStartedAt = performance.now();
+    const data = result.items.map(mapArticleListItem);
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    const durationMs = performance.now() - startedAt;
+    app.log.info(
+      {
+        route: "/api/articles",
+        view: parsed.input.view ?? "latest",
+        sort: parsed.input.sort ?? null,
+        limit: parsed.input.limit ?? null,
+        offset: parsed.input.offset ?? 0,
+        includeUnreadCount: parsed.input.includeUnreadCount ?? true,
+        itemCount: result.items.length,
+        hasMore: result.nextOffset !== null,
+        unreadCountMs: roundDuration(result.timing?.unreadCountMs ?? 0),
+        rankCandidateMs: roundDuration(result.timing?.rankCandidateMs ?? 0),
+        unrankedCandidateMs: roundDuration(result.timing?.unrankedCandidateMs ?? 0),
+        hydrateMs: roundDuration(result.timing?.hydrateMs ?? 0),
+        pageQueryMs: roundDuration(result.timing?.pageQueryMs ?? 0),
+        dbMapMs: roundDuration(result.timing?.mapMs ?? 0),
+        dbTotalMs: roundDuration(result.timing?.totalMs ?? 0),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(durationMs)
+      },
+      "performance.route"
+    );
 
     return {
-      data: result.items.map(mapArticleListItem),
+      data,
       page: {
-        nextCursor: encodeCursor(result.nextOffset)
+        nextCursor: encodeCursor(result.nextCursor ?? result.nextOffset)
       },
       meta: {
         unreadCount: result.unreadCount
@@ -1693,13 +2675,38 @@ export function buildServer(options: BuildServerOptions = {}) {
       return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
     }
 
+    const startedAt = performance.now();
     const result = articles.search({
       ...parsed.input,
       rankContext: rankingService.getActiveRankContext()
     });
+    const responseMapStartedAt = performance.now();
+    const data = result.items.map(mapArticleListItem);
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    const durationMs = performance.now() - startedAt;
+    app.log.info(
+      {
+        route: "/api/search",
+        scope: parsed.input.scope ?? "default",
+        state: parsed.input.state ?? "all",
+        sort: parsed.input.sort ?? "relevance",
+        limit: parsed.input.limit ?? null,
+        offset: parsed.input.offset ?? 0,
+        includeUnreadCount: parsed.input.includeUnreadCount ?? true,
+        itemCount: result.items.length,
+        hasMore: result.nextOffset !== null,
+        unreadCountMs: roundDuration(result.timing?.unreadCountMs ?? 0),
+        pageQueryMs: roundDuration(result.timing?.pageQueryMs ?? 0),
+        dbMapMs: roundDuration(result.timing?.mapMs ?? 0),
+        dbTotalMs: roundDuration(result.timing?.totalMs ?? 0),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(durationMs)
+      },
+      "performance.route"
+    );
 
     return {
-      data: result.items.map(mapArticleListItem),
+      data,
       page: {
         nextCursor: encodeCursor(result.nextOffset)
       },
@@ -1779,45 +2786,90 @@ export function buildServer(options: BuildServerOptions = {}) {
   );
 
   app.get<{ Params: ArticleParams }>("/api/articles/:id", async (request, reply) => {
+    const startedAt = performance.now();
+    const findStartedAt = performance.now();
     const article = articles.findDetailById(request.params.id, {
       rankContext: rankingService.getActiveRankContext()
     });
+    const findMs = performance.now() - findStartedAt;
+    const responseMapStartedAt = performance.now();
+    const data = article ? mapArticleDetail(article) : null;
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    app.log.info(
+      {
+        route: "/api/articles/:id",
+        found: Boolean(article),
+        findMs: roundDuration(findMs),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
 
     if (!article) {
       return sendApiError(reply, 404, "NOT_FOUND", "Article not found");
     }
 
     return {
-      data: mapArticleDetail(article)
+      data
     };
   });
 
   app.get<{ Params: ArticleParams }>("/api/articles/:id/explanation", async (request, reply) => {
-    const explanation = rankingService.explainArticle(request.params.id);
+    const startedAt = performance.now();
+    const explainStartedAt = performance.now();
+    const { explanation, cacheHit } = cachedArticleExplanation(request.params.id);
+    const explainMs = performance.now() - explainStartedAt;
 
     if (!explanation) {
+      app.log.info(
+        {
+          route: "/api/articles/:id/explanation",
+          found: false,
+          cacheHit,
+          explainMs: roundDuration(explainMs),
+          responseMapMs: 0,
+          durationMs: roundDuration(performance.now() - startedAt)
+        },
+        "performance.route"
+      );
       return sendApiError(reply, 404, "NOT_FOUND", "Article not found");
     }
+    const responseMapStartedAt = performance.now();
+    const data = {
+      articleId: explanation.articleId,
+      reasons: explanation.reasons.map((reason) => {
+        const clusters = reason.clusters?.map((cluster) =>
+          labeledExplanationCluster(cluster, clusterLabelService)
+        );
+        const cluster = reason.cluster
+          ? labeledExplanationCluster(reason.cluster, clusterLabelService)
+          : clusters?.[0];
+
+        return {
+          ...reason,
+          ...(cluster ? { cluster } : {}),
+          ...(clusters && clusters.length > 0 ? { clusters } : {})
+        };
+      }),
+      generatedAt: timestampToIsoValue(explanation.generatedAt)
+    };
+    const responseMapMs = performance.now() - responseMapStartedAt;
+    app.log.info(
+      {
+        route: "/api/articles/:id/explanation",
+        found: true,
+        cacheHit,
+        reasonCount: explanation.reasons.length,
+        explainMs: roundDuration(explainMs),
+        responseMapMs: roundDuration(responseMapMs),
+        durationMs: roundDuration(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
 
     return {
-      data: {
-        articleId: explanation.articleId,
-        reasons: explanation.reasons.map((reason) => {
-          const clusters = reason.clusters?.map((cluster) =>
-            labeledExplanationCluster(cluster, clusterLabelService)
-          );
-          const cluster = reason.cluster
-            ? labeledExplanationCluster(reason.cluster, clusterLabelService)
-            : clusters?.[0];
-
-          return {
-            ...reason,
-            ...(cluster ? { cluster } : {}),
-            ...(clusters && clusters.length > 0 ? { clusters } : {})
-          };
-        }),
-        generatedAt: timestampToIsoValue(explanation.generatedAt)
-      }
+      data
     };
   });
 
@@ -1830,13 +2882,31 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
 
       try {
+        const startedAt = performance.now();
         const result = articleActionService.record({
           articleId: request.params.id,
           ...parsed.input
         });
+        invalidateArticleExplanationCache(request.params.id);
+        app.log.info(
+          {
+            route: "/api/articles/:id/actions",
+            action: parsed.input.type,
+            recordMs: roundDuration(performance.now() - startedAt),
+            durationMs: roundDuration(performance.now() - startedAt)
+          },
+          "performance.route"
+        );
+        void pluginService.emitHook("article.actionRecorded", {
+          articleId: request.params.id,
+          eventId: result.eventId,
+          action: parsed.input.type,
+          state: result.state
+        }).catch((error) => app.log.error(error));
 
         return {
           data: {
+            eventId: result.eventId,
             state: result.state
           }
         };
@@ -1846,6 +2916,88 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   );
 
+  app.post<{ Body: BulkArticleActionBody }>("/api/articles/actions/bulk", async (request, reply) => {
+    const parsed = parseBulkArticleActionBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    const startedAt = performance.now();
+    const data: Array<{ articleId: string; eventId: string; state: unknown }> = [];
+    const skipped: Array<{ articleId: string; code: string; message: string }> = [];
+    for (const action of parsed.actions) {
+      try {
+        const result = articleActionService.record({
+          articleId: action.articleId,
+          ...action.input
+        });
+        invalidateArticleExplanationCache(action.articleId);
+        data.push({
+          articleId: action.articleId,
+          eventId: result.eventId,
+          state: result.state
+        });
+        void pluginService.emitHook("article.actionRecorded", {
+          articleId: action.articleId,
+          eventId: result.eventId,
+          action: action.input.type,
+          state: result.state
+        }).catch((error) => app.log.error(error));
+      } catch (error) {
+        if (error instanceof ArticleActionServiceError && error.code === "NOT_FOUND") {
+          skipped.push({
+            articleId: action.articleId,
+            code: error.code,
+            message: error.message
+          });
+          continue;
+        }
+        return sendArticleActionError(reply, error);
+      }
+    }
+    app.log.info(
+      {
+        route: "/api/articles/actions/bulk",
+        action: "impression",
+        requested: parsed.actions.length,
+        recorded: data.length,
+        skipped: skipped.length,
+        durationMs: roundDuration(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
+
+    return {
+      data,
+      meta: {
+        skipped
+      }
+    };
+  });
+
+  app.get("/api/plugins/ui.css", async (_request, reply) => {
+    return reply
+      .header("cache-control", "public, max-age=3600")
+      .type("text/css; charset=utf-8")
+      .send(pluginUiCss);
+  });
+
+  app.get<{ Params: PluginAssetParams }>("/api/plugins/:id/assets/*", async (request, reply) => {
+    try {
+      const assetPath = pluginService.resolveAssetPath(
+        request.params.id,
+        request.params["*"] || "web/index.html"
+      );
+      if (!assetPath) {
+        return sendApiError(reply, 404, "NOT_FOUND", "Plugin asset not found");
+      }
+      applyPluginAssetSecurityHeaders(reply, assetPath);
+      return sendStaticFile(reply, request.method, assetPath);
+    } catch (error) {
+      return sendPluginError(reply, error);
+    }
+  });
+
   registerWebStaticRoutes(app, options.webDistDir);
 
   return app;
@@ -1854,10 +3006,18 @@ export function buildServer(options: BuildServerOptions = {}) {
 function openConfiguredDatabase(options: BuildServerOptions): DibaoDatabase {
   const databasePath = resolveDatabasePath(options.databasePath);
   ensureDatabaseDirectory(databasePath);
-
-  return openDatabase(databasePath, {
-    migrate: options.migrate ?? true
+  const shouldMigrate = options.migrate ?? true;
+  const shouldRunInitialMigrations =
+    shouldMigrate && (!existsSync(databasePath) || statSync(databasePath).size === 0);
+  const db = openDatabase(databasePath, {
+    migrate: false
   });
+
+  if (shouldRunInitialMigrations) {
+    runMigrations(db);
+  }
+
+  return db;
 }
 
 function resolveDatabasePath(databasePath: string | undefined): string {
@@ -1983,11 +3143,55 @@ function decodeStaticPathname(pathname: string): string | null {
 
 function sendStaticFile(reply: FastifyReply, method: string, filePath: string) {
   reply.type(contentTypeForStaticFile(filePath));
+  applyStaticCacheHeaders(reply, filePath);
   if (method.toUpperCase() === "HEAD") {
     return reply.send();
   }
 
   return reply.send(readFileSync(filePath));
+}
+
+function applyPluginAssetSecurityHeaders(reply: FastifyReply, filePath: string): void {
+  reply.header("X-Content-Type-Options", "nosniff");
+  if (extname(filePath).toLowerCase() !== ".html") {
+    return;
+  }
+  reply.header(
+    "Content-Security-Policy",
+    [
+      "default-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'self'",
+      "script-src 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'none'"
+    ].join("; ")
+  );
+}
+
+function applyStaticCacheHeaders(reply: FastifyReply, filePath: string): void {
+  const fileName = basename(filePath);
+  const extension = extname(filePath).toLowerCase();
+
+  if (fileName === "index.html") {
+    reply.header("Cache-Control", "no-store");
+    return;
+  }
+
+  if (fileName === "sw.js" || extension === ".webmanifest") {
+    reply.header("Cache-Control", "no-cache, no-store, must-revalidate");
+    return;
+  }
+
+  if (filePath.includes(`${sep}assets${sep}`)) {
+    reply.header("Cache-Control", "public, max-age=31536000, immutable");
+    return;
+  }
+
+  reply.header("Cache-Control", "public, max-age=3600");
 }
 
 function contentTypeForStaticFile(filePath: string): string {
@@ -2062,12 +3266,65 @@ const anonymousRoutes = new Set([
   "POST /api/auth/setup",
   "POST /api/auth/login",
   "POST /api/auth/logout",
+  "GET /api/plugins/ui.css",
   "GET /api/system/health"
 ]);
+
+function isForegroundActivityRoute(pathname: string): boolean {
+  if (!isApiPath(pathname)) {
+    return (
+      pathname === "/" ||
+      pathname === "/index.html" ||
+      pathname.startsWith("/assets/") ||
+      pathname.endsWith(".js") ||
+      pathname.endsWith(".css") ||
+      pathname.endsWith(".webmanifest")
+    );
+  }
+
+  return (
+    pathname.startsWith("/api/articles") ||
+    pathname === "/api/auth/session" ||
+    pathname === "/api/auth/login" ||
+    pathname === "/api/auth/setup" ||
+    pathname === "/api/auth/password" ||
+    pathname === "/api/setup/status" ||
+    pathname.startsWith("/api/reader") ||
+    pathname.startsWith("/api/recommendation") ||
+    pathname.startsWith("/api/feeds") ||
+    pathname.startsWith("/api/plugins") ||
+    pathname === "/api/settings"
+  );
+}
+
+function isForegroundDeferrableJobType(type: JobType): boolean {
+  return (
+    type === "feed_refresh" ||
+    type === BEHAVIOR_EVENT_PROJECT_JOB_TYPE ||
+    type === "embedding_generate" ||
+    type === "profile_event_process" ||
+    type === "ranking_recalculate" ||
+    type === "profile_decay" ||
+    type === "retention_cleanup" ||
+    type === "vector_index_rebuild" ||
+    type === ARTICLE_FINGERPRINT_BACKFILL_JOB_TYPE ||
+    type === DUPLICATE_GROUP_REBUILD_JOB_TYPE ||
+    type === KEYWORD_PROFILE_REBUILD_JOB_TYPE ||
+    type === RECENT_INTENT_REBUILD_JOB_TYPE ||
+    type === RANKING_EVAL_RUN_JOB_TYPE ||
+    type === FTRL_TRAIN_JOB_TYPE ||
+    type === RECOMMENDATION_BACKFILL_JOB_TYPE ||
+    type === INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE ||
+    type === INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE ||
+    type === INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE ||
+    type === INTEREST_FAMILY_REBUILD_JOB_TYPE
+  );
+}
 
 const upgradeAllowedRoutes = new Set([
   "GET /api/auth/session",
   "POST /api/auth/logout",
+  "POST /api/auth/logout-all",
   "GET /api/setup/status",
   "GET /api/system/health",
   "GET /api/system/upgrade/status",
@@ -2083,12 +3340,14 @@ function requestMeta(request: FastifyRequest) {
   };
 }
 
-function getHealth(db: DibaoDatabase): HealthResponse {
+export function getHealth(db: DibaoDatabase): HealthResponse {
   const database = checkHealth(() => {
-    db.prepare("select 1 as ok").get();
+    checkDatabaseConnection(db);
   });
   const fts = checkHealth(() => {
-    db.prepare("select count(*) as count from article_fts").get();
+    db
+      .prepare("select 1 from sqlite_master where type = 'table' and name = 'article_fts'")
+      .get();
   });
   const vectorStore = checkHealth(() => {
     getSqliteVecVersion(db);
@@ -2101,6 +3360,10 @@ function getHealth(db: DibaoDatabase): HealthResponse {
     vectorStore,
     version: dibaoVersion
   };
+}
+
+function checkDatabaseConnection(db: DibaoDatabase): void {
+  db.prepare("select 1 as ok").get();
 }
 
 function checkHealth(fn: () => void): HealthStatus {
@@ -2116,7 +3379,9 @@ function getSetupStatus(
   setupCompleted: boolean,
   hasFeeds: boolean,
   hasEmbeddingProvider: boolean,
-  derivedDataUpgrade: DerivedDataUpgradeStatus
+  coreDatabaseMigration: CoreDatabaseMigrationStatus,
+  derivedDataUpgrade: DerivedDataUpgradeStatus | null,
+  optionalPluginSteps: unknown[] = []
 ): SetupStatusResponse {
   const status: SetupStatusResponse = {
     setupCompleted,
@@ -2124,7 +3389,13 @@ function getSetupStatus(
     hasEmbeddingProvider,
     firstRefreshStatus: "idle"
   };
-  if (derivedDataUpgrade.blocking || derivedDataUpgrade.state === "pending") {
+  if (optionalPluginSteps.length > 0) {
+    status.optionalPluginSteps = optionalPluginSteps;
+  }
+  if (coreDatabaseMigration.blocking || coreDatabaseMigration.state === "pending") {
+    status.coreDatabaseMigration = coreDatabaseMigration;
+  }
+  if (derivedDataUpgrade && (derivedDataUpgrade.blocking || derivedDataUpgrade.state === "pending")) {
     status.derivedDataUpgrade = derivedDataUpgrade;
   }
   return status;
@@ -2140,16 +3411,22 @@ function getRecommendationStatus(options: {
   interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
   includeClusterItems?: boolean;
+  clusterItemLimit?: number;
+  clusterDetailLevel?: RecommendationClusterDetailLevel;
 }) {
   const includeClusterItems = options.includeClusterItems ?? true;
+  const clusterItemLimit = Math.max(1, Math.min(5000, options.clusterItemLimit ?? 12));
+  const clusterDetailLevel = options.clusterDetailLevel ?? "diagnostic";
   const activeProvider = options.embeddings.findActiveProvider();
+  const needsDiagnosticIndex = includeClusterItems && clusterDetailLevel === "diagnostic";
+  const summaryOnly = !includeClusterItems;
   const activeIndex = activeProvider
-    ? includeClusterItems
+    ? needsDiagnosticIndex
       ? activeDiagnosticIndexFor(activeProvider.id, options.embeddings.listIndexes())
       : options.embeddings.findActiveIndexForProvider(activeProvider.id)
     : null;
   const activeRankContext = options.rankingService.getActiveRankContext();
-  const coverage = includeClusterItems
+  const coverage = needsDiagnosticIndex
     ? coverageFor(activeIndex as EmbeddingIndexListRow | null)
     : lightweightCoverageFor(options.db, activeIndex);
   const behaviorCounts = Object.fromEntries(
@@ -2159,32 +3436,46 @@ function getRecommendationStatus(options: {
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
   const clusterEvidence = activeIndex && includeClusterItems
-    ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 2000 })
+    ? clusterDetailLevel === "diagnostic"
+      ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 2000 })
+      : []
     : [];
   const clusterMergeDiagnostics = activeIndex && includeClusterItems
-    ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
+    ? clusterDetailLevel === "diagnostic"
+      ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
+      : new Map<string, ClusterMergeDiagnostics>()
     : new Map<string, ClusterMergeDiagnostics>();
   const clustersForStatus = includeClusterItems
     ? options.profiles
         .listClusters({
           ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
         })
-        .slice(0, 12)
+        .slice(0, clusterItemLimit)
     : [];
   const clusterFamilyMap = includeClusterItems
     ? options.interestFamilies.familyMapForClusters(clustersForStatus.map((cluster) => cluster.id))
     : new Map<string, RecommendationClusterFamily>();
-  const clusterItems = clustersForStatus.map((cluster, index) =>
-    mapRecommendationCluster(
-      cluster,
-      index + 1,
-      clusterEvidence,
-      options.clusterLabels,
-      clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
-      clusterFamilyMap.get(cluster.id) ?? null
-    )
-  );
-  const familySummary = options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 8);
+  const clusterItems = clustersForStatus.map((cluster, index) => {
+    const displayIndex = index + 1;
+    return clusterDetailLevel === "diagnostic"
+      ? mapRecommendationCluster(
+          cluster,
+          displayIndex,
+          clusterEvidence,
+          options.clusterLabels,
+          clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
+          clusterFamilyMap.get(cluster.id) ?? null
+        )
+      : mapRecommendationClusterSummary(
+          cluster,
+          displayIndex,
+          options.clusterLabels,
+          clusterFamilyMap.get(cluster.id) ?? null
+        );
+  });
+  const familySummary = summaryOnly
+    ? emptyRecommendationFamilySummary()
+    : options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 8);
   const rankedArticles = options.rankings.countRankedArticles({ activeRankContext });
   const lastProfileUpdate = options.profiles.getLastProfileUpdate({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
@@ -2201,7 +3492,8 @@ function getRecommendationStatus(options: {
   const mode = recommendationMode({
     activeProvider,
     activeIndex,
-    coverage
+    coverage,
+    rankedArticles
   });
 
   return {
@@ -2261,19 +3553,24 @@ function labeledExplanationCluster(
 }
 
 function getRecommendationClusters(
-  options: Parameters<typeof getRecommendationStatus>[0] & { limit: number | null }
+  options: Parameters<typeof getRecommendationStatus>[0] & {
+    limit: number | null;
+    clusterDetailLevel?: RecommendationClusterDetailLevel;
+  }
 ) {
+  const clusterDetailLevel = options.clusterDetailLevel ?? "summary";
   const activeProvider = options.embeddings.findActiveProvider();
-  const indexes = options.embeddings.listIndexes();
-  const activeIndex = activeProvider ? activeDiagnosticIndexFor(activeProvider.id, indexes) : null;
-  const clusterEvidence = activeIndex
+  const activeIndex = activeProvider
+    ? options.embeddings.findActiveIndexForProvider(activeProvider.id)
+    : null;
+  const clusterEvidence = activeIndex && clusterDetailLevel === "diagnostic"
     ? options.profiles.listClusterEvidence({ embeddingIndexId: activeIndex.id, limit: 5000 })
     : [];
   const clusters = options.profiles.listClusters({
     ...(activeIndex ? { embeddingIndexId: activeIndex.id } : {})
   });
   const limitedClusters = options.limit === null ? clusters : clusters.slice(0, options.limit);
-  const clusterMergeDiagnostics = activeIndex
+  const clusterMergeDiagnostics = activeIndex && clusterDetailLevel === "diagnostic"
     ? mergeDiagnosticsByCluster(options.db, activeIndex.id, options.clusterLabels)
     : new Map<string, ClusterMergeDiagnostics>();
   const clusterFamilyMap = options.interestFamilies.familyMapForClusters(
@@ -2284,16 +3581,24 @@ function getRecommendationClusters(
     activeIndex: activeIndex ? mapRecommendationIndex(activeIndex) : null,
     total: clusters.length,
     families: options.interestFamilies.listFamilySummary(activeIndex?.id ?? null, 24),
-    items: limitedClusters.map((cluster, index) =>
-      mapRecommendationCluster(
-        cluster,
-        index + 1,
-        clusterEvidence,
-        options.clusterLabels,
-        clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
-        clusterFamilyMap.get(cluster.id) ?? null
-      )
-    )
+    items: limitedClusters.map((cluster, index) => {
+      const displayIndex = index + 1;
+      return clusterDetailLevel === "diagnostic"
+        ? mapRecommendationCluster(
+            cluster,
+            displayIndex,
+            clusterEvidence,
+            options.clusterLabels,
+            clusterMergeDiagnostics.get(cluster.id) ?? emptyClusterMergeDiagnostics(),
+            clusterFamilyMap.get(cluster.id) ?? null
+          )
+        : mapRecommendationClusterSummary(
+            cluster,
+            displayIndex,
+            options.clusterLabels,
+            clusterFamilyMap.get(cluster.id) ?? null
+          );
+    })
   };
 }
 
@@ -2350,6 +3655,18 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   return parsed;
 }
 
+function parseOptionalPositiveInteger(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function isPluginDeliveryStatus(value: unknown): value is "queued" | "running" | "succeeded" | "failed" | "cancelled" {
+  return value === "queued" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
+}
+
 function parseMergeCandidateQuery(query: RecommendationMergeCandidateQuery):
   | {
       ok: true;
@@ -2404,6 +3721,9 @@ function getRecommendationTransparency(options: {
   clusterLabels: InterestClusterLabelService;
   interestFamilies: InterestFamilyService;
   settings: ReturnType<SettingsService["getSettings"]>["ranking"];
+  includeClusterItems?: boolean;
+  clusterItemLimit?: number;
+  clusterDetailLevel?: RecommendationClusterDetailLevel;
   maintenanceSettings?: ReturnType<SettingsService["getSettings"]>["recommendationMaintenance"];
   maintenanceScheduleStates?: Array<{
     taskKey: string;
@@ -2713,6 +4033,45 @@ function mapRecommendationCluster(
   };
 }
 
+function mapRecommendationClusterSummary(
+  cluster: InterestClusterRow,
+  displayIndex: number,
+  clusterLabels: InterestClusterLabelService,
+  family: RecommendationClusterFamily | null = null
+) {
+  const label = clusterLabels.displayLabelForCluster(
+    {
+      id: cluster.id,
+      label: cluster.label,
+      polarity: cluster.polarity,
+      displayIndex
+    },
+    displayIndex
+  );
+  return {
+    id: cluster.id,
+    polarity: cluster.polarity,
+    label: label.displayLabel,
+    displayLabel: label.displayLabel,
+    labelSource: label.labelSource,
+    autoLabel: label.autoLabel,
+    manualLabel: label.manualLabel,
+    confidence: label.confidence,
+    evidenceCount: label.representativeArticles.length,
+    topTerms: label.topTerms,
+    representativeArticles: label.representativeArticles,
+    feedTitles: label.feedTitles,
+    labelDiagnostics: label.labelDiagnostics,
+    family,
+    lastGeneratedAt: timestampToIso(label.generatedAt),
+    displayIndex,
+    weight: cluster.weight,
+    sampleCount: cluster.sampleCount,
+    lastMatchedAt: timestampToIso(cluster.lastMatchedAt),
+    updatedAt: timestampToIso(cluster.updatedAt)
+  };
+}
+
 type ClusterMergeDiagnostics = {
   candidateCount: number;
   topCandidate: {
@@ -2984,10 +4343,21 @@ function coverageFor(index: EmbeddingIndexListRow | null): RecommendationCoverag
   };
 }
 
+function emptyRecommendationFamilySummary() {
+  return {
+    positive: 0,
+    negative: 0,
+    topFamilies: [],
+    dominantFamily: null,
+    concentrationRisk: "low" as const
+  };
+}
+
 function recommendationMode(input: {
   activeProvider: EmbeddingProviderRow | null;
   activeIndex: EmbeddingIndexRow | null;
   coverage: RecommendationCoverage;
+  rankedArticles: { base: number; active: number };
 }): RecommendationMode {
   if (!input.activeProvider || !input.activeIndex) {
     return "baseline";
@@ -3001,7 +4371,8 @@ function recommendationMode(input: {
     return "degraded";
   }
 
-  if (input.coverage.pendingJobs > 0 || input.coverage.coverageRatio < 1) {
+  const hasUsableRanking = input.rankedArticles.base + input.rankedArticles.active > 0;
+  if (!hasUsableRanking || input.coverage.coverageRatio < STOPPED_COVERAGE_THRESHOLD) {
     return "embedding";
   }
 
@@ -3688,6 +5059,25 @@ function parseJobQuery(query: JobQuery):
   };
 }
 
+function parseOptionalPluginBody(
+  body: OptionalPluginBody | undefined
+): { ok: true; enabled: boolean; timezone?: string } | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+  if (typeof body.enabled !== "boolean") {
+    return {
+      ok: false,
+      message: "enabled must be a boolean",
+      details: { field: "enabled" }
+    };
+  }
+  const timezone = typeof body.timezone === "string" && body.timezone.trim()
+    ? body.timezone.trim()
+    : undefined;
+  return { ok: true, enabled: body.enabled, ...(timezone ? { timezone } : {}) };
+}
+
 function parseArticleQuery(
   query: ArticleQuery,
   now: (() => number) | undefined
@@ -3717,6 +5107,13 @@ function parseArticleQuery(
       message: "unreadOnly must be true or false"
     };
   }
+  const includeUnreadCount = parseBooleanParam(query.includeUnreadCount);
+  if (includeUnreadCount === null) {
+    return {
+      ok: false,
+      message: "includeUnreadCount must be true or false"
+    };
+  }
 
   const todayOnly = parseBooleanParam(query.todayOnly);
   if (todayOnly === null) {
@@ -3742,8 +5139,8 @@ function parseArticleQuery(
     };
   }
 
-  const offset = decodeCursor(query.cursor);
-  if (offset === null) {
+  const cursor = decodeArticleListCursor(query.cursor);
+  if (cursor === null) {
     return {
       ok: false,
       message: "cursor is invalid"
@@ -3795,8 +5192,11 @@ function parseArticleQuery(
   const input: ArticleListInput = {
     view: view ?? "latest",
     limit,
-    offset
+    offset: cursor?.type === "offset" ? cursor.offset : undefined
   };
+  if (cursor && cursor.type !== "offset") {
+    input.cursor = cursor;
+  }
 
   if (query.feedId !== undefined) {
     input.feedId = query.feedId;
@@ -3809,6 +5209,9 @@ function parseArticleQuery(
   }
   if (unreadOnly !== undefined) {
     input.unreadOnly = unreadOnly;
+  }
+  if (includeUnreadCount !== undefined) {
+    input.includeUnreadCount = includeUnreadCount;
   }
   if (timeWindow !== undefined) {
     const range = rollingTimeRange(now?.() ?? Date.now(), timeWindow);
@@ -3838,6 +5241,15 @@ function parseSearchQuery(query: SearchQuery):
       ok: false,
       message: "q must be 256 characters or fewer",
       details: { field: "q", maxLength: 256 }
+    };
+  }
+
+  const scope = parseSearchScope(query.scope);
+  if (scope === null) {
+    return {
+      ok: false,
+      message: "scope must be default or full_text",
+      details: { field: "scope" }
     };
   }
 
@@ -3894,7 +5306,7 @@ function parseSearchQuery(query: SearchQuery):
     };
   }
 
-  const offset = decodeCursor(query.cursor);
+  const offset = decodeOffsetCursor(query.cursor);
   if (offset === null) {
     return {
       ok: false,
@@ -3903,14 +5315,25 @@ function parseSearchQuery(query: SearchQuery):
     };
   }
 
+  const includeUnreadCount = parseBooleanParam(query.includeUnreadCount);
+  if (includeUnreadCount === null) {
+    return {
+      ok: false,
+      message: "includeUnreadCount must be true or false",
+      details: { field: "includeUnreadCount" }
+    };
+  }
+
   return {
     ok: true,
     input: {
       query: rawQuery,
+      scope: scope ?? "default",
       state: state ?? "all",
       sort: sort ?? "relevance",
       limit,
       offset,
+      ...(includeUnreadCount !== undefined ? { includeUnreadCount } : {}),
       ...(query.feedId !== undefined ? { feedId: query.feedId } : {}),
       ...(query.folderId !== undefined ? { folderId: query.folderId } : {}),
       ...(typeof from === "number" ? { from } : {}),
@@ -4373,6 +5796,65 @@ function parseOpmlImportBody(
   };
 }
 
+function parsePluginInstallBody(
+  body: PluginInstallBody | undefined
+):
+  | { ok: true; url: string; sha256: string | null; packageContent?: undefined }
+  | { ok: true; packageContent: string; sha256: string | null; url?: undefined }
+  | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "Plugin install body must be an object" };
+  }
+  const sha256 = typeof body.sha256 === "string" && body.sha256.trim() ? body.sha256.trim() : null;
+  if (typeof body.package === "string" && body.package.trim()) {
+    return { ok: true, packageContent: body.package, sha256 };
+  }
+  if (typeof body.url === "string" && body.url.trim()) {
+    return { ok: true, url: body.url.trim(), sha256 };
+  }
+  return {
+    ok: false,
+    message: "Plugin install requires url or package",
+    details: { fields: ["url", "package"] }
+  };
+}
+
+function parsePluginUploadBody(
+  body: unknown,
+  contentTypeHeader: string | string[] | undefined
+): { ok: true; packageContent: string } | { ok: false; message: string; details?: unknown } {
+  const contentType = Array.isArray(contentTypeHeader)
+    ? contentTypeHeader[0]
+    : contentTypeHeader;
+
+  if (typeof body === "string") {
+    return body.trim()
+      ? { ok: true, packageContent: body }
+      : { ok: false, message: "Plugin package body is required" };
+  }
+
+  if (Buffer.isBuffer(body)) {
+    const packageContent = contentType?.toLowerCase().startsWith("multipart/form-data")
+      ? extractMultipartFile(body, contentType)
+      : body.toString("utf8");
+
+    if (!packageContent) {
+      return {
+        ok: false,
+        message: "Plugin package file is required",
+        details: { field: "file" }
+      };
+    }
+
+    return { ok: true, packageContent };
+  }
+
+  return {
+    ok: false,
+    message: "Plugin upload requires multipart/form-data or application/octet-stream"
+  };
+}
+
 function extractMultipartFile(body: Buffer, contentType: string | undefined): string | null {
   const boundaryMatch = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
@@ -4462,6 +5944,83 @@ function parseArticleActionBody(body: ArticleActionBody | undefined):
   };
 }
 
+function parseBulkArticleActionBody(body: BulkArticleActionBody | undefined):
+  | {
+      ok: true;
+      actions: Array<{
+        articleId: string;
+        input: {
+          type: "impression";
+          metadata?: Record<string, unknown>;
+        };
+      }>;
+    }
+  | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+  if (!Array.isArray(body.actions)) {
+    return { ok: false, message: "actions must be an array" };
+  }
+  if (body.actions.length === 0 || body.actions.length > 50) {
+    return {
+      ok: false,
+      message: "actions must contain between 1 and 50 items",
+      details: { fields: ["actions"], min: 1, max: 50 }
+    };
+  }
+
+  const actions: Array<{
+    articleId: string;
+    input: {
+      type: "impression";
+      metadata?: Record<string, unknown>;
+    };
+  }> = [];
+  for (const [index, rawAction] of body.actions.entries()) {
+    if (!rawAction || typeof rawAction !== "object" || Array.isArray(rawAction)) {
+      return {
+        ok: false,
+        message: "action must be an object",
+        details: { index }
+      };
+    }
+    const articleId = typeof (rawAction as { articleId?: unknown }).articleId === "string"
+      ? (rawAction as { articleId: string }).articleId.trim()
+      : "";
+    if (!articleId) {
+      return {
+        ok: false,
+        message: "articleId is required",
+        details: { index, fields: ["articleId"] }
+      };
+    }
+    const parsed = parseArticleActionBody(rawAction as ArticleActionBody);
+    if (!parsed.ok) {
+      return {
+        ...parsed,
+        details: { index, ...(typeof parsed.details === "object" && parsed.details !== null ? parsed.details : {}) }
+      };
+    }
+    if (parsed.input.type !== "impression") {
+      return {
+        ok: false,
+        message: "bulk article actions only support impression",
+        details: { index, fields: ["type"] }
+      };
+    }
+    actions.push({
+      articleId,
+      input: {
+        type: "impression",
+        ...(parsed.input.metadata !== undefined ? { metadata: parsed.input.metadata } : {})
+      }
+    });
+  }
+
+  return { ok: true, actions };
+}
+
 function parseArticleView(value: string | undefined): ArticleListView | undefined | null {
   if (value === undefined) {
     return undefined;
@@ -4548,6 +6107,18 @@ function parseSearchSort(value: string | undefined): ArticleSearchSort | undefin
   return null;
 }
 
+function parseSearchScope(value: string | undefined): ArticleSearchInput["scope"] | undefined | null {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+
+  if (value === "default" || value === "full_text") {
+    return value;
+  }
+
+  return null;
+}
+
 function parseSearchTimestamp(value: string | undefined): number | undefined | null {
   if (value === undefined || value.trim() === "") {
     return undefined;
@@ -4598,9 +6169,14 @@ function parseJobType(value: string | undefined): JobType | undefined | null {
     value === RECOMMENDATION_BACKFILL_JOB_TYPE ||
     value === INTEREST_CLUSTER_LABEL_REBUILD_JOB_TYPE ||
     value === INTEREST_CLUSTER_MERGE_DIAGNOSTICS_JOB_TYPE ||
-    value === INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE
+    value === INTEREST_CLUSTER_AUTO_MERGE_JOB_TYPE ||
+    value === INTEREST_FAMILY_REBUILD_JOB_TYPE
   ) {
-    return value;
+    return value as JobType;
+  }
+
+  if (value.startsWith("plugin:")) {
+    return value as PluginJobType;
   }
 
   return null;
@@ -4684,6 +6260,20 @@ function parseBooleanParam(value: string | undefined): boolean | undefined | nul
   return null;
 }
 
+function parseClusterDetailLevel(value: string | undefined): RecommendationClusterDetailLevel | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "summary" || value === "diagnostic") {
+    return value;
+  }
+  return null;
+}
+
+function roundDuration(value: number): number {
+  return Math.round(Math.max(0, value) * 10) / 10;
+}
+
 function parseLimit(value: string | undefined): number | undefined | null {
   if (value === undefined) {
     return undefined;
@@ -4697,15 +6287,17 @@ function parseLimit(value: string | undefined): number | undefined | null {
   return Math.min(parsed, 100);
 }
 
-function encodeCursor(offset: number | null): string | null {
-  if (offset === null) {
+function encodeCursor(cursor: number | ArticleListCursor | null): string | null {
+  if (cursor === null) {
     return null;
   }
 
-  return Buffer.from(JSON.stringify({ offset } satisfies CursorPayload)).toString("base64url");
+  const payload: EncodedCursorPayload =
+    typeof cursor === "number" ? { offset: cursor } : { keyset: cursor };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
 }
 
-function decodeCursor(cursor: string | undefined): number | undefined | null {
+function decodeOffsetCursor(cursor: string | undefined): number | undefined | null {
   if (cursor === undefined) {
     return undefined;
   }
@@ -4724,6 +6316,74 @@ function decodeCursor(cursor: string | undefined): number | undefined | null {
   } catch {
     return null;
   }
+}
+
+function decodeArticleListCursor(cursor: string | undefined): ArticleListCursor | undefined | null {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<
+      EncodedCursorPayload
+    >;
+    if ("offset" in payload) {
+      const offset = payload.offset;
+      return typeof offset === "number" && Number.isInteger(offset) && offset >= 0
+        ? { type: "offset", offset }
+        : null;
+    }
+    if ("keyset" in payload && isArticleListCursor(payload.keyset)) {
+      return payload.keyset;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isArticleListCursor(value: unknown): value is ArticleListCursor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const cursor = value as Partial<ArticleListCursor>;
+  if (cursor.type === "recommended") {
+    return (
+      typeof cursor.publishedAt === "number" &&
+      typeof cursor.id === "string" &&
+      (cursor.rankMissing === undefined || typeof cursor.rankMissing === "number") &&
+      (cursor.rerankMissing === undefined || typeof cursor.rerankMissing === "number") &&
+      (cursor.rerankPosition === undefined ||
+        cursor.rerankPosition === null ||
+        typeof cursor.rerankPosition === "number") &&
+      (cursor.score === undefined || cursor.score === null || typeof cursor.score === "number")
+    );
+  }
+  if (cursor.type === "latest") {
+    return typeof cursor.publishedAt === "number" && typeof cursor.id === "string";
+  }
+  if (cursor.type === "favorites") {
+    return (
+      isFavoriteArticleSort(cursor.sort) &&
+      typeof cursor.favoritedAt === "number" &&
+      typeof cursor.publishedAt === "number" &&
+      typeof cursor.id === "string"
+    );
+  }
+  if (cursor.type === "read_later") {
+    return (
+      isReadLaterArticleSort(cursor.sort) &&
+      typeof cursor.readLaterAt === "number" &&
+      typeof cursor.publishedAt === "number" &&
+      typeof cursor.id === "string" &&
+      (cursor.rerankMissing === undefined || typeof cursor.rerankMissing === "number") &&
+      (cursor.rerankPosition === undefined ||
+        cursor.rerankPosition === null ||
+        typeof cursor.rerankPosition === "number") &&
+      (cursor.score === undefined || cursor.score === null || typeof cursor.score === "number")
+    );
+  }
+  return false;
 }
 
 function mapFeedFolder(folder: FeedFolderRow) {
@@ -4883,6 +6543,20 @@ function articleListSummaryPreview(summary: string | null): string | null {
   return text.length > 360 ? `${text.slice(0, 360)}...` : text;
 }
 
+function jobRunnerEventLog(event: JobRunnerEvent) {
+  return {
+    event: event.event,
+    jobId: event.job.id,
+    type: event.job.type,
+    status: event.job.status,
+    attempts: event.job.attempts,
+    maxAttempts: event.job.maxAttempts,
+    ...("error" in event ? { error: event.error } : {}),
+    ...("reason" in event ? { reason: event.reason } : {}),
+    ...("runAfter" in event ? { runAfter: timestampToIsoValue(event.runAfter) } : {})
+  };
+}
+
 function timestampToIso(value: number | null): string | null {
   return value === null ? null : timestampToIsoValue(value);
 }
@@ -4938,6 +6612,17 @@ function sendApiError(
   return reply.status(statusCode).send({ error });
 }
 
+function sendDatabaseBusyError(reply: FastifyReply) {
+  reply.header("Retry-After", "5");
+  return sendApiError(
+    reply,
+    503,
+    "DATABASE_BUSY",
+    "Dibao is busy with background maintenance. Please try again shortly.",
+    { retryAfterMs: 5_000 }
+  );
+}
+
 function sendFeedIngestionError(reply: FastifyReply, error: unknown) {
   if (error instanceof FeedIngestionError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
@@ -4956,6 +6641,9 @@ function sendFeedDiscoveryError(reply: FastifyReply, error: unknown) {
 
 function sendAuthError(reply: FastifyReply, error: unknown) {
   if (error instanceof AuthServiceError) {
+    if (error.code === "DATABASE_BUSY") {
+      reply.header("Retry-After", "5");
+    }
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 
@@ -5018,6 +6706,14 @@ function sendInterestClusterLabelError(reply: FastifyReply, error: unknown) {
   throw error;
 }
 
+function sendInterestFamilyError(reply: FastifyReply, error: unknown) {
+  if (error instanceof InterestFamilyServiceError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
 function sendInterestClusterMergeError(reply: FastifyReply, error: unknown) {
   if (error instanceof InterestClusterMergeServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
@@ -5028,6 +6724,14 @@ function sendInterestClusterMergeError(reply: FastifyReply, error: unknown) {
 
 function sendEmbeddingProviderError(reply: FastifyReply, error: unknown) {
   if (error instanceof EmbeddingProviderServiceError) {
+    return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
+  }
+
+  throw error;
+}
+
+function sendPluginError(reply: FastifyReply, error: unknown) {
+  if (error instanceof PluginServiceError) {
     return sendApiError(reply, error.statusCode, error.code, error.message, error.details);
   }
 

@@ -104,7 +104,7 @@ Known limitations: Dibao is currently single-user and self-hosted only. There is
 - Server can serve the built Web app and API from one Fastify process.
 - Static PWA assets are served with installability-friendly content types, including `/site.webmanifest` and `/sw.js`.
 - Docker recommendation smoke covers setup, provider, backfill, diagnostics, and recommended articles.
-- Performance script generates a 20k-article local benchmark and updates `docs/recommendation-performance.md`.
+- Performance script generates a 20k-article local benchmark report for release validation.
 - README documents deployment, setup, backup, restore, upgrade, provider configuration, and troubleshooting.
 
 ## Validation Status

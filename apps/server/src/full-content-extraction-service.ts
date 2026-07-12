@@ -126,7 +126,7 @@ function extractReadableContent(html: string): {
 
   const blocks = htmlBlocks(mainHtml);
   const contentHtml = blocks.map((block) => block.html).join("\n");
-  const contentText = cleanText(blocks.map((block) => block.text).join("\n\n")) ?? "";
+  const contentText = cleanArticleText(blocks.map((block) => block.text).join("\n\n")) ?? "";
 
   return {
     title,
@@ -143,7 +143,7 @@ function htmlBlocks(html: string): Array<{ html: string; text: string }> {
   for (const match of html.matchAll(blockPattern)) {
     const tag = (match[1] ?? "li").toLowerCase();
     const inner = match[2] ?? match[3] ?? "";
-    const text = cleanText(stripTags(inner));
+    const text = tag === "pre" ? cleanPreText(inner) : cleanText(stripTags(inner));
     if (!text) {
       continue;
     }
@@ -195,6 +195,33 @@ function cleanText(value: string | null): string | null {
   const cleaned = decodeHtmlEntities(value)
     .replace(/\s+/g, " ")
     .trim();
+  return cleaned ? cleaned : null;
+}
+
+function cleanArticleText(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const cleaned = decodeHtmlEntities(value)
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return cleaned ? cleaned : null;
+}
+
+function cleanPreText(value: string): string | null {
+  const cleaned = decodeHtmlEntities(
+    value
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|li|ul|ol|blockquote|h[1-6])>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+  )
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
   return cleaned ? cleaned : null;
 }
 

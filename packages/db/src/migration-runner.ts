@@ -54,6 +54,27 @@ const interestFamiliesPath = fileURLToPath(
 const interestClusterCalibrationsPath = fileURLToPath(
   new URL("../migrations/018_interest_cluster_calibrations.sql", import.meta.url)
 );
+const pluginSystemPath = fileURLToPath(
+  new URL("../migrations/019_plugin_system.sql", import.meta.url)
+);
+const pluginSchedulesPath = fileURLToPath(
+  new URL("../migrations/020_plugin_schedules.sql", import.meta.url)
+);
+const interestFamilyLabelsPath = fileURLToPath(
+  new URL("../migrations/021_interest_family_labels.sql", import.meta.url)
+);
+const pluginSecretsAndDeliveriesPath = fileURLToPath(
+  new URL("../migrations/022_plugin_secrets_and_deliveries.sql", import.meta.url)
+);
+const behaviorProjectionQueuePath = fileURLToPath(
+  new URL("../migrations/023_behavior_projection_queue.sql", import.meta.url)
+);
+const articleStateInteractionProjectionPath = fileURLToPath(
+  new URL("../migrations/024_article_state_interaction_projection.sql", import.meta.url)
+);
+const recommendedRankSortIndexPath = fileURLToPath(
+  new URL("../migrations/025_recommended_rank_sort_index.sql", import.meta.url)
+);
 
 export function loadDefaultMigrations(): Migration[] {
   return [
@@ -141,6 +162,41 @@ export function loadDefaultMigrations(): Migration[] {
       version: "018",
       name: "interest_cluster_calibrations",
       sql: readFileSync(interestClusterCalibrationsPath, "utf8")
+    },
+    {
+      version: "019",
+      name: "plugin_system",
+      sql: readFileSync(pluginSystemPath, "utf8")
+    },
+    {
+      version: "020",
+      name: "plugin_schedules",
+      sql: readFileSync(pluginSchedulesPath, "utf8")
+    },
+    {
+      version: "021",
+      name: "interest_family_labels",
+      sql: readFileSync(interestFamilyLabelsPath, "utf8")
+    },
+    {
+      version: "022",
+      name: "plugin_secrets_and_deliveries",
+      sql: readFileSync(pluginSecretsAndDeliveriesPath, "utf8")
+    },
+    {
+      version: "023",
+      name: "behavior_projection_queue",
+      sql: readFileSync(behaviorProjectionQueuePath, "utf8")
+    },
+    {
+      version: "024",
+      name: "article_state_interaction_projection",
+      sql: readFileSync(articleStateInteractionProjectionPath, "utf8")
+    },
+    {
+      version: "025",
+      name: "recommended_rank_sort_index",
+      sql: readFileSync(recommendedRankSortIndexPath, "utf8")
     }
   ];
 }
@@ -148,12 +204,28 @@ export function loadDefaultMigrations(): Migration[] {
 export function runMigrations(
   db: DibaoDatabase,
   migrations: readonly Migration[] = loadDefaultMigrations(),
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  hooks: {
+    onMigrationStart?: (progress: {
+      migration: Migration;
+      index: number;
+      total: number;
+      appliedAt: number;
+    }) => void;
+    onMigrationApplied?: (progress: {
+      migration: Migration;
+      index: number;
+      total: number;
+      appliedAt: number;
+      applied: AppliedMigration;
+    }) => void;
+  } = {}
 ): AppliedMigration[] {
   ensureMigrationTable(db);
 
   const applied = getAppliedMigrations(db);
   const appliedByVersion = new Map(applied.map((migration) => [migration.version, migration]));
+  const pending: Migration[] = [];
   const appliedNow: AppliedMigration[] = [];
 
   for (const migration of migrations) {
@@ -168,9 +240,17 @@ export function runMigrations(
       }
       continue;
     }
+    pending.push(migration);
+  }
+
+  for (const [pendingIndex, migration] of pending.entries()) {
+    const checksum = migration.checksum ?? checksumSql(migration.sql);
+    const index = pendingIndex + 1;
+    const total = pending.length;
 
     const appliedAt = now();
     const disableForeignKeys = migration.sql.includes("-- dibao: disable-foreign-keys");
+    hooks.onMigrationStart?.({ migration, index, total, appliedAt });
 
     try {
       if (disableForeignKeys) {
@@ -192,11 +272,19 @@ export function runMigrations(
       }
     }
 
-    appliedNow.push({
+    const appliedMigration = {
       version: migration.version,
       name: migration.name,
       appliedAt,
       checksum
+    };
+    appliedNow.push(appliedMigration);
+    hooks.onMigrationApplied?.({
+      migration,
+      index,
+      total,
+      appliedAt,
+      applied: appliedMigration
     });
   }
 

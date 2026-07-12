@@ -190,7 +190,29 @@ export type ArticleActionRequest =
     };
 
 export type ArticleActionResponse = {
+  eventId: string;
   state: ArticleState;
+};
+
+export type BulkArticleActionRequest = {
+  actions: Array<{
+    articleId: string;
+    type: "impression";
+    metadata?: Record<string, unknown>;
+  }>;
+};
+
+export type BulkArticleActionResponse = {
+  data: Array<{
+    articleId: string;
+    eventId: string;
+    state: ArticleState;
+  }>;
+  skipped: Array<{
+    articleId: string;
+    code: string;
+    message: string;
+  }>;
 };
 
 export type RankExplanationReasonType =
@@ -255,7 +277,7 @@ export type ArticleListResponse = {
   data: ArticleListItem[];
   page: ApiPage;
   meta: {
-    unreadCount: number;
+    unreadCount: number | null;
   };
 };
 
@@ -299,6 +321,7 @@ export type OpmlImportResponse = {
 export type AuthSession = {
   setupCompleted: boolean;
   authenticated: boolean;
+  username: string | null;
 };
 
 export type SetupStatus = {
@@ -306,7 +329,9 @@ export type SetupStatus = {
   hasFeeds: boolean;
   hasEmbeddingProvider: boolean;
   firstRefreshStatus: "idle" | "running" | "succeeded" | "failed";
+  coreDatabaseMigration?: DerivedDataUpgradeStatus;
   derivedDataUpgrade?: DerivedDataUpgradeStatus;
+  optionalPluginSteps?: PluginListItem[];
 };
 
 export type DerivedDataUpgradeStatus = {
@@ -316,6 +341,7 @@ export type DerivedDataUpgradeStatus = {
   blocking: boolean;
   step:
     | "detecting"
+    | "schemaMigration"
     | "reset"
     | "replay"
     | "labels"
@@ -453,6 +479,164 @@ export type UpdateSettingsResponse = {
   rankingRecalculateJobId?: string | null;
   retentionCleanupQueued?: boolean;
   retentionCleanupJobId?: string | null;
+};
+
+export type PluginInstallStatus =
+  | "installed"
+  | "enabled"
+  | "disabled"
+  | "incompatible"
+  | "failed";
+
+export type PluginSourceType = "official" | "local_file" | "url" | "github_release" | "registry";
+
+export type PluginContribution = {
+  settingsTabs?: Array<{
+    id: string;
+    title: string;
+    slot: string;
+    route?: string;
+    order?: number;
+    icon?: string;
+  }>;
+  tabs?: Array<{
+    id: string;
+    title: string;
+    slot: string;
+    route?: string;
+    order?: number;
+    icon?: string;
+    primaryNav?: boolean;
+    primaryMobile?: boolean;
+  }>;
+  routes?: Array<{
+    id: string;
+    path: string;
+    title: string;
+    panel: string;
+    order?: number;
+    icon?: string;
+    primaryNav?: boolean;
+    primaryMobile?: boolean;
+  }>;
+  actions?: Array<{
+    id: string;
+    title: string;
+    slot: string;
+    icon?: string;
+    command: string;
+    order?: number;
+  }>;
+  hooks?: string[];
+  events?: string[];
+  tasks?: Array<{
+    id: string;
+    kind: "foreground" | "background";
+    schedule?: "manual" | "interval" | "daily" | "weekly";
+    defaultEnabled?: boolean;
+  }>;
+  setupSteps?: Array<{
+    id: string;
+    title: string;
+    body?: string;
+    order?: number;
+    defaultEnabled?: boolean;
+  }>;
+};
+
+export type PluginContributions = {
+  routes: Array<{ id: string; title: string; path: string }>;
+  primaryNav: Array<{ label: string; route: string; icon?: string; order?: number }>;
+  primaryMobile: Array<{ label: string; route: string; icon?: string; order?: number }>;
+  settingsTabs: Array<{ id: string; label: string; route: string; order?: number }>;
+  tabs: Array<{ id: string; label: string; slot: string; route: string; icon?: string; order?: number }>;
+  actions: Array<{
+    id: string;
+    label: string;
+    slot: string;
+    icon?: string;
+    command: string;
+    order?: number;
+  }>;
+  setupSteps: Array<{
+    id: string;
+    title: string;
+    body: string;
+    enableLabel?: string;
+    skipLabel?: string;
+    recommended?: boolean;
+  }>;
+};
+
+export type PluginListItem = {
+  id: string;
+  name: string;
+  version: string;
+  publisher: string;
+  status: PluginInstallStatus;
+  sourceType: PluginSourceType;
+  sourceUrl: string | null;
+  updateUrl: string | null;
+  official: boolean;
+  bundled: boolean;
+  trustLevel: "official" | "trusted" | "untrusted";
+  capabilities: string[];
+  grantedCapabilities: string[];
+  apiStability: {
+    stable: string[];
+    beta: string[];
+  };
+  contributes: PluginContribution;
+  contributions: PluginContributions;
+  webEntryUrl?: string | null;
+  installedAt: string;
+  updatedAt: string;
+  enabledAt: string | null;
+  disabledAt: string | null;
+  lastError: string | null;
+};
+
+export type PluginTaskRun = {
+  id: string;
+  type: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  payloadJson: string | null;
+  error: string | null;
+  attempts: number;
+  maxAttempts: number;
+  runAfter: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type JobListItem = PluginTaskRun;
+
+export type PluginSecretMetadata = {
+  key: string;
+  hasValue: boolean;
+  hint: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PluginDeliveryStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type PluginDelivery = {
+  id: string;
+  pluginId: string;
+  status: PluginDeliveryStatus;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  url: string;
+  request: unknown;
+  response: unknown;
+  error: string | null;
+  idempotencyKey: string | null;
+  jobId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
 };
 
 export type EmbeddingProviderType =
@@ -657,6 +841,7 @@ export type RecommendationFamilySummaryItem = {
   id: string;
   polarity: "positive" | "negative";
   displayLabel: string;
+  manualLabel?: string | null;
   weight: number;
   clusterCount: number;
   supportArticleCount: number;
@@ -851,6 +1036,7 @@ export type RecommendationClusterItem = {
     id: string;
     polarity: "positive" | "negative";
     displayLabel: string;
+    manualLabel?: string | null;
     weight: number;
     clusterCount: number;
     supportArticleCount: number;
@@ -893,6 +1079,13 @@ export type UpdateRecommendationClusterLabelResponse = {
   clusterId: string;
   displayLabel: string;
   labelSource: RecommendationClusterItem["labelSource"];
+};
+
+export type UpdateRecommendationFamilyLabelResponse = {
+  ok: true;
+  familyId: string;
+  displayLabel: string;
+  manualLabel: string | null;
 };
 
 export type AuthOkResponse = {
@@ -985,6 +1178,8 @@ export class ApiRequestError extends Error {
 
 export type ApiErrorMessages = {
   requestFailed: string;
+  requestTimeout: string;
+  databaseBusy: string;
   httpError: (status: number) => string;
 };
 
@@ -994,7 +1189,8 @@ type ApiSuccess<T> = {
   data: T;
   page?: ApiPage;
   meta?: {
-    unreadCount?: number;
+    unreadCount?: number | null;
+    skipped?: unknown;
   };
 };
 
@@ -1106,6 +1302,14 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
+    async logoutAll(): Promise<AuthOkResponse> {
+      return (
+        await request<AuthOkResponse>("/api/auth/logout-all", {
+          method: "POST"
+        })
+      ).data;
+    },
+
     async changePassword(currentPassword: string, newPassword: string): Promise<AuthOkResponse> {
       return (
         await request<AuthOkResponse>("/api/auth/password", {
@@ -1117,6 +1321,44 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async getSetupStatus(): Promise<SetupStatus> {
       return (await request<SetupStatus>("/api/setup/status")).data;
+    },
+
+    async selectOptionalPlugin(
+      pluginId: string,
+      input: { enabled: boolean; timezone?: string }
+    ): Promise<PluginListItem> {
+      return (
+        await request<PluginListItem>(
+          `/api/setup/optional-plugins/${encodeURIComponent(pluginId)}`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
+    },
+
+    async listPluginContributions(): Promise<PluginListItem[]> {
+      return (await request<PluginListItem[]>("/api/plugins/contributions")).data;
+    },
+
+    async listJobs(input: {
+      status?: JobListItem["status"];
+      type?: string;
+      limit?: number;
+    } = {}): Promise<JobListItem[]> {
+      const params = new URLSearchParams();
+      if (input.status) {
+        params.set("status", input.status);
+      }
+      if (input.type) {
+        params.set("type", input.type);
+      }
+      if (input.limit) {
+        params.set("limit", String(input.limit));
+      }
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      return (await request<JobListItem[]>(`/api/jobs${suffix}`)).data;
     },
 
     async getDerivedDataUpgradeStatus(): Promise<DerivedDataUpgradeStatus> {
@@ -1153,6 +1395,218 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
           method: "PATCH",
           body: JSON.stringify(input)
         })
+      ).data;
+    },
+
+    async listPlugins(): Promise<PluginListItem[]> {
+      return (await request<PluginListItem[]>("/api/plugins")).data;
+    },
+
+    async listPluginCatalog(): Promise<PluginListItem[]> {
+      return (await request<PluginListItem[]>("/api/plugins/catalog")).data;
+    },
+
+    async installPluginFromUrl(url: string, sha256?: string | null): Promise<PluginListItem> {
+      return (
+        await request<PluginListItem>("/api/plugins/install", {
+          method: "POST",
+          body: JSON.stringify({ url, ...(sha256 ? { sha256 } : {}) })
+        })
+      ).data;
+    },
+
+    async installPluginFromPackage(
+      packageContent: string,
+      sha256?: string | null
+    ): Promise<PluginListItem> {
+      return (
+        await request<PluginListItem>("/api/plugins/install", {
+          method: "POST",
+          body: JSON.stringify({ package: packageContent, ...(sha256 ? { sha256 } : {}) })
+        })
+      ).data;
+    },
+
+    async uploadPluginPackage(file: File): Promise<PluginListItem> {
+      const formData = new FormData();
+      formData.append("file", file);
+      return (
+        await request<PluginListItem>("/api/plugins/install/upload", {
+          method: "POST",
+          body: formData
+        })
+      ).data;
+    },
+
+    async enablePlugin(pluginId: string): Promise<PluginListItem> {
+      return (
+        await request<PluginListItem>(`/api/plugins/${encodeURIComponent(pluginId)}/enable`, {
+          method: "POST"
+        })
+      ).data;
+    },
+
+    async disablePlugin(pluginId: string): Promise<PluginListItem> {
+      return (
+        await request<PluginListItem>(`/api/plugins/${encodeURIComponent(pluginId)}/disable`, {
+          method: "POST"
+        })
+      ).data;
+    },
+
+    async updatePlugin(pluginId: string): Promise<PluginListItem> {
+      return (
+        await request<PluginListItem>(`/api/plugins/${encodeURIComponent(pluginId)}/update`, {
+          method: "POST"
+        })
+      ).data;
+    },
+
+    async deletePlugin(pluginId: string, deleteData = false): Promise<DeleteResponse> {
+      const params = deleteData ? "?deleteData=true" : "";
+      return (
+        await request<DeleteResponse>(`/api/plugins/${encodeURIComponent(pluginId)}${params}`, {
+          method: "DELETE"
+        })
+      ).data;
+    },
+
+    async getPluginSettings(pluginId: string): Promise<Record<string, unknown>> {
+      return (
+        await request<Record<string, unknown>>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/settings`
+        )
+      ).data;
+    },
+
+    async updatePluginSettings(
+      pluginId: string,
+      input: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+      return (
+        await request<Record<string, unknown>>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/settings`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
+    },
+
+    async listPluginSecrets(pluginId: string): Promise<PluginSecretMetadata[]> {
+      return (
+        await request<PluginSecretMetadata[]>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/secrets`
+        )
+      ).data;
+    },
+
+    async setPluginSecret(
+      pluginId: string,
+      key: string,
+      input: { value: string; hint?: string | null }
+    ): Promise<PluginSecretMetadata> {
+      return (
+        await request<PluginSecretMetadata>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/secrets/${encodeURIComponent(key)}`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        )
+      ).data;
+    },
+
+    async deletePluginSecret(pluginId: string, key: string): Promise<DeleteResponse> {
+      return (
+        await request<DeleteResponse>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/secrets/${encodeURIComponent(key)}`,
+          { method: "DELETE" }
+        )
+      ).data;
+    },
+
+    async listPluginDeliveries(
+      pluginId: string,
+      input: { status?: PluginDeliveryStatus; limit?: number } = {}
+    ): Promise<PluginDelivery[]> {
+      const params = new URLSearchParams();
+      if (input.status) {
+        params.set("status", input.status);
+      }
+      if (input.limit) {
+        params.set("limit", String(input.limit));
+      }
+      const query = params.toString();
+      return (
+        await request<PluginDelivery[]>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/deliveries${query ? `?${query}` : ""}`
+        )
+      ).data;
+    },
+
+    async getPluginDelivery(pluginId: string, deliveryId: string): Promise<PluginDelivery> {
+      return (
+        await request<PluginDelivery>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/deliveries/${encodeURIComponent(deliveryId)}`
+        )
+      ).data;
+    },
+
+    async getPluginHealth(pluginId: string): Promise<Record<string, unknown>> {
+      return (
+        await request<Record<string, unknown>>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/health`
+        )
+      ).data;
+    },
+
+    async startPluginTask(pluginId: string, taskId: string): Promise<PluginTaskRun> {
+      return (
+        await request<PluginTaskRun>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/tasks/${encodeURIComponent(taskId)}`,
+          {
+            method: "POST"
+          }
+        )
+      ).data;
+    },
+
+    async getPluginTask(pluginId: string, runId: string): Promise<PluginTaskRun> {
+      return (
+        await request<PluginTaskRun>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/tasks/${encodeURIComponent(runId)}`
+        )
+      ).data;
+    },
+
+    async cancelPluginTask(pluginId: string, runId: string): Promise<PluginTaskRun> {
+      return (
+        await request<PluginTaskRun>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/tasks/${encodeURIComponent(runId)}/cancel`,
+          {
+            method: "POST"
+          }
+        )
+      ).data;
+    },
+
+    async callPluginApi<T = unknown>(
+      pluginId: string,
+      path: string,
+      body: unknown = {},
+      method: "GET" | "POST" = "POST"
+    ): Promise<T> {
+      const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+      return (
+        await request<T>(
+          `/api/plugins/${encodeURIComponent(pluginId)}/api/${normalizedPath}`,
+          {
+            method,
+            ...(method === "POST" ? { body: JSON.stringify(body) } : {})
+          }
+        )
       ).data;
     },
 
@@ -1238,16 +1692,41 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
-    async getRecommendationTransparency(): Promise<RecommendationTransparency> {
-      return (await request<RecommendationTransparency>("/api/recommendation/transparency")).data;
+    async getRecommendationTransparency(input?: {
+      includeClusterItems?: boolean;
+      clusterItemLimit?: number;
+      clusterDetailLevel?: "summary" | "diagnostic";
+    }): Promise<RecommendationTransparency> {
+      const params = new URLSearchParams();
+      if (input?.includeClusterItems !== undefined) {
+        params.set("includeClusterItems", String(input.includeClusterItems));
+      }
+      if (input?.clusterItemLimit !== undefined) {
+        params.set("clusterItemLimit", String(input.clusterItemLimit));
+      }
+      if (input?.clusterDetailLevel !== undefined) {
+        params.set("clusterDetailLevel", input.clusterDetailLevel);
+      }
+      const query = params.toString();
+      return (
+        await request<RecommendationTransparency>(
+          query ? `/api/recommendation/transparency?${query}` : "/api/recommendation/transparency"
+        )
+      ).data;
     },
 
     async listRecommendationClusters(
-      limit: "all" | number = "all"
+      limit: "all" | number = "all",
+      input: {
+        clusterDetailLevel?: "summary" | "diagnostic";
+      } = {}
     ): Promise<RecommendationClusterListResponse> {
       const params = new URLSearchParams({
         limit: String(limit)
       });
+      if (input.clusterDetailLevel !== undefined) {
+        params.set("clusterDetailLevel", input.clusterDetailLevel);
+      }
       return (
         await request<RecommendationClusterListResponse>(
           `/api/recommendation/clusters?${params.toString()}`
@@ -1262,6 +1741,21 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       return (
         await request<UpdateRecommendationClusterLabelResponse>(
           `/api/recommendation/clusters/${encodeURIComponent(clusterId)}/label`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({ manualLabel })
+          }
+        )
+      ).data;
+    },
+
+    async updateRecommendationFamilyLabel(
+      familyId: string,
+      manualLabel: string | null
+    ): Promise<UpdateRecommendationFamilyLabelResponse> {
+      return (
+        await request<UpdateRecommendationFamilyLabelResponse>(
+          `/api/recommendation/families/${encodeURIComponent(familyId)}/label`,
           {
             method: "PATCH",
             body: JSON.stringify({ manualLabel })
@@ -1510,6 +2004,8 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
         todayOnly?: boolean;
         timeWindow?: ArticleTimeWindow;
         sort?: ArticleListSort;
+        includeUnreadCount?: boolean;
+        signal?: AbortSignal;
       } = {}
     ): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
@@ -1540,14 +2036,19 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       if (input.sort && (view === "favorites" || view === "read_later")) {
         params.set("sort", input.sort);
       }
+      if (input.includeUnreadCount === false) {
+        params.set("includeUnreadCount", "false");
+      }
 
-      const response = await request<ArticleListItem[]>(`/api/articles?${params.toString()}`);
+      const response = await request<ArticleListItem[]>(`/api/articles?${params.toString()}`, {
+        signal: input.signal
+      });
 
       return {
         data: response.data,
         page: response.page ?? { nextCursor: null },
         meta: {
-          unreadCount: response.meta?.unreadCount ?? response.data.length
+          unreadCount: response.meta?.unreadCount ?? null
         }
       };
     },
@@ -1560,8 +2061,11 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       to?: string | null;
       state?: ArticleSearchState;
       sort?: ArticleSearchSort;
+      fullText?: boolean;
+      includeUnreadCount?: boolean;
       limit?: number;
       cursor?: string | null;
+      signal?: AbortSignal;
     }): Promise<ArticleListResponse> {
       const params = new URLSearchParams({
         q: input.q,
@@ -1589,14 +2093,22 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       if (input.cursor) {
         params.set("cursor", input.cursor);
       }
+      if (input.fullText) {
+        params.set("scope", "full_text");
+      }
+      if (input.includeUnreadCount === false) {
+        params.set("includeUnreadCount", "false");
+      }
 
-      const response = await request<ArticleListItem[]>(`/api/search?${params.toString()}`);
+      const response = await request<ArticleListItem[]>(`/api/search?${params.toString()}`, {
+        signal: input.signal
+      });
 
       return {
         data: response.data,
         page: response.page ?? { nextCursor: null },
         meta: {
-          unreadCount: response.meta?.unreadCount ?? response.data.length
+          unreadCount: response.meta?.unreadCount ?? null
         }
       };
     },
@@ -1629,8 +2141,12 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
-    async getArticle(articleId: string): Promise<ArticleDetail> {
-      return (await request<ArticleDetail>(`/api/articles/${encodeURIComponent(articleId)}`)).data;
+    async getArticle(articleId: string, input: { signal?: AbortSignal } = {}): Promise<ArticleDetail> {
+      return (
+        await request<ArticleDetail>(`/api/articles/${encodeURIComponent(articleId)}`, {
+          signal: input.signal
+        })
+      ).data;
     },
 
     async getArticleExplanation(articleId: string): Promise<RankExplanation> {
@@ -1643,17 +2159,40 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
 
     async postArticleAction(
       articleId: string,
-      input: ArticleActionRequest
+      input: ArticleActionRequest,
+      options: { signal?: AbortSignal } = {}
     ): Promise<ArticleActionResponse> {
       return (
         await request<ArticleActionResponse>(
           `/api/articles/${encodeURIComponent(articleId)}/actions`,
           {
             method: "POST",
-            body: JSON.stringify(input)
+            body: JSON.stringify(input),
+            signal: options.signal
           }
         )
       ).data;
+    },
+
+    async postArticleActionsBulk(
+      input: BulkArticleActionRequest,
+      options: { signal?: AbortSignal } = {}
+    ): Promise<BulkArticleActionResponse> {
+      const response = await request<Array<{
+        articleId: string;
+        eventId: string;
+        state: ArticleState;
+      }>>("/api/articles/actions/bulk", {
+        method: "POST",
+        body: JSON.stringify(input),
+        signal: options.signal
+      });
+      return {
+        data: response.data,
+        skipped: Array.isArray((response as { meta?: { skipped?: unknown } }).meta?.skipped)
+          ? (response as { meta: { skipped: BulkArticleActionResponse["skipped"] } }).meta.skipped
+          : []
+      };
     },
 
     postArticleActionKeepalive(articleId: string, input: ArticleActionRequest): void {
@@ -1692,10 +2231,23 @@ export const dibaoApi = createDibaoApi();
 
 export function userMessageForError(error: unknown, messages: ApiErrorMessages): string {
   if (error instanceof ApiRequestError) {
+    if (error.code === "DATABASE_BUSY") {
+      return messages.databaseBusy;
+    }
     return error.hasUserMessage && error.message ? error.message : messages.httpError(error.status);
   }
 
+  if (isAbortError(error)) {
+    return messages.requestTimeout;
+  }
+
   return messages.requestFailed;
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof DOMException !== "undefined" && error instanceof DOMException
+    ? error.name === "AbortError"
+    : error instanceof Error && error.name === "AbortError";
 }
 
 async function readJson(response: Response): Promise<unknown> {

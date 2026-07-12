@@ -39,6 +39,9 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
     await expect(page.getByText("E2E Article Alpha")).toBeVisible();
     await page.getByRole("button", { name: "添加此源" }).first().click();
 
+    await expect(page.getByRole("heading", { name: "每日简报" })).toBeVisible();
+    await page.getByRole("button", { name: "暂不启用" }).click();
+
     await expect(page.getByRole("heading", { name: "推荐能力" })).toBeVisible();
     await page.getByRole("button", { name: "跳过，使用基础排序" }).click();
 
@@ -202,6 +205,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
 
     await page.getByRole("link", { name: "设置" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "设置" })).toBeVisible();
+    await page.getByRole("tab", { name: "算法" }).click();
     await page.getByLabel("Base URL").fill(`${fixture.origin}/v1`);
     await page.getByLabel("模型").fill("e2e-embedding");
     await page.getByLabel("维度").fill("4");
@@ -224,8 +228,11 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
 
     await page.getByRole("link", { name: "订阅源" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "订阅源管理" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "导入、导出与刷新" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "订阅源" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "添加订阅源" })).toBeVisible();
+    await page.getByRole("button", { name: "添加订阅源" }).click();
     await expect(page.getByLabel("网站或 RSS / Atom URL")).toBeVisible();
+    await page.getByRole("dialog", { name: "添加订阅源" }).getByRole("button", { name: "取消" }).click();
     await expect(page.getByRole("heading", { name: "订阅源健康" })).toBeVisible();
     await expect(page.getByText("正常").first()).toBeVisible();
     await expect(page.getByRole("button", { name: "刷新全部" })).toBeVisible();
@@ -233,7 +240,7 @@ test("desktop MVP self-host smoke flow", async ({ page }) => {
 
     await page.getByRole("link", { name: "订阅源" }).click();
     await page.getByLabel("Feed URL").fill(`${fixture.origin}/feeds/broken.xml`);
-    await page.getByRole("button", { name: "保存" }).click();
+    await saveFeedAndWait(page);
     await page.getByRole("link", { name: "最新" }).click();
     await page.getByRole("button", { name: "打开来源" }).click();
     await page.getByTitle("刷新 E2E Fixture Feed").click();
@@ -270,7 +277,7 @@ test("desktop full content extraction can preview and backfill current feed item
     await expect(page.getByRole("heading", { level: 1, name: "订阅源管理" })).toBeVisible();
     await page.getByLabel("Feed URL").fill(`${fixture.origin}/feeds/main.xml`);
     await page.getByLabel("正文来源").selectOption("feed_only");
-    await page.getByRole("button", { name: "保存" }).click();
+    await saveFeedAndWait(page);
     await expect(page.getByLabel("正文来源")).toHaveValue("feed_only");
     await expect(page.getByRole("button", { name: "预览全文抓取" })).toBeVisible();
 
@@ -290,7 +297,7 @@ test("desktop full content extraction can preview and backfill current feed item
     await previewPage.close();
 
     await page.getByLabel("正文来源").selectOption("fetch_full_content");
-    await page.getByRole("button", { name: "保存" }).click();
+    await saveFeedAndWait(page);
     await expect(page.getByLabel("正文来源")).toHaveValue("fetch_full_content");
     await expect(page.getByRole("button", { name: "抓取当前 Feed 文章全文" })).toBeVisible();
     page.once("dialog", (dialog) => {
@@ -372,6 +379,16 @@ async function loginDesktop(page: import("@playwright/test").Page): Promise<void
   await page.getByRole("textbox", { name: "访问密码" }).fill(accessPassword);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("link", { name: "最新" })).toBeVisible();
+}
+
+async function saveFeedAndWait(page: import("@playwright/test").Page): Promise<void> {
+  const response = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "PATCH" &&
+      /\/api\/feeds\/[^/]+$/.test(new URL(candidate.url()).pathname)
+  );
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect((await response).status()).toBe(200);
 }
 
 async function openArticleFromSearch(

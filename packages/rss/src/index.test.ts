@@ -47,6 +47,61 @@ describe("rss package", () => {
     expect(feed.items[0].publishedAt).toBe(Date.parse("2026-05-14T08:00:00.000Z"));
   });
 
+  it("preserves code block line breaks in RSS content text", () => {
+    const feed = parseFeedXml(
+      `<?xml version="1.0"?>
+      <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+        <channel>
+          <title>Code Feed</title>
+          <link>https://example.com/</link>
+          <item>
+            <title>Code item</title>
+            <link>https://example.com/code</link>
+            <guid>code-guid</guid>
+            <content:encoded><![CDATA[
+              <p>Before code.</p>
+              <pre><code>const value = 1;
+  console.log(value);</code></pre>
+              <p>After code.</p>
+            ]]></content:encoded>
+          </item>
+        </channel>
+      </rss>`,
+      "https://example.com/feed.xml"
+    );
+
+    expect(feed.items[0].contentText).toContain("Before code.");
+    expect(feed.items[0].contentText).toContain("const value = 1;\n  console.log(value);");
+    expect(feed.items[0].contentText).toContain("After code.");
+  });
+
+  it("rejects non-http RSS site and item URLs while preserving safe relative item URLs", () => {
+    const feed = parseFeedXml(
+      `<?xml version="1.0"?>
+      <rss version="2.0">
+        <channel>
+          <title>Example RSS</title>
+          <link>javascript:alert(1)</link>
+          <item>
+            <title>Unsafe item</title>
+            <link>javascript:alert(1)</link>
+            <guid>unsafe-guid</guid>
+          </item>
+          <item>
+            <title>Relative item</title>
+            <link>/post/1</link>
+            <guid>relative-guid</guid>
+          </item>
+        </channel>
+      </rss>`,
+      "https://example.com/feed.xml"
+    );
+
+    expect(feed.siteUrl).toBeNull();
+    expect(feed.items[0].url.startsWith("https://example.com/feed.xml#item-")).toBe(true);
+    expect(feed.items[1].url).toBe("https://example.com/post/1");
+  });
+
   it("parses Atom feed entries", () => {
     const feed = parseFeedXml(
       `<feed xmlns="http://www.w3.org/2005/Atom">
@@ -71,6 +126,25 @@ describe("rss package", () => {
       author: "Ada",
       summary: "Entry summary"
     });
+  });
+
+  it("rejects non-http Atom links", () => {
+    const feed = parseFeedXml(
+      `<feed xmlns="http://www.w3.org/2005/Atom">
+        <title>Example Atom</title>
+        <link href="data:text/html,hello"/>
+        <entry>
+          <title>Atom entry</title>
+          <id>file:///etc/passwd</id>
+          <link rel="alternate" href="file:///etc/passwd"/>
+          <updated>2026-05-14T09:00:00.000Z</updated>
+        </entry>
+      </feed>`,
+      "https://example.com/atom.xml"
+    );
+
+    expect(feed.siteUrl).toBeNull();
+    expect(feed.items[0].url.startsWith("https://example.com/atom.xml#item-")).toBe(true);
   });
 
   it("parses OPML folders and assigns feeds to the nearest parent folder", () => {

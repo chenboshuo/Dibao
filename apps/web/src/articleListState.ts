@@ -1,7 +1,8 @@
 import type {
   ArticleInteractionStatus,
   ArticleListItem,
-  ArticleState
+  ArticleState,
+  ArticleView
 } from "./api.js";
 
 export function articleInteractionStatusForState(
@@ -77,6 +78,31 @@ export function unreadCountWithKnownLocalStates<T extends { id: string; state: A
       ? unreadCountAfterStateChange(count, article.state, knownState)
       : count;
   }, current);
+}
+
+export function shouldSkipPassiveIgnoreTelemetry(input: {
+  articleId: string;
+  interactionStatus: ArticleInteractionStatus;
+  isAlreadyIgnored: boolean;
+  isOpened: boolean;
+  selectedArticleId: string | null;
+}): boolean {
+  return (
+    input.selectedArticleId === input.articleId ||
+    input.isOpened ||
+    input.isAlreadyIgnored ||
+    input.interactionStatus !== "unseen"
+  );
+}
+
+export function isArticleListIgnoreTelemetryEnabled(input: {
+  articleView: ArticleView;
+  markScrolledArticlesIgnored: boolean;
+}): boolean {
+  return (
+    input.markScrolledArticlesIgnored &&
+    (input.articleView === "latest" || input.articleView === "recommended")
+  );
 }
 
 export function unreadCountAfterStateChange(
