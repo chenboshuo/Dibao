@@ -584,12 +584,6 @@ function mapProvider(row: EmbeddingProviderDbRow): EmbeddingProviderRow {
   };
 }
 
-function defaultTextMaxCharsForProvider(type: EmbeddingProviderRow["type"]): number {
-  return type === "ollama"
-    ? DEFAULT_OLLAMA_EMBEDDING_TEXT_MAX_CHARS
-    : DEFAULT_EMBEDDING_TEXT_MAX_CHARS;
-}
-
 function coverageRatio(coveredArticleCount: number, candidateCount: number): number {
   return candidateCount === 0 ? 0 : Math.min(1, coveredArticleCount / candidateCount);
 }
