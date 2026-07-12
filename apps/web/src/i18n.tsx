@@ -28,7 +28,6 @@ export const zhCN = {
     }
   },
   shell: {
-    kicker: "RSS Ingestion",
     pageTitle: "最新文章",
     pageTitles: {
       latest: "最新文章",
@@ -264,6 +263,11 @@ export const zhCN = {
     status: (feedCount: number, folderCount: number) =>
       `${feedCount} 个订阅源 · ${folderCount} 个分组`,
     na: "暂无",
+    tabs: {
+      label: "订阅源管理视图",
+      feeds: "订阅源管理",
+      folders: "订阅源分组管理"
+    },
     folders: {
       kicker: "Folders",
       title: "分组",
@@ -272,6 +276,7 @@ export const zhCN = {
       create: "创建",
       emptyTitle: "还没有分组",
       emptyBody: "创建分组后，可以把订阅源整理到一起。",
+      managementHint: "在这里维护分组名称，或直接查看某个分组下的文章。",
       renameLabel: (title: string) => `重命名 ${title}`,
       confirmDelete: "确认删除",
       deleteHint: "删除分组不会删除订阅源，订阅源会移动到未分组。"
@@ -339,6 +344,7 @@ export const zhCN = {
       saving: "保存中",
       cancel: "取消",
       rename: "重命名",
+      viewArticles: "查看文章",
       delete: "删除"
     },
     errors: {
@@ -1344,7 +1350,6 @@ export const enUS = {
     }
   },
   shell: {
-    kicker: "RSS feeds",
     pageTitle: "Latest",
     pageTitles: {
       latest: "Latest",
@@ -1580,6 +1585,11 @@ export const enUS = {
     status: (feedCount: number, folderCount: number) =>
       `${feedCount} ${feedCount === 1 ? "feed" : "feeds"} · ${folderCount} ${folderCount === 1 ? "folder" : "folders"}`,
     na: "None",
+    tabs: {
+      label: "Feed management views",
+      feeds: "Feed management",
+      folders: "Feed folder management"
+    },
     folders: {
       kicker: "Folders",
       title: "Folders",
@@ -1588,6 +1598,7 @@ export const enUS = {
       create: "Create",
       emptyTitle: "No folders yet",
       emptyBody: "Create folders to organize feeds together.",
+      managementHint: "Manage folder names here, or open articles from a folder directly.",
       renameLabel: (title: string) => `Rename ${title}`,
       confirmDelete: "Confirm delete",
       deleteHint: "Deleting a folder does not delete feeds. Its feeds move to Ungrouped."
@@ -1656,6 +1667,7 @@ export const enUS = {
       saving: "Saving",
       cancel: "Cancel",
       rename: "Rename",
+      viewArticles: "View articles",
       delete: "Delete"
     },
     errors: {
@@ -2651,7 +2663,6 @@ export const jaJP = {
     }
   },
   shell: {
-    kicker: "RSS Ingestion",
     pageTitle: "最新記事",
     pageTitles: {
       latest: "最新記事",
@@ -2887,6 +2898,11 @@ export const jaJP = {
     status: (feedCount: number, folderCount: number) =>
       `${feedCount} 件のフィード · ${folderCount} 件のフォルダー`,
     na: "なし",
+    tabs: {
+      label: "フィード管理ビュー",
+      feeds: "フィード管理",
+      folders: "フィードフォルダー管理"
+    },
     folders: {
       kicker: "Folders",
       title: "フォルダー",
@@ -2895,6 +2911,7 @@ export const jaJP = {
       create: "作成",
       emptyTitle: "フォルダーはまだありません",
       emptyBody: "フォルダーを作成すると、フィードをまとめて整理できます。",
+      managementHint: "ここでフォルダー名を管理し、フォルダー内の記事も直接開けます。",
       renameLabel: (title: string) => `${title} の名前を変更`,
       confirmDelete: "削除を確認",
       deleteHint: "フォルダーを削除してもフィードは削除されません。フィードは未分類へ移動します。"
@@ -2963,6 +2980,7 @@ export const jaJP = {
       saving: "保存中",
       cancel: "キャンセル",
       rename: "名前を変更",
+      viewArticles: "記事を見る",
       delete: "削除"
     },
     errors: {

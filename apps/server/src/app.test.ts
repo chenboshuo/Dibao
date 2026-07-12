@@ -3378,7 +3378,7 @@ describe("server API vertical slice", () => {
       db,
       logger: false,
       now: () => 1000,
-      embeddingFetcher: embeddingFetcherFixture(embeddingCalls, 3072)
+      embeddingFetcher: googleOpenAiCompatibleEmbeddingFetcherFixture(embeddingCalls)
     });
 
     try {
@@ -10186,6 +10186,49 @@ function embeddingErrorFetcher(status: number, payload: unknown): typeof fetch {
         "content-type": "application/json"
       }
     });
+}
+
+function googleOpenAiCompatibleEmbeddingFetcherFixture(
+  calls: Array<{
+    url: string;
+    authorization: string | null;
+    inputCount: number;
+    dimensions: number | null;
+  }>
+): typeof fetch {
+  return async (input, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as {
+      input?: unknown;
+      dimensions?: unknown;
+    };
+    const values = Array.isArray(body.input) ? body.input : [body.input];
+    const dimensions = typeof body.dimensions === "number" ? body.dimensions : 3072;
+    const headers = new Headers(init?.headers);
+    calls.push({
+      url: String(input),
+      authorization: headers.get("authorization"),
+      inputCount: values.length,
+      dimensions: typeof body.dimensions === "number" ? body.dimensions : null
+    });
+
+    return new Response(
+      JSON.stringify({
+        data: values.map((_, index) => ({
+          index,
+          embedding: Array.from(
+            { length: dimensions },
+            (_value, vectorIndex) => vectorIndex + 1
+          )
+        }))
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      }
+    );
+  };
 }
 
 function ollamaEmbeddingFetcherFixture(

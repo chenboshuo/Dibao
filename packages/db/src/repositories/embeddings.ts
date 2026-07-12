@@ -571,6 +571,12 @@ function baseProviderSelect(): string {
   `;
 }
 
+function defaultTextMaxCharsForProvider(type: EmbeddingProviderInput["type"]): number {
+  return type === "ollama"
+    ? DEFAULT_OLLAMA_EMBEDDING_TEXT_MAX_CHARS
+    : DEFAULT_EMBEDDING_TEXT_MAX_CHARS;
+}
+
 function mapProvider(row: EmbeddingProviderDbRow): EmbeddingProviderRow {
   return {
     ...row,
