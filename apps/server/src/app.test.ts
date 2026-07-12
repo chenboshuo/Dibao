@@ -70,7 +70,7 @@ describe("server API vertical slice", () => {
           database: "ok",
           fts: "ok",
           vectorStore: "ok",
-          version: "0.2.0"
+          version: "0.2.1"
         }
       });
     } finally {
@@ -2165,16 +2165,31 @@ describe("server API vertical slice", () => {
     }
   });
 
-  it("keeps a failed official Daily Brief plugin failed across catalog reconciliation", async () => {
+  it("recovers a transient failed official Daily Brief plugin across catalog reconciliation", async () => {
     const db = createEmptyDatabase();
     const plugins = new SqlitePluginRepository(db);
-    const app = buildServer({ db, logger: false });
+    const jobs = new SqliteJobRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 1000 });
 
     try {
       const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
       expect(catalog.statusCode, catalog.body).toBe(200);
 
       plugins.setStatus("app.dibao.daily-brief", "failed", "Plugin host exited", 1000);
+      const deliveryJob = jobs.enqueue({
+        id: "job_daily_brief_delivery",
+        type: "plugin:app.dibao.daily-brief:__delivery",
+        runAfter: 60 * 60 * 1000,
+        now: 1000
+      });
+      const taskJob = jobs.enqueue({
+        id: "job_daily_brief_refresh",
+        type: "plugin:app.dibao.daily-brief:refresh",
+        runAfter: 60 * 60 * 1000,
+        now: 1000
+      });
+      jobs.defer(deliveryJob.id, "Plugin paused: app.dibao.daily-brief is failed", deliveryJob.runAfter, 1000);
+      jobs.defer(taskJob.id, "Plugin paused: app.dibao.daily-brief is failed", taskJob.runAfter, 1000);
 
       const reconciled = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
       expect(reconciled.statusCode, reconciled.body).toBe(200);
@@ -2183,12 +2198,63 @@ describe("server API vertical slice", () => {
         .data.find((plugin: { id: string }) => plugin.id === "app.dibao.daily-brief");
       expect(dailyBrief).toMatchObject({
         id: "app.dibao.daily-brief",
-        status: "failed",
-        lastError: "Plugin host exited"
+        status: "enabled",
+        lastError: null
       });
       expect(plugins.findInstall("app.dibao.daily-brief")).toMatchObject({
-        status: "failed",
-        lastError: "Plugin host exited"
+        status: "enabled",
+        lastError: null,
+        disabledAt: null
+      });
+      expect(plugins.getKv("app.dibao.daily-brief", "runtime:lastError")).toMatchObject({
+        scope: "catalog:reconcile",
+        error: "Plugin host exited"
+      });
+      expect(jobs.findById(deliveryJob.id)).toMatchObject({
+        status: "queued",
+        runAfter: 1000,
+        error: "Official plugin recovered from transient runtime failure"
+      });
+      expect(jobs.findById(taskJob.id)).toMatchObject({
+        status: "queued",
+        runAfter: 1000,
+        error: "Official plugin recovered from transient runtime failure"
+      });
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("requeues stale paused official plugin jobs when the plugin is already enabled", async () => {
+    const db = createEmptyDatabase();
+    const plugins = new SqlitePluginRepository(db);
+    const jobs = new SqliteJobRepository(db);
+    const app = buildServer({ db, logger: false, now: () => 2000 });
+
+    try {
+      const catalog = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(catalog.statusCode, catalog.body).toBe(200);
+
+      plugins.setStatus("app.dibao.webhook", "enabled", null, 1000);
+      const deliveryJob = jobs.enqueue({
+        id: "job_webhook_delivery",
+        type: "plugin:app.dibao.webhook:__delivery",
+        runAfter: 60 * 60 * 1000,
+        now: 1000
+      });
+      jobs.defer(deliveryJob.id, "Plugin paused: app.dibao.webhook is failed", deliveryJob.runAfter, 1000);
+
+      const reconciled = await app.inject({ method: "GET", url: "/api/plugins/catalog" });
+      expect(reconciled.statusCode, reconciled.body).toBe(200);
+      expect(plugins.findInstall("app.dibao.webhook")).toMatchObject({
+        status: "enabled",
+        disabledAt: null
+      });
+      expect(jobs.findById(deliveryJob.id)).toMatchObject({
+        status: "queued",
+        runAfter: 2000,
+        error: "Official plugin recovered from transient runtime failure"
       });
     } finally {
       await app.close();
@@ -5113,7 +5179,7 @@ describe("server API vertical slice", () => {
       expect(first.statusCode, first.body).toBe(200);
       expect(first.json()).toMatchObject({
         data: {
-          currentVersion: "0.2.0",
+          currentVersion: "0.2.1",
           latestVersion: "v0.2.0",
           releaseUrl: "https://github.com/Pls-1q43/Dibao/releases/tag/v0.2.0",
           updateAvailable: false,
@@ -8880,6 +8946,47 @@ describe("server API vertical slice", () => {
         "impression",
         "open"
       ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
+  it("records passive impressions in bulk", async () => {
+    const db = createFixtureDatabase();
+    const app = buildServer({ db, logger: false, now: () => 5400 });
+
+    try {
+      const response = await postJson(app, "/api/articles/actions/bulk", {
+        actions: [
+          {
+            articleId: "article_recommended",
+            type: "impression",
+            metadata: {
+              reason: "scrolled_past_unopened",
+              view: "recommended"
+            }
+          },
+          {
+            articleId: "article_recent",
+            type: "impression",
+            metadata: {
+              reason: "scrolled_past_unopened",
+              view: "latest"
+            }
+          }
+        ]
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toHaveLength(2);
+      expect(response.json().data.map((item: { articleId: string }) => item.articleId)).toEqual([
+        "article_recommended",
+        "article_recent"
+      ]);
+      expect(response.json().meta.skipped).toEqual([]);
+      expect(listBehaviorEventTypes(db, "article_recommended")).toEqual(["impression"]);
+      expect(listBehaviorEventTypes(db, "article_recent")).toEqual(["impression"]);
     } finally {
       await app.close();
       db.close();

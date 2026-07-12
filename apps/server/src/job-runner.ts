@@ -54,6 +54,7 @@ export class JobRunner {
   private readonly retryDelayMs: number;
   private readonly maxJobsPerDrain: number;
   private interval: ReturnType<typeof setInterval> | null = null;
+  private followUpTimer: ReturnType<typeof setTimeout> | null = null;
   private isDraining = false;
 
   constructor(private readonly options: JobRunnerOptions) {
@@ -72,6 +73,7 @@ export class JobRunner {
     }
 
     this.recoverStaleRunningJobs();
+    this.scheduleDrain(0);
     this.interval = setInterval(() => {
       void this.drainDue().catch((error) => this.options.onError?.(error));
     }, this.pollIntervalMs);
@@ -84,6 +86,10 @@ export class JobRunner {
 
     clearInterval(this.interval);
     this.interval = null;
+    if (this.followUpTimer) {
+      clearTimeout(this.followUpTimer);
+      this.followUpTimer = null;
+    }
   }
 
   recoverStaleRunningJobs(): number {
@@ -105,6 +111,14 @@ export class JobRunner {
       }
     } finally {
       this.isDraining = false;
+    }
+
+    if (
+      this.interval &&
+      completed >= this.maxJobsPerDrain &&
+      Number.isFinite(this.maxJobsPerDrain)
+    ) {
+      this.scheduleDrain(0);
     }
 
     return completed;
@@ -215,6 +229,17 @@ export class JobRunner {
 
   private emit(event: JobRunnerEvent): void {
     this.options.onEvent?.(event);
+  }
+
+  private scheduleDrain(delayMs: number): void {
+    if (this.followUpTimer) {
+      return;
+    }
+
+    this.followUpTimer = setTimeout(() => {
+      this.followUpTimer = null;
+      void this.drainDue().catch((error) => this.options.onError?.(error));
+    }, Math.max(0, delayMs));
   }
 }
 

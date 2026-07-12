@@ -151,6 +151,11 @@ import {
   INTEREST_FAMILY_REBUILD_JOB_TYPE,
   type RecommendationClusterFamily
 } from "./interest-family-service.js";
+import {
+  jobQueueWakeSignalPath,
+  watchJobQueueWakeSignal,
+  writeJobQueueWakeSignal
+} from "./job-queue-wake-signal.js";
 import { JobRunner, type JobRunnerEvent } from "./job-runner.js";
 import {
   DEFAULT_JOB_HISTORY_CLEANUP_INTERVAL_MS,
@@ -368,6 +373,10 @@ type ArticleActionBody = {
   metadata?: unknown;
 };
 
+type BulkArticleActionBody = {
+  actions?: unknown;
+};
+
 type ReaderCommandBody = {
   scope?: unknown;
 };
@@ -472,6 +481,10 @@ type BuildServerOptions = {
   rankingTargetChunkMs?: number;
 };
 
+export type DibaoServerInstance = FastifyInstance & {
+  drainBackgroundJobsNow?: () => Promise<number>;
+};
+
 export function buildServer(options: BuildServerOptions = {}) {
   const configuredDatabasePath = options.databasePath
     ? resolveDatabasePath(options.databasePath)
@@ -503,6 +516,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     options.foregroundActivityWriteThrottleMs ??
     DEFAULT_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS;
   const foregroundSignalPath = foregroundActivitySignalPath(configuredDatabasePath);
+  const jobWakeSignalPath = jobQueueWakeSignalPath(configuredDatabasePath);
   const foregroundQuietWindowMs = Math.max(0, options.foregroundQuietWindowMs ?? 0);
   const backgroundStartupDelayMs = Math.max(0, options.backgroundStartupDelayMs ?? 0);
   const backgroundInitialTickDelayMs = backgroundJobs
@@ -983,6 +997,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   let maintenanceTickTimer: NodeJS.Timeout | null = null;
   let maintenanceInitialTickTimer: NodeJS.Timeout | null = null;
   let backgroundStartupTimer: NodeJS.Timeout | null = null;
+  let stopJobWakeWatcher: (() => void) | null = null;
   let backgroundServicesStarted = false;
 
   const jobRunner = new JobRunner({
@@ -1084,6 +1099,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     onError: (error) => app.log.error(error)
   });
   drainDueJobsForPlugins = async () => await jobRunner.drainDue();
+  (app as DibaoServerInstance).drainBackgroundJobsNow = async () => await jobRunner.drainDue();
   const feedRefreshScheduler = new FeedRefreshScheduler({
     refreshJobs: feedRefreshJobService,
     runner: jobRunner,
@@ -1141,6 +1157,15 @@ export function buildServer(options: BuildServerOptions = {}) {
   function drainBackgroundJobs(): void {
     if (backgroundJobs) {
       void jobRunner.drainDue().catch((error) => app.log.error(error));
+      return;
+    }
+
+    if (jobWakeSignalPath) {
+      writeJobQueueWakeSignal(
+        jobWakeSignalPath,
+        { now: options.now?.() ?? Date.now() },
+        (error) => app.log.warn({ error }, "job.queue_wake.write_failed")
+      );
     }
   }
 
@@ -1366,6 +1391,15 @@ export function buildServer(options: BuildServerOptions = {}) {
       );
     }
     jobRunner.start();
+    if (jobWakeSignalPath && !stopJobWakeWatcher) {
+      stopJobWakeWatcher = watchJobQueueWakeSignal(
+        jobWakeSignalPath,
+        () => {
+          void jobRunner.drainDue().catch((error) => app.log.error(error));
+        },
+        (error) => app.log.warn({ error }, "job.queue_wake.watch_failed")
+      );
+    }
     feedRefreshScheduler.start();
     retentionCleanupScheduler.start();
     jobHistoryCleanupScheduler.start();
@@ -1433,6 +1467,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     retentionCleanupScheduler.stop();
     feedRefreshScheduler.stop();
     jobRunner.stop();
+    if (stopJobWakeWatcher) {
+      stopJobWakeWatcher();
+      stopJobWakeWatcher = null;
+    }
     pluginService.dispose();
     if (maintenanceTickTimer) {
       clearInterval(maintenanceTickTimer);
@@ -2877,6 +2915,65 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
     }
   );
+
+  app.post<{ Body: BulkArticleActionBody }>("/api/articles/actions/bulk", async (request, reply) => {
+    const parsed = parseBulkArticleActionBody(request.body);
+    if (!parsed.ok) {
+      return sendApiError(reply, 400, "VALIDATION_ERROR", parsed.message, parsed.details);
+    }
+
+    const startedAt = performance.now();
+    const data: Array<{ articleId: string; eventId: string; state: unknown }> = [];
+    const skipped: Array<{ articleId: string; code: string; message: string }> = [];
+    for (const action of parsed.actions) {
+      try {
+        const result = articleActionService.record({
+          articleId: action.articleId,
+          ...action.input
+        });
+        invalidateArticleExplanationCache(action.articleId);
+        data.push({
+          articleId: action.articleId,
+          eventId: result.eventId,
+          state: result.state
+        });
+        void pluginService.emitHook("article.actionRecorded", {
+          articleId: action.articleId,
+          eventId: result.eventId,
+          action: action.input.type,
+          state: result.state
+        }).catch((error) => app.log.error(error));
+      } catch (error) {
+        if (error instanceof ArticleActionServiceError && error.code === "NOT_FOUND") {
+          skipped.push({
+            articleId: action.articleId,
+            code: error.code,
+            message: error.message
+          });
+          continue;
+        }
+        return sendArticleActionError(reply, error);
+      }
+    }
+    app.log.info(
+      {
+        route: "/api/articles/actions/bulk",
+        action: "impression",
+        requested: parsed.actions.length,
+        recorded: data.length,
+        skipped: skipped.length,
+        durationMs: roundDuration(performance.now() - startedAt)
+      },
+      "performance.route"
+    );
+
+    return {
+      data,
+      meta: {
+        skipped
+      }
+    };
+  });
 
   app.get("/api/plugins/ui.css", async (_request, reply) => {
     return reply
@@ -5845,6 +5942,83 @@ function parseArticleActionBody(body: ArticleActionBody | undefined):
       ...(metadata !== undefined ? { metadata } : {})
     }
   };
+}
+
+function parseBulkArticleActionBody(body: BulkArticleActionBody | undefined):
+  | {
+      ok: true;
+      actions: Array<{
+        articleId: string;
+        input: {
+          type: "impression";
+          metadata?: Record<string, unknown>;
+        };
+      }>;
+    }
+  | { ok: false; message: string; details?: unknown } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "request body must be an object" };
+  }
+  if (!Array.isArray(body.actions)) {
+    return { ok: false, message: "actions must be an array" };
+  }
+  if (body.actions.length === 0 || body.actions.length > 50) {
+    return {
+      ok: false,
+      message: "actions must contain between 1 and 50 items",
+      details: { fields: ["actions"], min: 1, max: 50 }
+    };
+  }
+
+  const actions: Array<{
+    articleId: string;
+    input: {
+      type: "impression";
+      metadata?: Record<string, unknown>;
+    };
+  }> = [];
+  for (const [index, rawAction] of body.actions.entries()) {
+    if (!rawAction || typeof rawAction !== "object" || Array.isArray(rawAction)) {
+      return {
+        ok: false,
+        message: "action must be an object",
+        details: { index }
+      };
+    }
+    const articleId = typeof (rawAction as { articleId?: unknown }).articleId === "string"
+      ? (rawAction as { articleId: string }).articleId.trim()
+      : "";
+    if (!articleId) {
+      return {
+        ok: false,
+        message: "articleId is required",
+        details: { index, fields: ["articleId"] }
+      };
+    }
+    const parsed = parseArticleActionBody(rawAction as ArticleActionBody);
+    if (!parsed.ok) {
+      return {
+        ...parsed,
+        details: { index, ...(typeof parsed.details === "object" && parsed.details !== null ? parsed.details : {}) }
+      };
+    }
+    if (parsed.input.type !== "impression") {
+      return {
+        ok: false,
+        message: "bulk article actions only support impression",
+        details: { index, fields: ["type"] }
+      };
+    }
+    actions.push({
+      articleId,
+      input: {
+        type: "impression",
+        ...(parsed.input.metadata !== undefined ? { metadata: parsed.input.metadata } : {})
+      }
+    });
+  }
+
+  return { ok: true, actions };
 }
 
 function parseArticleView(value: string | undefined): ArticleListView | undefined | null {

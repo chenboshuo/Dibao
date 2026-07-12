@@ -75,7 +75,10 @@ const PLUGIN_HOOK_TIMEOUT_MS = 2_000;
 const PLUGIN_ACTIVATION_TIMEOUT_MS = 10_000;
 const PLUGIN_API_TIMEOUT_MS = 30_000;
 const PLUGIN_TASK_PAUSED_RETRY_MS = 6 * 60 * 60 * 1000;
+const PLUGIN_TRANSIENT_RETRY_MS = 60_000;
+const PLUGIN_RUNTIME_STOP_GRACE_MS = 2_000;
 const PLUGIN_DELIVERY_TASK_ID = "__delivery";
+const PLUGIN_RUNTIME_LAST_ERROR_KEY = "runtime:lastError";
 const PLUGIN_OUTBOUND_TIMEOUT_MS = 10_000;
 const PLUGIN_OUTBOUND_MAX_REQUEST_BYTES = 256 * 1024;
 const PLUGIN_OUTBOUND_MAX_RESPONSE_BYTES = 512 * 1024;
@@ -295,7 +298,7 @@ type PluginRuntime = {
   apiPost: Set<string>;
   pending: Map<string, PluginRuntimePending>;
   invoke: (kind: "hook" | "task" | "api", name: string, input: unknown, timeoutMs?: number) => Promise<unknown>;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 };
 
 type PluginApiInput = {
@@ -442,6 +445,7 @@ export class PluginService {
   private readonly secretCodec: PluginSecretCodec;
   private readonly secretKeyStatus: { source: "environment" | "fallback_file" | "ephemeral"; persistent: boolean };
   private readonly runtimes = new Map<string, Promise<PluginRuntime>>();
+  private readonly disposingRuntimes = new Map<string, Promise<void>>();
   readonly officialPluginsDir: string;
   readonly pluginDataDir: string;
   readonly installedPluginsDir: string;
@@ -540,7 +544,13 @@ export class PluginService {
       await this.ensureRuntime(this.requireInstall(pluginId));
       return this.requireListItem(pluginId);
     } catch (error) {
-      this.options.plugins.setStatus(pluginId, "failed", errorMessage(error), this.now());
+      const message = errorMessage(error);
+      if (install.official && isTransientPluginRuntimeError(message)) {
+        this.recordOfficialPluginRuntimeError(pluginId, "enable", message);
+        this.disposeRuntime(pluginId);
+        return this.requireListItem(pluginId);
+      }
+      this.options.plugins.setStatus(pluginId, "failed", message, this.now());
       this.disposeRuntime(pluginId);
       throw error;
     }
@@ -563,7 +573,7 @@ export class PluginService {
         );
       } catch (error) {
         const message = errorMessage(error);
-        if (install.official && isTransientPluginInvocationError(message)) {
+        if (install.official && isTransientPluginRuntimeError(message)) {
           const failedAt = this.now();
           this.options.plugins.setKv(
             install.id,
@@ -571,6 +581,7 @@ export class PluginService {
             { hook, failedAt, error: redactText(message) },
             failedAt
           );
+          this.recordOfficialPluginRuntimeError(install.id, `hook:${hook}`, message, failedAt);
           this.disposeRuntime(install.id);
           continue;
         }
@@ -611,11 +622,18 @@ export class PluginService {
   getHealth(pluginId: string): Record<string, unknown> {
     const install = this.requireInstall(pluginId);
     const manifest = parseStoredManifest(install);
+    const runtimeLastError = this.options.plugins.getKv<Record<string, unknown>>(
+      pluginId,
+      PLUGIN_RUNTIME_LAST_ERROR_KEY
+    );
     return {
       pluginId,
       status: install.status,
       compatible: isDibaoVersionCompatible(this.options.dibaoVersion, manifest.dibao).ok,
       lastError: install.lastError,
+      runtimeStatus: runtimeLastError ? "degraded" : "ok",
+      runtimeLastError: stringValueOrNull(runtimeLastError?.error) ?? null,
+      runtimeLastErrorAt: numberValueOrNull(runtimeLastError?.failedAt),
       capabilities: manifest.capabilities,
       secretKey: this.secretKeyStatus,
       schedules: this.options.plugins.listSchedules(pluginId),
@@ -691,10 +709,19 @@ export class PluginService {
     try {
       runtime = await this.ensureRuntime(install);
     } catch (error) {
-      this.options.plugins.setStatus(parsed.pluginId, "failed", errorMessage(error), this.now());
+      const message = errorMessage(error);
+      if (install.official && isTransientPluginRuntimeError(message)) {
+        this.recordOfficialPluginRuntimeError(parsed.pluginId, `task:${parsed.taskId}`, message);
+        this.disposeRuntime(parsed.pluginId);
+        throw new DeferredJobRun(
+          `Plugin runtime unavailable: ${redactText(message)}`,
+          this.now() + PLUGIN_TRANSIENT_RETRY_MS
+        );
+      }
+      this.options.plugins.setStatus(parsed.pluginId, "failed", message, this.now());
       this.disposeRuntime(parsed.pluginId);
       throw new DeferredJobRun(
-        `Plugin runtime unavailable: ${redactText(errorMessage(error))}`,
+        `Plugin runtime unavailable: ${redactText(message)}`,
         this.now() + PLUGIN_TASK_PAUSED_RETRY_MS
       );
     }
@@ -713,6 +740,15 @@ export class PluginService {
         finishedAt: this.now()
       });
     } catch (error) {
+      const message = errorMessage(error);
+      if (install.official && isTransientPluginRuntimeError(message)) {
+        this.recordOfficialPluginRuntimeError(parsed.pluginId, `task:${parsed.taskId}`, message);
+        this.disposeRuntime(parsed.pluginId);
+        throw new DeferredJobRun(
+          `Plugin runtime unavailable: ${redactText(message)}`,
+          this.now() + PLUGIN_TRANSIENT_RETRY_MS
+        );
+      }
       void this.emitHook("plugin.taskFailed", {
         pluginId: parsed.pluginId,
         taskId: parsed.taskId,
@@ -859,8 +895,14 @@ export class PluginService {
         const manifest = parsePluginManifest(JSON.parse(readFileSync(manifestPath, "utf8")));
         const compatibility = isDibaoVersionCompatible(this.options.dibaoVersion, manifest.dibao);
         const existing = this.options.plugins.findInstall(manifest.id);
+        const existingTransientFailed =
+          existing?.status === "failed" &&
+          typeof existing.lastError === "string" &&
+          isTransientPluginRuntimeError(existing.lastError);
         const status = compatibility.ok
-          ? existing?.status === "enabled" || existing?.status === "disabled" || existing?.status === "failed"
+          ? existingTransientFailed
+            ? "enabled"
+            : existing?.status === "enabled" || existing?.status === "disabled" || existing?.status === "failed"
             ? existing.status
             : "installed"
           : "incompatible";
@@ -879,6 +921,12 @@ export class PluginService {
           now: this.now()
         });
         this.options.plugins.grantCapabilities(manifest.id, manifest.capabilities, this.now());
+        if (existingTransientFailed && typeof existing.lastError === "string") {
+          this.recordOfficialPluginRuntimeError(manifest.id, "catalog:reconcile", existing.lastError);
+        }
+        if (status === "enabled") {
+          this.recoverPausedOfficialPluginJobs(manifest.id);
+        }
       } catch {
         // A broken official plugin must not prevent the app from booting.
       }
@@ -1002,6 +1050,14 @@ export class PluginService {
     if (existing) {
       return existing;
     }
+    const disposing = this.disposingRuntimes.get(install.id);
+    if (disposing) {
+      await disposing.catch(() => undefined);
+      const afterDispose = this.runtimes.get(install.id);
+      if (afterDispose) {
+        return afterDispose;
+      }
+    }
     const runtimePromise = this.activateRuntime(install);
     this.runtimes.set(install.id, runtimePromise);
     return runtimePromise;
@@ -1054,12 +1110,12 @@ export class PluginService {
           }
         });
       },
-      dispose: () => {
+      dispose: async () => {
         runtime.disposed = true;
         const error = new PluginServiceError(503, "PLUGIN_RUNTIME_UNAVAILABLE", "Plugin host stopped");
         rejectPendingPluginCalls(pending, error);
         if (child && !child.killed) {
-          child.kill();
+          await terminatePluginChild(child);
         }
       }
     };
@@ -1168,6 +1224,10 @@ export class PluginService {
         }
         const current = this.options.plugins.findInstall(install.id);
         if (current?.status === "enabled") {
+          if (install.official && isTransientPluginRuntimeError(error.message)) {
+            this.recordOfficialPluginRuntimeError(install.id, "runtime:exit", error.message);
+            return;
+          }
           this.options.plugins.setStatus(install.id, "failed", error.message, this.now());
         }
       });
@@ -1180,9 +1240,43 @@ export class PluginService {
     if (!existing) {
       return;
     }
-    void existing.then((runtime) => runtime.dispose()).catch(() => {
-      // Activation failures already clean up their child process.
-    });
+    const disposing = existing
+      .then((runtime) => runtime.dispose())
+      .catch(() => {
+        // Activation failures already clean up their child process.
+      })
+      .finally(() => {
+        if (this.disposingRuntimes.get(pluginId) === disposing) {
+          this.disposingRuntimes.delete(pluginId);
+        }
+      });
+    this.disposingRuntimes.set(pluginId, disposing);
+  }
+
+  private recordOfficialPluginRuntimeError(
+    pluginId: string,
+    scope: string,
+    message: string,
+    failedAt = this.now()
+  ): void {
+    this.options.plugins.setKv(
+      pluginId,
+      PLUGIN_RUNTIME_LAST_ERROR_KEY,
+      {
+        scope,
+        failedAt,
+        error: redactText(message)
+      },
+      failedAt
+    );
+  }
+
+  private recoverPausedOfficialPluginJobs(pluginId: string): void {
+    for (const job of this.options.jobs.listOpenByTypePrefix(`plugin:${pluginId}:`)) {
+      if (job.error?.includes(`Plugin paused: ${pluginId} is failed`)) {
+        this.options.jobs.defer(job.id, "Official plugin recovered from transient runtime failure", this.now(), this.now());
+      }
+    }
   }
 
   private registerPluginContribution(
@@ -2658,6 +2752,14 @@ function stringOrNull(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
+function stringValueOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function numberValueOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function isGitHubUrl(url: string): boolean {
   try {
     return new URL(url).hostname.toLowerCase().endsWith("github.com");
@@ -3299,9 +3401,11 @@ function redactText(value: string): string {
   return value.replace(/(authorization|api[-_]?key|token|secret|signature)(["'\s:=]+)([^"',\s]+)/giu, "$1$2[redacted]");
 }
 
-function isTransientPluginInvocationError(message: string): boolean {
+function isTransientPluginRuntimeError(message: string): boolean {
   return (
     /\bPlugin (?:hook|host call) timed out\b/u.test(message) ||
+    message === "Plugin activation timed out" ||
+    message.startsWith("Plugin host exited") ||
     message === "Plugin host stopped" ||
     message === "Plugin host is not running" ||
     message.startsWith("Plugin host is not accepting messages:")
@@ -3570,6 +3674,32 @@ function pluginIgnoredAtForState(row: PluginArticleStateDbRow): number | null {
 
 function isTerminalDeliveryStatus(status: PluginDeliveryStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+async function terminatePluginChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null || child.killed) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null && !child.killed) {
+        child.kill("SIGKILL");
+      }
+      finish();
+    }, PLUGIN_RUNTIME_STOP_GRACE_MS);
+    child.once("exit", finish);
+    child.kill();
+  });
 }
 
 async function sleep(ms: number): Promise<void> {

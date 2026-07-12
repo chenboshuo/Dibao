@@ -141,7 +141,8 @@ const LazySetupProviderPanel = lazy(() =>
   import("./setup/SetupProviderPanel.js").then((module) => ({ default: module.SetupProviderPanel }))
 );
 
-const IGNORE_TELEMETRY_MAX_IN_FLIGHT = 3;
+const IGNORE_TELEMETRY_BATCH_SIZE = 50;
+const IGNORE_TELEMETRY_FLUSH_DELAY_MS = 250;
 const IGNORE_TELEMETRY_TIMEOUT_MS = 8_000;
 const ARTICLE_LIST_REQUEST_TIMEOUT_MS = 10_000;
 const ARTICLE_LIST_FAILURE_TIMEOUT_MS = ARTICLE_LIST_REQUEST_TIMEOUT_MS * 3;
@@ -388,6 +389,7 @@ export function App() {
   const ignoredArticleIds = useRef(new Set<string>());
   const ignoredArticleQueue = useRef<IgnoredArticleQueueItem[]>([]);
   const ignoredArticleInFlightIds = useRef(new Set<string>());
+  const ignoredArticleFlushTimer = useRef<number | null>(null);
   const selectedArticleIdRef = useRef<string | null>(selectedArticleId);
   const articleStateById = useRef(new Map<string, ArticleState>(initialArticleStateOverlay.states));
   const locallyUpdatedArticleIds = useRef(
@@ -681,6 +683,10 @@ export function App() {
     ignoredArticleIds.current.clear();
     ignoredArticleQueue.current = [];
     ignoredArticleInFlightIds.current.clear();
+    if (ignoredArticleFlushTimer.current !== null) {
+      window.clearTimeout(ignoredArticleFlushTimer.current);
+      ignoredArticleFlushTimer.current = null;
+    }
     articleRequestVersion.current += 1;
   }, [setLocale]);
 
@@ -1105,7 +1111,6 @@ export function App() {
     setArticleLoadingNotice(null);
     setLoadMoreError(null);
     setNextArticleCursor(null);
-    setArticles([]);
     if (view !== "recommended" && appPage.type !== "algorithm-transparency") {
       setRecommendationStatus(null);
       setIsRecommendationStatusLoading(false);
@@ -1204,9 +1209,6 @@ export function App() {
       }
       setArticleLoadingNotice(null);
       setArticleError(userMessageForError(error, t.errors.api));
-      setArticles([]);
-      setUnreadCount(0);
-      clearLocalArticleStates();
       setNextArticleCursor(null);
     } finally {
       if (requestVersion === articleRequestVersion.current) {
@@ -1223,7 +1225,6 @@ export function App() {
     setArticleLoadingNotice(null);
     setLoadMoreError(null);
     setNextArticleCursor(null);
-    setArticles([]);
     setDetailError(null);
     setExplanationError(null);
     setRecommendationStatus(null);
@@ -1319,9 +1320,6 @@ export function App() {
       }
       setArticleLoadingNotice(null);
       setArticleError(userMessageForError(error, t.errors.api));
-      setArticles([]);
-      setUnreadCount(0);
-      clearLocalArticleStates();
       setNextArticleCursor(null);
     } finally {
       if (requestVersion === articleRequestVersion.current) {
@@ -1557,9 +1555,6 @@ export function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          if (!listArticle) {
-            setArticleDetail(null);
-          }
           setDetailError(userMessageForError(error, t.errors.api));
         }
       } finally {
@@ -2548,46 +2543,61 @@ export function App() {
       state,
       view: currentArticleViewRef.current
     });
-    void drainIgnoredArticleQueue();
+    scheduleIgnoredArticleQueueDrain();
+  }
+
+  function scheduleIgnoredArticleQueueDrain() {
+    if (ignoredArticleFlushTimer.current !== null || ignoredArticleInFlightIds.current.size > 0) {
+      return;
+    }
+    ignoredArticleFlushTimer.current = window.setTimeout(() => {
+      ignoredArticleFlushTimer.current = null;
+      void drainIgnoredArticleQueue();
+    }, IGNORE_TELEMETRY_FLUSH_DELAY_MS);
   }
 
   function drainIgnoredArticleQueue() {
-    while (
-      ignoredArticleInFlightIds.current.size < IGNORE_TELEMETRY_MAX_IN_FLIGHT &&
-      ignoredArticleQueue.current.length > 0
-    ) {
+    if (ignoredArticleInFlightIds.current.size > 0 || ignoredArticleQueue.current.length === 0) {
+      return;
+    }
+    const batch: IgnoredArticleQueueItem[] = [];
+    while (batch.length < IGNORE_TELEMETRY_BATCH_SIZE && ignoredArticleQueue.current.length > 0) {
       const item = ignoredArticleQueue.current.shift();
       if (!item) {
         continue;
       }
+      const liveState =
+        articleStateById.current.get(item.articleId) ??
+        articlesRef.current.find((candidate) => candidate.id === item.articleId)?.state ??
+        item.state;
+      const interactionStatus = articleInteractionStatusForState(liveState);
+      if (
+        shouldSkipPassiveIgnoreTelemetry({
+          articleId: item.articleId,
+          interactionStatus,
+          isAlreadyIgnored: ignoredArticleIds.current.has(item.articleId),
+          isOpened: openedArticleIds.current.has(item.articleId),
+          selectedArticleId: selectedArticleIdRef.current
+        })
+      ) {
+        continue;
+      }
       ignoredArticleInFlightIds.current.add(item.articleId);
-      void postIgnoredArticle(item).finally(() => {
-        ignoredArticleInFlightIds.current.delete(item.articleId);
-        drainIgnoredArticleQueue();
-      });
+      ignoredArticleIds.current.add(item.articleId);
+      batch.push(item);
     }
-  }
-
-  async function postIgnoredArticle(item: IgnoredArticleQueueItem) {
-    const liveState =
-      articleStateById.current.get(item.articleId) ??
-      articlesRef.current.find((candidate) => candidate.id === item.articleId)?.state ??
-      item.state;
-    const interactionStatus = articleInteractionStatusForState(liveState);
-
-    if (
-      shouldSkipPassiveIgnoreTelemetry({
-        articleId: item.articleId,
-        interactionStatus,
-        isAlreadyIgnored: ignoredArticleIds.current.has(item.articleId),
-        isOpened: openedArticleIds.current.has(item.articleId),
-        selectedArticleId: selectedArticleIdRef.current
-      })
-    ) {
+    if (batch.length === 0) {
       return;
     }
+    void postIgnoredArticles(batch).finally(() => {
+      for (const item of batch) {
+        ignoredArticleInFlightIds.current.delete(item.articleId);
+      }
+      scheduleIgnoredArticleQueueDrain();
+    });
+  }
 
-    ignoredArticleIds.current.add(item.articleId);
+  async function postIgnoredArticles(batch: IgnoredArticleQueueItem[]) {
     const abortController =
       typeof AbortController === "undefined" ? null : new AbortController();
     const timeout =
@@ -2596,25 +2606,31 @@ export function App() {
         : null;
 
     try {
-      const result = await dibaoApi.postArticleAction(
-        item.articleId,
+      const result = await dibaoApi.postArticleActionsBulk(
         {
-          type: "impression",
-          metadata: {
-            reason: "scrolled_past_unopened",
-            view: item.view
-          }
+          actions: batch.map((item) => ({
+            articleId: item.articleId,
+            type: "impression",
+            metadata: {
+              reason: "scrolled_past_unopened",
+              view: item.view
+            }
+          }))
         },
         abortController ? { signal: abortController.signal } : undefined
       );
-      if (
-        selectedArticleIdRef.current !== item.articleId &&
-        !openedArticleIds.current.has(item.articleId)
-      ) {
-        applyArticleState(item.articleId, result.state);
+      for (const item of result.data) {
+        if (
+          selectedArticleIdRef.current !== item.articleId &&
+          !openedArticleIds.current.has(item.articleId)
+        ) {
+          applyArticleState(item.articleId, item.state);
+        }
       }
     } catch {
-      ignoredArticleIds.current.delete(item.articleId);
+      for (const item of batch) {
+        ignoredArticleIds.current.delete(item.articleId);
+      }
       // Passive list telemetry should not interrupt browsing.
     } finally {
       if (timeout !== null) {

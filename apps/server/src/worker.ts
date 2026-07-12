@@ -1,4 +1,4 @@
-import { buildServer } from "./app.js";
+import { buildServer, type DibaoServerInstance } from "./app.js";
 import {
   DEFAULT_WORKER_CORE_MIGRATION_WAIT_MS,
   waitForCoreMigrationsReady,
@@ -65,8 +65,9 @@ const server = buildServer({
 
 let closing = false;
 const keepAlive = setInterval(() => {
-  // The background timers are unref'd; a short ref'd heartbeat keeps them observable in
-  // this non-listening worker process without relying on an hourly wake-up.
+  void (server as DibaoServerInstance).drainBackgroundJobsNow?.().catch((error) => {
+    server.log.error(error);
+  });
 }, 1_000);
 
 try {

@@ -1179,7 +1179,7 @@ export const zhCN = {
     feedOnlyNotice: "当前仅有订阅源摘要。",
     contentSource: {
       success: "正文来自网页全文抓取。",
-      feed_only: "正文来自 RSS / Atom Feed。大多数 Feed 已经提供全文。",
+      feed_only: "正文来自 RSS / Atom Feed。",
       failed: "网页全文抓取失败，当前显示 Feed 内容。",
       failedWithError: (error: string) => `网页全文抓取失败，当前显示 Feed 内容。${error}`,
       skipped: "未使用网页全文抓取，当前显示 Feed 内容。",
@@ -1304,6 +1304,7 @@ export const zhCN = {
   errors: {
     api: {
       requestFailed: "请求失败，请稍后重试。",
+      requestTimeout: "请求超时。系统可能正在处理后台维护，请稍后重试。",
       databaseBusy: "系统正在处理后台维护，请稍后重试。",
       httpError: (status: number) => `请求失败（HTTP ${status}）。`
     }
@@ -2489,7 +2490,7 @@ export const enUS = {
     feedOnlyNotice: "Only the feed summary is available.",
     contentSource: {
       success: "Body content comes from full web article fetching.",
-      feed_only: "Body content comes from the RSS / Atom feed. Most feeds already provide full text.",
+      feed_only: "Body content comes from the RSS / Atom feed.",
       failed: "Full web article fetching failed; current content is from the feed.",
       failedWithError: (error: string) =>
         `Full web article fetching failed; current content is from the feed. ${error}`,
@@ -2621,6 +2622,7 @@ export const enUS = {
   errors: {
     api: {
       requestFailed: "Request failed. Please try again.",
+      requestTimeout: "Request timed out. Dibao may be busy with background maintenance.",
       databaseBusy: "Dibao is busy with background maintenance. Please try again shortly.",
       httpError: (status: number) => `Request failed (HTTP ${status}).`
     }
@@ -3795,7 +3797,7 @@ export const jaJP = {
     feedOnlyNotice: "現在はフィードの要約のみ利用できます。",
     contentSource: {
       success: "本文は Web 記事全文の取得結果です。",
-      feed_only: "本文は RSS / Atom Feed の内容です。多くの Feed はすでに全文を含んでいます。",
+      feed_only: "本文は RSS / Atom Feed の内容です。",
       failed: "Web 記事全文の取得に失敗しました。現在の内容は Feed 由来です。",
       failedWithError: (error: string) =>
         `Web 記事全文の取得に失敗しました。現在の内容は Feed 由来です。${error}`,
@@ -3927,6 +3929,7 @@ export const jaJP = {
   errors: {
     api: {
       requestFailed: "リクエストに失敗しました。もう一度お試しください。",
+      requestTimeout: "リクエストがタイムアウトしました。バックグラウンドメンテナンス中の可能性があります。",
       databaseBusy: "邸報はバックグラウンドメンテナンス中です。少し待ってから再試行してください。",
       httpError: (status: number) => `リクエストに失敗しました（HTTP ${status}）。`
     }

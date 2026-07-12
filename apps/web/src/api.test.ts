@@ -1543,6 +1543,12 @@ describe("web API client", () => {
     );
     expect(
       userMessageForError(
+        Object.assign(new Error("aborted"), { name: "AbortError" }),
+        dictionaries["zh-CN"].errors.api
+      )
+    ).toBe(dictionaries["zh-CN"].errors.api.requestTimeout);
+    expect(
+      userMessageForError(
         new ApiRequestError(500, "INTERNAL_ERROR", "", undefined, false),
         dictionaries["en-US"].errors.api
       )

@@ -241,6 +241,75 @@ describe("job runner foundation", () => {
     }
   });
 
+  it("continues draining immediately when a started runner hits its per-pass job limit", async () => {
+    const databasePath = tempDatabasePath();
+    const workerDb = openDatabase(databasePath, { migrate: true });
+    const writerDb = openDatabase(databasePath);
+    const workerJobs = new SqliteJobRepository(workerDb);
+    const writerJobs = new SqliteJobRepository(writerDb);
+    const calls: string[] = [];
+    const runner = new JobRunner({
+      jobs: workerJobs,
+      handlers: {
+        feed_refresh: (job) => {
+          calls.push(job.id);
+          if (job.id === "job_5" && !writerJobs.findById("job_cross_connection_late")) {
+            const now = Date.now();
+            writerJobs.enqueue({
+              id: "job_cross_connection_late",
+              type: "feed_refresh",
+              payloadJson: JSON.stringify({ feedId: "feed_cross_connection_late" }),
+              maxAttempts: 1,
+              runAfter: now,
+              now
+            });
+          }
+        }
+      },
+      maxJobsPerDrain: 5,
+      pollIntervalMs: 60_000,
+      now: () => Date.now()
+    });
+
+    try {
+      const now = Date.now();
+      for (let index = 1; index <= 10; index += 1) {
+        writerJobs.enqueue({
+          id: `job_${index}`,
+          type: "feed_refresh",
+          payloadJson: JSON.stringify({ feedId: `feed_${index}` }),
+          maxAttempts: 1,
+          runAfter: now,
+          now
+        });
+      }
+
+      runner.start();
+
+      await waitUntil(
+        () => writerJobs.findById("job_cross_connection_late")?.status === "succeeded",
+        1000
+      );
+      expect(calls).toEqual([
+        "job_1",
+        "job_10",
+        "job_2",
+        "job_3",
+        "job_4",
+        "job_5",
+        "job_6",
+        "job_7",
+        "job_8",
+        "job_9",
+        "job_cross_connection_late"
+      ]);
+    } finally {
+      runner.stop();
+      writerDb.close();
+      workerDb.close();
+    }
+  });
+
   it("defers a job before handler execution when the runner gate asks for quiet time", async () => {
     const db = createEmptyDatabase();
     const jobs = new SqliteJobRepository(db);

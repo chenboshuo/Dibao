@@ -1,4 +1,5 @@
 import { buildServer } from "./app.js";
+import { DEFAULT_FOREGROUND_QUIET_WINDOW_MS } from "./foreground-activity.js";
 
 const host = process.env.DIBAO_HOST ?? "0.0.0.0";
 const port = Number(process.env.DIBAO_PORT ?? 8080);
@@ -22,7 +23,10 @@ const server = buildServer({
   profileDecayIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_PROFILE_DECAY_INTERVAL_MS),
   jobRunnerIntervalMs: parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_INTERVAL_MS),
   jobRunnerMaxJobsPerDrain:
-    parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_MAX_JOBS_PER_DRAIN) ?? 5
+    parseOptionalPositiveInteger(process.env.DIBAO_JOB_RUNNER_MAX_JOBS_PER_DRAIN) ?? 5,
+  foregroundQuietWindowMs:
+    parseOptionalPositiveInteger(process.env.DIBAO_FOREGROUND_QUIET_WINDOW_MS) ??
+    DEFAULT_FOREGROUND_QUIET_WINDOW_MS
 });
 
 try {

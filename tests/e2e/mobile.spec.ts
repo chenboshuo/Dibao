@@ -348,7 +348,9 @@ test("mobile browser history back preserves the unread list queue without refetc
   const articleListRequests: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (request.method() === "GET" && url.pathname === "/api/articles") {
+    const isUnreadCountProbe =
+      url.pathname === "/api/articles" && url.searchParams.get("limit") === "1";
+    if (request.method() === "GET" && url.pathname === "/api/articles" && !isUnreadCountProbe) {
       articleListRequests.push(url.search);
     }
   });

@@ -2481,6 +2481,9 @@
 .mobileSourceCloseButton,
 .mobileBackButton {
   min-height: var(--button-height-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: var(--border-default);
   border-radius: var(--button-radius);
   padding-inline: var(--button-padding-x-md);
@@ -2488,14 +2491,12 @@
   color: var(--color-muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+  line-height: 1;
 }
 
 .mobileSourceButton,
 .mobileSourceCloseButton {
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .mobileSourceButton {
@@ -2601,9 +2602,10 @@
 .opmlActions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
   border-bottom: var(--border-subtle);
-  padding: 0 var(--space-4) var(--space-4);
+  padding: var(--space-4);
 }
 
 .opmlActions .secondaryButton {
@@ -3072,13 +3074,23 @@
   font-size: var(--reader-meta-size);
 }
 
+.readerHeaderToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
 .inlineNotice {
   width: fit-content;
+  min-width: 0;
   border: var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   color: var(--color-muted);
   font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 .readerActions {
@@ -3089,7 +3101,8 @@
 }
 
 .readerActionsTop {
-  margin-top: var(--space-4);
+  flex: 0 0 auto;
+  margin-top: 0;
 }
 
 .readerActionsBottom {
@@ -3643,7 +3656,7 @@
   }
 
   .opmlActions {
-    padding: 0 var(--space-3) var(--space-3);
+    padding: var(--space-3);
   }
 
   .settingsContent {

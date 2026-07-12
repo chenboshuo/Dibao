@@ -194,6 +194,27 @@ export type ArticleActionResponse = {
   state: ArticleState;
 };
 
+export type BulkArticleActionRequest = {
+  actions: Array<{
+    articleId: string;
+    type: "impression";
+    metadata?: Record<string, unknown>;
+  }>;
+};
+
+export type BulkArticleActionResponse = {
+  data: Array<{
+    articleId: string;
+    eventId: string;
+    state: ArticleState;
+  }>;
+  skipped: Array<{
+    articleId: string;
+    code: string;
+    message: string;
+  }>;
+};
+
 export type RankExplanationReasonType =
   | "interest"
   | "source"
@@ -1157,6 +1178,7 @@ export class ApiRequestError extends Error {
 
 export type ApiErrorMessages = {
   requestFailed: string;
+  requestTimeout: string;
   databaseBusy: string;
   httpError: (status: number) => string;
 };
@@ -1168,6 +1190,7 @@ type ApiSuccess<T> = {
   page?: ApiPage;
   meta?: {
     unreadCount?: number | null;
+    skipped?: unknown;
   };
 };
 
@@ -2151,6 +2174,27 @@ export function createDibaoApi(fetcher: ApiFetch = fetch) {
       ).data;
     },
 
+    async postArticleActionsBulk(
+      input: BulkArticleActionRequest,
+      options: { signal?: AbortSignal } = {}
+    ): Promise<BulkArticleActionResponse> {
+      const response = await request<Array<{
+        articleId: string;
+        eventId: string;
+        state: ArticleState;
+      }>>("/api/articles/actions/bulk", {
+        method: "POST",
+        body: JSON.stringify(input),
+        signal: options.signal
+      });
+      return {
+        data: response.data,
+        skipped: Array.isArray((response as { meta?: { skipped?: unknown } }).meta?.skipped)
+          ? (response as { meta: { skipped: BulkArticleActionResponse["skipped"] } }).meta.skipped
+          : []
+      };
+    },
+
     postArticleActionKeepalive(articleId: string, input: ArticleActionRequest): void {
       const headers = new Headers();
       headers.set("accept", "application/json");
@@ -2193,7 +2237,17 @@ export function userMessageForError(error: unknown, messages: ApiErrorMessages):
     return error.hasUserMessage && error.message ? error.message : messages.httpError(error.status);
   }
 
+  if (isAbortError(error)) {
+    return messages.requestTimeout;
+  }
+
   return messages.requestFailed;
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof DOMException !== "undefined" && error instanceof DOMException
+    ? error.name === "AbortError"
+    : error instanceof Error && error.name === "AbortError";
 }
 
 async function readJson(response: Response): Promise<unknown> {

@@ -1709,22 +1709,24 @@ export function ArticleDetailPanel(props: {
                 props.article.author
               )}
             </p>
-            {sourceNotice ? (
-              <span className={styles.inlineNotice}>{sourceNotice}</span>
-            ) : null}
-            <ArticleActionControls
-              actionError={props.actionError}
-              article={props.article}
-              canExplain={canExplainDetail}
-              onExplain={props.onOpenExplanation}
-              onAction={(intent) => props.onArticleAction(props.article as ArticleDetail, intent)}
-              onPluginAction={(action) =>
-                props.onPluginAction?.(action, { articleId: props.article?.id, slot: action.slot })
-              }
-              pendingAction={props.pendingAction}
-              placement="top"
-              pluginActions={props.pluginToolbarActions ?? []}
-            />
+            <div className={styles.readerHeaderToolbar}>
+              {sourceNotice ? (
+                <span className={styles.inlineNotice}>{sourceNotice}</span>
+              ) : <span />}
+              <ArticleActionControls
+                actionError={props.actionError}
+                article={props.article}
+                canExplain={canExplainDetail}
+                onExplain={props.onOpenExplanation}
+                onAction={(intent) => props.onArticleAction(props.article as ArticleDetail, intent)}
+                onPluginAction={(action) =>
+                  props.onPluginAction?.(action, { articleId: props.article?.id, slot: action.slot })
+                }
+                pendingAction={props.pendingAction}
+                placement="top"
+                pluginActions={props.pluginToolbarActions ?? []}
+              />
+            </div>
           </header>
 
           <ArticleHtmlBody

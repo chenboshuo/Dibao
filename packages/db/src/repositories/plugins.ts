@@ -411,12 +411,16 @@ export class SqlitePluginRepository implements PluginRepository {
             status = ?,
             last_error = ?,
             enabled_at = case when ? = 'enabled' then ? else enabled_at end,
-            disabled_at = case when ? in ('disabled', 'incompatible', 'failed') then ? else disabled_at end,
+            disabled_at = case
+              when ? in ('enabled', 'installed') then null
+              when ? in ('disabled', 'incompatible', 'failed') then ?
+              else disabled_at
+            end,
             updated_at = ?
           where id = ?
         `
       )
-      .run(status, error, status, now, status, now, now, pluginId);
+      .run(status, error, status, now, status, status, now, now, pluginId);
   }
 
   updateDeliveryStatus(
@@ -552,7 +556,11 @@ export class SqlitePluginRepository implements PluginRepository {
         existing?.installedAt ?? now,
         now,
         input.status === "enabled" ? now : existing?.enabledAt ?? null,
-        input.status === "disabled" ? now : existing?.disabledAt ?? null,
+        input.status === "enabled" || input.status === "installed"
+          ? null
+          : input.status === "disabled" || input.status === "incompatible" || input.status === "failed"
+          ? now
+          : existing?.disabledAt ?? null,
         input.lastError ?? null
       );
 

@@ -58,6 +58,7 @@ describe("web i18n", () => {
 
     expect(i18n.locale).toBe(defaultLocale);
     expect(i18n.t.errors.api.requestFailed).toBe("请求失败，请稍后重试。");
+    expect(i18n.t.errors.api.requestTimeout).toBe("请求超时。系统可能正在处理后台维护，请稍后重试。");
     expect(i18n.formatDate("2026-05-14T08:00:00.000Z")).not.toBe("2026-05-14T08:00:00.000Z");
     expect(i18n.formatArticleDate("2026-05-14T08:00:00.000Z")).toContain("2026");
   });
@@ -1151,7 +1152,7 @@ describe("web i18n", () => {
     expect(html).toContain("保留天数");
     expect(html).toContain("retention.retentionDays");
     expect(html).toContain("关于");
-    expect(html).toContain("v0.2.0");
+    expect(html).toContain("v0.2.1");
     expect(html).toContain("评论尸");
     expect(html).toContain("https://x.com/JeffreyCalm");
     expect(html).toContain("https://1q43.blog");

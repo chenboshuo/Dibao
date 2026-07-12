@@ -32,6 +32,7 @@ export interface JobRepository {
   findById(id: string): JobRow | null;
   list(input?: JobListInput): JobRow[];
   listOpenByType(type: JobType): JobRow[];
+  listOpenByTypePrefix(typePrefix: string): JobRow[];
   cancelOpenByTypePrefix(typePrefix: string, error: string, now: number): number;
   cancel(id: string, error: string, now: number): JobRow | null;
   defer(id: string, error: string, runAfter: number, now: number): JobRow | null;
@@ -110,6 +111,7 @@ export class SqliteJobRepository implements JobRepository {
   }
 
   claimNextDue(now: number): JobRow | null {
+    refreshWalVisibility(this.db);
     return this.db.transaction(() => {
       const candidate = this.db
         .prepare(
@@ -251,6 +253,21 @@ export class SqliteJobRepository implements JobRepository {
           `
         )
         .all(type) as JobDbRow[]
+    ).map(mapJob);
+  }
+
+  listOpenByTypePrefix(typePrefix: string): JobRow[] {
+    return (
+      this.db
+        .prepare(
+          `
+            ${baseJobSelect()}
+            where type like ? escape '\\'
+              and status in ('queued', 'running')
+            order by created_at, id
+          `
+        )
+        .all(`${escapeLikePattern(typePrefix)}%`) as JobDbRow[]
     ).map(mapJob);
   }
 
@@ -425,6 +442,14 @@ export class SqliteJobRepository implements JobRepository {
       .run(now, now, now);
 
     return result.changes;
+  }
+}
+
+function refreshWalVisibility(db: DibaoDatabase): void {
+  try {
+    db.pragma("wal_checkpoint(PASSIVE)");
+  } catch {
+    // A busy checkpoint should not block ordinary job claiming; the next poll can retry.
   }
 }
 

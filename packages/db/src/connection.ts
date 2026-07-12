@@ -29,10 +29,15 @@ export function openDatabase(
 }
 
 export function configureDatabase(db: DibaoDatabase): void {
-  db.pragma("journal_mode = WAL");
+  db.pragma(`journal_mode = ${sqliteJournalMode()}`);
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
+}
+
+function sqliteJournalMode(): string {
+  const mode = process.env.DIBAO_SQLITE_JOURNAL_MODE?.trim().toUpperCase();
+  return mode === "DELETE" ? "DELETE" : "WAL";
 }
 
 export function getSqliteVecVersion(db: DibaoDatabase): { version: string } {
