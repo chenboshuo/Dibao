@@ -1,0 +1,1 @@
+- [clean-tasks](skills/clean-tasks/SKILL.md) — Diagnose & fix a stuck job queue
