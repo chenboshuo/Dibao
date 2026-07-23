@@ -5,7 +5,7 @@ const host = process.env.DIBAO_HOST ?? "0.0.0.0";
 const port = Number(process.env.DIBAO_PORT ?? 8080);
 
 const server = buildServer({
-  backgroundJobs: process.env.DIBAO_BACKGROUND_JOBS === "true",
+  backgroundJobs: process.env.DIBAO_BACKGROUND_JOBS !== "false",
   recordForegroundActivity: process.env.DIBAO_RECORD_FOREGROUND_ACTIVITY !== "false",
   foregroundActivityWriteThrottleMs: parseOptionalPositiveInteger(
     process.env.DIBAO_FOREGROUND_ACTIVITY_WRITE_THROTTLE_MS
